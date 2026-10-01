@@ -206,10 +206,10 @@ backend:
   jobs:
     ruta: backend/internal/jobs
     proposito: wrapper fino de la cola — interfaz JobQueue propia sobre River; enqueue transaccional y tipos de job del dominio
-    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard; transición dual MASTER_KEY + MASTER_KEY_PREVIOUS en api y worker durante la rotación, guía §9.2)", "MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias y resolución de threads —, encolado al cierre del PR; sin LLM)"]
+    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard; transición dual MASTER_KEY + MASTER_KEY_PREVIOUS en api y worker durante la rotación, guía §9.2)", "ReconcileJob (reconexión de repo: consulta los PRs abiertos al VCS vía ListOpenPRs del adapter — sin LLM — y marca cerrados los que ya no figuran; on-demand desde el dashboard, la API solo encola — guía §3.5)", "MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias y resolución de threads —, encolado al cierre del PR; sin LLM)"]
     depende_de: [store]
     pruebas: backend/internal/jobs/jobs_test.go
-    fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob) / F2 (ChatJob) / F4 (IndexJob) / F5 (MetricsJob)
+    fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob, ReconcileJob) / F2 (ChatJob) / F4 (IndexJob) / F5 (MetricsJob)
     reglas: >
       Único paquete que importa River. Reemplazar la cola = reescribir solo acá.
       Los handlers de API encolan a través de esta interfaz; jamás importan River directo.
@@ -289,7 +289,7 @@ dashboard:
     proposito: pantallas por dominio
     expone:
       auth: {ruta: dashboard/src/features/auth, proposito: login/sesión, fase: F0}
-      settings: {ruta: dashboard/src/features/settings, proposito: proveedores LLM (BYOK cifrado) — acciones exclusivas del admin, repos conectados, usuarios (invitaciones y reset), fase: F1}
+      settings: {ruta: dashboard/src/features/settings, proposito: "proveedores LLM (BYOK cifrado) — acciones exclusivas del admin, repos conectados, usuarios (invitaciones y reset)", fase: F1}
       prs: {ruta: dashboard/src/features/prs, proposito: detalle de PR con findings y diff, fase: F3}
       queue: {ruta: dashboard/src/features/queue, proposito: estado de la cola de jobs (pending/running/discarded por tipo) — guía §9.9, fase: F1}
       triage: {ruta: dashboard/src/features/triage, proposito: cola de PRs por riesgo, fase: F5}
@@ -313,26 +313,26 @@ flujos:
       - vcs (webhook firmado + idempotencia por delivery ID)
       - api (valida, upserta PR y encola ReviewJob vía jobs — misma transacción de BD)
       - worker (worker River toma el job, crea workdir efímero /var/tmp/rev-<job-id>)
-      - review (skip stale: identidad del job (head_sha, base_sha) vs estado actual del PR; re-chequeo antes de cada publicación y re-encolo en la tx de finalización)
-      - vcs (FetchPR: clonado shallow con credencial efímera o deploy key al workdir)
-      - review (Summarizer temprano: resumen + walkthrough + Mermaid — depende del diff, no de los findings)
-      - vcs (publicación fase 1: resumen apenas listo, SLO 5 min; comments_sent tipo summary)
+      - "review (skip stale: identidad del job (head_sha, base_sha) vs estado actual del PR; re-chequeo antes de cada publicación y re-encolo en la tx de finalización)"
+      - "vcs (FetchPR: clonado shallow con credencial efímera o deploy key al workdir)"
+      - "review (Summarizer temprano: resumen + walkthrough + Mermaid — depende del diff, no de los findings)"
+      - "vcs (publicación fase 1: resumen apenas listo, SLO 5 min; comments_sent tipo summary)"
       - analyze (linters sandbox sobre el workdir → SASTFinding[])
       - llm.rol.review (agente Reviewer por archivo, con contexto de index si existe)
-      - review (deduplicación LLM vs SAST; F3: el Verifier filtra falsos positivos)
-      - vcs (publicación fase 2: inline comments al cerrar el análisis y re-edición del resumen con el recuento de findings, SLO 15 min; comments_sent tipo inline)
-      - review (F5: risk_score → pull_requests; Agente Pre-merge → veredicto como sección del resumen, edit in place)
+      - "review (deduplicación LLM vs SAST; F3: el Verifier filtra falsos positivos)"
+      - "vcs (publicación fase 2: inline comments al cerrar el análisis y re-edición del resumen con el recuento de findings, SLO 15 min; comments_sent tipo inline)"
+      - "review (F5: risk_score → pull_requests; Agente Pre-merge → veredicto como sección del resumen, edit in place)"
   indexar_repo:
     pasos:
       - worker (IndexJob al conectar el repo, al completar cada review (success o partial) y al fusionar el PR (merge) — job único por repo, ver reglas de jobs)
-      - vcs (FetchDefaultBranch: clonado shallow de la rama por defecto al workdir del job)
+      - "vcs (FetchDefaultBranch: clonado shallow de la rama por defecto al workdir del job)"
       - analyze (chunking simbólico tree-sitter sobre el clon)
       - llm.rol.embedding (embeddings por proveedor configurado)
       - store (upsert en repo_index con pgvector + grafo de imports)
   cerrar_pr:
     pasos:
       - vcs (webhook closed/close/merge)
-      - api (actualiza pull_requests.state; descarta ReviewJob/ChatJob del PR — cero LLM — y encola el MetricsJob de F5; el IndexJob es por repo y sigue: tras merge indexa la nueva base — y el merge lo encola)
+      - "api (actualiza pull_requests.state; descarta ReviewJob/ChatJob del PR — cero LLM — y encola el MetricsJob de F5; el IndexJob es por repo y sigue: tras merge indexa la nueva base — y el merge lo encola)"
   chatear_con_bot:
     pasos:
       - vcs (comentario @bot llega por webhook; se ignora si el autor es el propio bot u otro bot)

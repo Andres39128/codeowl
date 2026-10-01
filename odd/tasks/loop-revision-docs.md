@@ -110,5 +110,37 @@ todos los claims de la tabla siguen en pie).
 **Convergencia declarada a la iteración 4 de la ejecución 3 (6 hallazgos: 2 mayores, 2 menores, 2 micro).**
 Rama: `docs/web-verified-review-loop`.
 
+## Ejecución 4 (2026-10-01) — cuarta pasada desde cero
+
+Verificación web fresca (agente frío, ~20 claims): go1.27.1, PG 18.6, River v0.48.0
+(unicidad ByState verificada literal), Podman v6.1.3 (Quadlet [Service] pasa a systemd),
+pgvector 0.8.7-pg18, GitLab signing 19.0-flag/19.1-GA + webhook-id desde 19.0 +
+Idempotency-Key desde 17.4, GitHub 25 MB + acciones PR + retarget edited, permisos
+Contents:Read, CodeRabbit reference 2026-09-30, Tailwind 4.3.3, Preact 3kB, WCAG
+recalculados (todos OK).
+
+### Iteración 1 — 9 hallazgos (1 mayor, 5 menores, 3 micro)
+
+- [x] H1 (mayor) manual §4: `reviews.instructions` no existe en el schema oficial de
+      CodeRabbit → reemplazado por `reviews.path_instructions[].instructions`
+      (`path: "**"` + `path: "**/*.ts"`).
+- [x] H2 §9.3: dedup GitLab anclada a `webhook-id` (solo 19.0+) → agregado
+      `Idempotency-Key` (17.4+) como delivery ID en self-managed viejas.
+- [x] H3 §6 F0: `deploy/backup.md` prometido (§9.2/§9.10) sin fase dueña → ítem
+      checkbox en F0 con restore verificado + respaldo de master key.
+- [x] H4 mapa servicios + §3.2: mezcla `.container` (fuente Quadlet) vs `.service`
+      (unidad generada) → categorías explícitas: caddy/postgres = Quadlet fuente;
+      api/worker = unidades de usuario escritas a mano para binarios host.
+- [x] H5 §3.6: `pull_request.base.sha` puede quedar anclado al tip de apertura si la
+      base avanza sin retarget → gotcha + fallback por API documentados.
+- [x] H6 §3.3: `repo_index` sin rangos de línea vs `--symbols` → agregados
+      `start_line`/`end_line`.
+- [x] H7 mapa: `Complete(ctx, Rol, ...)` → `Complete(ctx, Role, ...)` (§4.7).
+- [x] H8 §3.6 punto 1: párrafo-bullet gigante trozado en 6 sub-bullets (1.1–1.6)
+      sin perder contenido normativo.
+- [x] H9 §3.3: umbral signing token "anteriores a 19.1" → "anteriores a 19.0 (o
+      19.0 con flag `webhook_signing_token` deshabilitado)".
+- Commit: d2d7b103d89c (+25/−14, 3 archivos).
+
 
 

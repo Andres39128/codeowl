@@ -98,7 +98,7 @@ reviews:
   request_changes_workflow: false
   high_level_summary: true
   sequence_diagrams: true
-  auto_title_placeholder: "@coderabbitai summary"
+  auto_title_placeholder: "@coderabbitai"
   path_filters:
     - "!dist/**"
     - "!vendor/**"
