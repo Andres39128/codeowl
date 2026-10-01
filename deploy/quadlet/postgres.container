@@ -1,0 +1,18 @@
+# =============================================================================
+# postgres.container — fuente Quadlet (mapa servicios.postgres): OLTP +
+# embeddings (pgvector) + cola River. Unidad systemd de USUARIO generada:
+# postgres.service. Instalar en ~/.config/containers/systemd/.
+# §9.2: la password jamás pasa por Environment= — quadlet no soporta
+# LoadCredential en [Container], así que el archivo de credencial se monta
+# read-only en la misma ruta que usaría LoadCredential y la imagen lo lee
+# vía POSTGRES_PASSWORD_FILE. Sin puertos públicos (§3.5): solo loopback
+# para los binarios de host (api/worker).
+# =============================================================================
+[Container]
+ContainerName=codeowl-postgres
+Image=docker.io/pgvector/pgvector:pg18
+EnvironmentFile=%h/opt/codeowl/env
+Environment=POSTGRES_PASSWORD_FILE=/run/credentials/postgres.service/postgres_password
+Volume=codeowl-pgdata:/var/lib/postgresql
+Volume=%h/opt/codeowl/secrets/postgres_password:/run/credentials/postgres.service/postgres_password:ro
+PublishPort=127.0.0.1:5432:5432

@@ -1,0 +1,35 @@
+# =============================================================================
+# Stack de DESARROLLO — guía §3.2: "fallback de desarrollo (compatible
+# Podman/Docker)"; §3.5: en dev los webhooks entran por túnel (smee.io o
+# cloudflared), Caddy es exclusivo del self-host.
+# Solo postgres: api y worker son binarios de host (`just dev`, go run) —
+# §3.2 no declara Containerfile propio para backend.
+# Levantar: just up · Bajar: just down · Todo junto: just dev
+# Variables: env_file lee el .env de la RAÍZ (copiar desde deploy/.env.example);
+# las recetas just pasan --env-file para la interpolación de ${...}.
+# =============================================================================
+name: codeowl-dev
+
+services:
+  postgres:
+    # mapa servicios.postgres — OLTP + embeddings (pgvector) + cola de jobs (River)
+    image: docker.io/pgvector/pgvector:pg18
+    container_name: codeowl-postgres
+    env_file:
+      - ../.env
+    ports:
+      # solo loopback: lo alcanzan api/worker de host; jamás público (§3.5).
+      # El puerto de host es configurable (§4.2) — alinear con DATABASE_URL.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      # mountpoint declarado por la imagen pg18 (PGDATA=/var/lib/postgresql/18/docker)
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      # se expande dentro del contenedor (env_file) — $$
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

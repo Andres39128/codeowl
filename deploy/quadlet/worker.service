@@ -1,0 +1,30 @@
+# =============================================================================
+# worker.service — unidad systemd de USUARIO para el binario de host del worker
+# (mapa servicios.worker: consume jobs River y ejecuta el pipeline; "archivo
+# fuente propio, no Quadlet"). Instalar en ~/.config/systemd/user/.
+# Requiere git y el CLI de podman en el host: invoca la imagen analyzer
+# rootless (mapa servicios.worker; §3.5 — un worker en unidad de sistema
+# correría podman rootful y vaciaría el sandbox). El usuario del deploy lleva
+# `loginctl enable-linger` (§3.5).
+# §9.2: master key y private key de la App viven acá (descifra credenciales y
+# clona/publica en el VCS); el webhook secret es solo de api.
+# §9.12: TimeoutStopSec = ventana de gracia del apagado ordenado — en SIGTERM
+# el worker deja de tomar jobs, termina el job en curso y cierra limpio.
+# =============================================================================
+[Unit]
+Description=codeowl worker (jobs River: review, chat, limpieza)
+Wants=network-online.target
+After=network-online.target postgres.service
+
+[Service]
+ExecStart=%h/opt/codeowl/bin/worker
+EnvironmentFile=%h/opt/codeowl/env
+LoadCredential=master_key:%h/opt/codeowl/secrets/master_key
+LoadCredential=github_app_private_key:%h/opt/codeowl/secrets/github_app_private_key
+Environment=MASTER_KEY_FILE=%d/master_key
+Environment=GITHUB_APP_PRIVATE_KEY_FILE=%d/github_app_private_key
+TimeoutStopSec=90s
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,32 @@
+# =============================================================================
+# api.service — unidad systemd de USUARIO para el binario de host de la API
+# (mapa servicios.api: "archivo fuente propio, no Quadlet — el generador solo
+# consume .container/.build"). Instalar en ~/.config/systemd/user/.
+# Binario: `just build` → backend/bin/api; en el VPS queda en ~/opt/codeowl/bin/
+# (receta just deploy, §9.13).
+# §9.2: secretos por LoadCredential (nunca Environment=) — %d es el directorio
+# de credenciales de la unidad. Requiere systemd >= 254 (LoadCredential en
+# unidades de usuario). El archivo env (chmod 600) lleva la config no secreta
+# y DATABASE_URL; los archivos de secrets/ van chmod 600 del usuario del deploy.
+# Escucha API_ADDR (default :8080) — Caddy proxyea 443 hacia acá (§3.5).
+# =============================================================================
+[Unit]
+Description=codeowl API (webhooks VCS + REST del dashboard)
+Wants=network-online.target
+After=network-online.target postgres.service
+
+[Service]
+ExecStart=%h/opt/codeowl/bin/api
+EnvironmentFile=%h/opt/codeowl/env
+LoadCredential=master_key:%h/opt/codeowl/secrets/master_key
+LoadCredential=admin_password:%h/opt/codeowl/secrets/admin_password
+LoadCredential=github_webhook_secret:%h/opt/codeowl/secrets/github_webhook_secret
+LoadCredential=github_app_private_key:%h/opt/codeowl/secrets/github_app_private_key
+Environment=MASTER_KEY_FILE=%d/master_key
+Environment=ADMIN_PASSWORD_FILE=%d/admin_password
+Environment=GITHUB_WEBHOOK_SECRET_FILE=%d/github_webhook_secret
+Environment=GITHUB_APP_PRIVATE_KEY_FILE=%d/github_app_private_key
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

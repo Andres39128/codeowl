@@ -7,3 +7,18 @@ Thumbs.db
 
 # Agent tooling cache (skill registry)
 .atl/
+
+# Go binaries (just build -> backend/bin/) and coverage
+backend/bin/
+*.test
+coverage.out
+
+# Dashboard (Node/Vite)
+node_modules/
+dist/
+
+# Local secrets -- never in git (guia §9.2)
+.env
+
+# Per-directory toolchain pins
+.tool-versions

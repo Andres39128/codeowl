@@ -1,0 +1,17 @@
+# =============================================================================
+# caddy.container — fuente Quadlet (mapa servicios.caddy): reverse proxy con
+# TLS automático (ACME), único puerto expuesto: 443 (§3.5). Proxyea al binario
+# api de host en 127.0.0.1:8080 vía host.containers.internal (rootless).
+# ACME por TLS-ALPN-01 sobre 443. El certificado persiste en el volume caddy-data.
+# Definir en ~/opt/codeowl/env (chmod 600): CADDY_DOMAIN=tu.dominio.com
+# (opcional: CADDY_TARGET, default host.containers.internal:8080).
+# =============================================================================
+[Container]
+ContainerName=codeowl-caddy
+Image=docker.io/library/caddy:2
+EnvironmentFile=%h/opt/codeowl/env
+Environment=CADDY_TARGET=host.containers.internal:8080
+Volume=codeowl-caddy-data:/data
+Volume=codeowl-caddy-config:/config
+Exec=sh -c 'exec caddy reverse-proxy --from "$CADDY_DOMAIN" --to "$CADDY_TARGET"'
+PublishPort=443:443
