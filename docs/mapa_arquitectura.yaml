@@ -18,7 +18,7 @@
 # ============================================================================
 
 version: 1
-actualizado: "2026-09-30"
+actualizado: "2026-10-01"
 fuente_de_verdad:
   convenciones_y_fases: docs/guia_del_proyecto.md
   referencia_funcional: docs/manual_completo_de_coderabbit_ai.md
@@ -109,8 +109,9 @@ backend:
       descartan) / note en GitLab; el cierre —closed en GitHub, close/merge en
       GitLab— actualiza pull_requests.state, descarta los ReviewJob/ChatJob
       del PR sin gastar LLM y encola el MetricsJob de F5 (el IndexJob es por
-      repo y sigue su curso — y el merge lo encola: indexa la nueva base); ignora comentarios del propio bot y de otros
-      bots — anti-bucle;
+      repo y sigue su curso — y el merge lo encola: indexa la nueva base);
+      ignora comentarios del propio bot y de otros bots (GitHub: tipo de autor
+      en el payload; GitLab: username del bot, config) — anti-bucle;
       issue_comment solo pasa si es comentario en PR con mención al bot; note
       de GitLab solo con noteable_type == MergeRequest + mención; chat de
       autores fuera de la organización se ignora (config);
@@ -189,8 +190,10 @@ backend:
       las métricas de costo y de los presupuestos por review. Timeout por
       llamada (config). Ante 429/5xx del proveedor: backoff (respeta
       Retry-After) y reintentos acotados (config);
-      agotados, siguiente proveedor enabled del mismo rol (orden por priority); sin respuesta de
-      ninguno, la review queda partial — nunca recorte silencioso. Cache de
+      agotados, siguiente proveedor enabled del mismo rol (orden por priority);
+      sin respuesta de ninguno, la review queda partial — nunca recorte
+      silencioso; el resumen declara la cobertura parcial y su motivo (guía
+      §9.6). Cache de
       resultados LLM claveada por head SHA + merge-base + versión de prompt +
       hash de config efectiva (guía §9.6); vive en memoria del worker con tope
       de entradas y TTL (config).
@@ -245,6 +248,9 @@ analyzer:
       (sin red no se descargan) — la salida reporta qué linter corrió y cuál no
       pudo, y la ausencia de un linter jamás cuenta como ausencia de hallazgos.
       Gitleaks sobre clon shallow solo ve la historia clonada.
+      Rootfs read-only: caches y artefactos de compilación de los linters van
+      al workdir montado o a un tmpfs con tope (config) — sin eso,
+      Clippy/golangci-lint no corren ni con deps disponibles.
     fase: F1
 
 # -----------------------------------------------------------------------------
