@@ -128,6 +128,7 @@ Fase → hitos verticales → PR por hito → revisión con checklist (§10) →
 ```
 codeowl/                   (raíz del monorepo — justfile; la guía, el manual y el mapa viven en docs/)
 ├── README.md                  # entrada del repo: qué es codeowl y cómo navegar docs/
+├── LICENSE                    # Apache-2.0
 ├── justfile                    # recetas: dev, test, lint, migrate, up, down, deploy (§9.13)
 ├── .github/workflows/          # CI: lint + build + test (F0), reutiliza recetas del justfile
 ├── odd/                        # documentos de trabajo de las sesiones de edición de docs — no es producto

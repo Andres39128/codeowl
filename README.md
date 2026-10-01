@@ -15,3 +15,7 @@ Plataforma **self-hosted, single-org** de revisión automática de código con I
 ### Cómo se gobierna un cambio
 
 Toda decisión de implementación se rastrea a la guía: si un cambio la desactualiza, primero se actualiza la guía y después se escribe código. El mapa vive en el mismo PR que los cambios de estructura.
+
+## Licencia
+
+Apache-2.0 — ver [`LICENSE`](LICENSE).
