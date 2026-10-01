@@ -82,7 +82,7 @@ Fase → hitos verticales → PR por hito → revisión con checklist (§10) →
 | Router HTTP | **net/http.ServeMux** (stdlib) | chi 5, echo | Go 1.22+ cubre method patterns y `r.PathValue`; el chaining de middleware son ~10 líneas propias. chi/echo reaparecen solo si el routing crece más que eso |
 | Contenedores | **Podman + Quadlet** | Docker + daemon | Rootless por defecto, sin daemon consumiendo RAM, integración systemd nativa. Docker Compose sigue siendo válido para CI |
 | Motor CSS | **Tailwind v4.3** | Tailwind v3 | Motor reescrito (builds completos 5x más rápidos, incrementales 100x), configuración CSS-first, plugin Vite oficial |
-| PostgreSQL | **18** | 16 / 17 | Estable actual (18.6 a septiembre de 2026); PG 19 sigue en beta (Beta 4) — no se usa beta para base de datos del sistema |
+| PostgreSQL | **18** | 16 / 17 | Estable actual (18.6, verificado a octubre de 2026); PG 19 sigue en beta (Beta 4) — no se usa beta para base de datos del sistema |
 
 ### 2.2. Regla de dependencias
 
