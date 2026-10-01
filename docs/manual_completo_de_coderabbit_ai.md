@@ -173,6 +173,8 @@ chat:
 
 ## 6. Resumen de Beneficios y Métricas de Impacto
 
+> Cifras según material de marketing del proveedor; no verificables contra documentación técnica.
+
 * **Precisión de Sugerencias:** Alto nivel de adopción directa por parte de los ingenieros gracias al filtrado de falsos positivos y verificación estática.
 * **Reducción del Tiempo de Cycle Time:** Disminución de hasta un 50% en el tiempo promedio de aprobación de Pull Requests.
 * **Calidad de Código y Seguridad:** Reducción sustancial de regresiones en producción al actuar como una puerta de enlace de calidad previa al Merge.

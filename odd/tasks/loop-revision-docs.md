@@ -3,49 +3,55 @@
 **Objetivo:** revisar los docs desde cero (sin leer engram ni hallazgos previos), verificar
 claims contra fuentes web actuales, aplicar correcciones y repetir hasta no encontrar hallazgos.
 
-**Ruta:** directa inline — ediciones mecánicas de 1 línea, contenido ya comprendido.
+**Ruta:** directa inline — ediciones mecánicas acotadas, contenido ya comprendido y verificado.
 
-## Verificación web (iteración 1) — todos OK
+## Ejecución 2 (2026-10-01) — segunda pasada desde cero
 
-| Claim doc | Verificado | Resultado |
-|-----------|-----------|-----------|
-| Go 1.27 | go.dev | go1.27.1 (2026-08-28) ✓ |
-| PostgreSQL 18.6 / PG19 Beta 4 | postgresql.org | 18.6 (2026-08-13), Beta 4 (2026-09-24) ✓ |
-| River 0.x | github.com/riverqueue/river | v0.48.0 ✓ |
-| Podman 6 | github.com/containers/podman | v6.1.3 ✓ |
-| Tailwind v4.3 | tailwindcss.com/blog | v4.3 ✓ |
-| Firma GitLab GA 19.1 (Standard Webhooks, whsec_, v1,{base64}) | docs.gitlab.com | GA 19.1, formato exacto ✓ |
-| Drafts GitLab: `Draft:`, `[Draft]`, `(Draft)` | docs.gitlab.com | exacto ✓ |
-| CodeRabbit: profiles quiet/chill/assertive, auto_title_placeholder, path_filters, chat.auto_reply | docs.coderabbit.ai | exacto ✓ |
-| pgvector/pgvector:pg18 | hub.docker.com | tag existe ✓ |
-| GitLab suggested changes tier | docs.gitlab.com | Free ✓ |
-| Contrastes WCAG tokens §5.1 (18 pares) | script propio | todos cumplen claims ✓ |
+Verificación web fresca (9 fuentes, todas OK): go.dev (go1.27.1), postgresql.org (18.6 +
+PG19 Beta 4), River (v0.48.0, sigue 0.x), Podman (v6.1.3), Tailwind (v4.3 última v4.x),
+docs.gitlab.com webhooks + webhook_events, hub.docker.com (pgvector pg18, 0.8.6),
+docs.coderabbit.ai/reference/configuration, docs.github.com webhooks.
+Contrastes WCAG recalculados con script propio (16 pares).
 
-## Iteración 1 — hallazgos y estado
+### Iteración 1 — 7 hallazgos
 
-- [x] H1 manual §2.1: stack/internos de CodeRabbit presentados como hecho; marcar como
-      inferidos de material público (solo el esquema de config es doc oficial).
-- [x] H2 guía §3.6: identidad de staleness (head_sha, base_sha=tip) vs diff real (merge-base) —
-      aclarar por qué el ancla es el tip (viene en payload, sin clonar) y que un avance de base
-      puede causar re-review espuria segura; cache §9.6 usa merge-base.
-- [x] H3 guía §3.5: filtro de autores fuera de org — GitHub tiene author_association; GitLab no:
-      documentar mecanismo (membresía de proyecto con cache).
-- [x] H4 guía §3.4: estado de must_change_password del admin seed no especificado.
-- [x] H5 guía §3.5: comentario en PR pre-conexión — comportamiento no especificado (upsert +
-      chat responde; review sigue reactiva).
-- [x] H6 mapa: api.expone falta GET /healthz (F0 checklist lo exige).
-- [x] H7 mapa: `--pids-limit=64` literal vs regla de config (guía §9.4/§4.2) → `<config>`.
+- [x] H1 (mayor) §3.6/§3.3: la identidad de staleness justificaba el ancla base=tip con
+      "llega en el payload" — cierto en GitHub (`pull_request.base.sha`), FALSO en GitLab:
+      el payload MR no trae ningún SHA de la rama base (verificado: solo nombres de ramas,
+      `last_commit`, `oldrev`). Documentado per-VCS: GitLab resuelve el tip vía API
+      (endpoint de branches, cache corto) al procesar el evento.
+- [x] H2 §5.2: border.subtle oscuro decía 1.76:1 — real 1.55:1 (script). Conclusión
+      (decorativo, <3:1) no cambia.
+- [x] H3 §3.5 + mapa: PRs cerrados durante una desconexión nunca reciben su evento de
+      cierre → quedarían abiertos en triage para siempre. Reconexión ahora reconcilia
+      estado vía ListOpenPRs (adapter, sin LLM); métricas de esos cierres no se recuperan.
+- [x] H4 §3.3: "las mismas keys que review.yaml especializa" era falso (drafts y chat
+      son operativas del dashboard, §9.5) — reescrito.
+- [x] H5 §9.6: cache de resultados no incluía `path_filters` en el hash de config efectiva
+      — cambia qué archivos se revisan. Agregado.
+- [x] H6 README: "linters y agentes LLM en sandbox" — los agentes LLM no corren en
+      sandbox. Reordenado: "linters en sandbox y agentes LLM".
+- [x] H7 §6 F2: idioma de respuesta del chat no estaba especificado — agregado
+      (idioma configurado del repo, §3.3).
 
-## Iteración 2 — 2 hallazgos (5 ediciones)
+### Iteración 2 — 2 hallazgos
 
-- [x] H8 "fase 1/2" de la publicación colisionaba con las fases del proyecto — desambiguado
-      en §3.6.2, §9.6 (×2) y §9.7 ("fase N de la publicación (§6)").
-- [x] H9 §3.3 "clave master de §9" → "master key de §9.2" (ref precisa + terminología).
+- [x] H8 §3.6: la frase nueva de H1 generaba tensión con "cero trabajo en el handler"
+      (§3.5) — aclarado: llamada de metadatos acotada; lo vetado es LLM y análisis.
+- [x] H9 manual §6: cifras de marketing del proveedor presentadas como hechos —
+      calificadas con nota.
 
-## Iteración 3 — convergencia
+### Iteración 3 — 2 hallazgos
 
-- [x] Pasada final sin hallazgos: YAML del mapa válido (9 claves raíz), sin "fase N" ambiguo
-      restante, links del README resuelven, referencias § internas completas.
+- [x] H10 §3.5: auto-referencia "(§3.5, cierre)" dentro del propio §3.5 — eliminada.
+- [x] H11 §3.2: §9.2/§9.10 prometen runbook de backup "en deploy/" pero el árbol no lo
+      listaba — agregado `deploy/backup.md` al árbol. Además: newline final del manual
+      (faltaba, preexistente).
 
-**Convergencia declarada a la iteración 3.** Commit de cierre: rama `docs/web-verified-review-loop`.
+### Iteración 4 — convergencia
 
+- [x] Pasada final sin hallazgos: refs § completas, anchors del ToC OK, YAML válido,
+      diff completo re-revisado (4 archivos, +16/−10).
+
+**Convergencia declarada a la iteración 4 de la ejecución 2.**
+Rama: `docs/web-verified-review-loop`.

@@ -1,6 +1,6 @@
 # codeowl
 
-Plataforma **self-hosted, single-org** de revisión automática de código con IA: recibe webhooks de GitHub y GitLab, analiza cada Pull Request con linters y agentes LLM en sandbox, y publica resumen, comentarios inline y diagramas Mermaid directamente en el PR. Incluye un dashboard de triage con cola de PRs priorizada por riesgo.
+Plataforma **self-hosted, single-org** de revisión automática de código con IA: recibe webhooks de GitHub y GitLab, analiza cada Pull Request con linters en sandbox y agentes LLM, y publica resumen, comentarios inline y diagramas Mermaid directamente en el PR. Incluye un dashboard de triage con cola de PRs priorizada por riesgo.
 
 **Estado:** fase de documentación — la implementación arranca en la Fase 0 de la guía.
 

@@ -125,7 +125,10 @@ backend:
       head de un fork externo no es accesible con el token de instalación)),
       FetchDefaultBranch (clonado shallow de la rama por defecto al workdir
       del job — insumo del IndexJob), FetchPRTimeline (commits del PR y
-      estado final de sus threads — insumo del MetricsJob), PostInlineComment
+      estado final de sus threads — insumo del MetricsJob), ListOpenPRs
+      (PRs abiertos del repo — reconciliación de estado en la reconexión:
+      los cierres durante la desconexión no llegaron como evento, guía §3.5),
+      PostInlineComment
       (recibe CommentPosition {file, line, side} — líneas nuevas anclan al
       lado RIGHT, eliminadas al LEFT; el mapeo diff→posición vive solo acá,
       testeado con fixtures), PostSuggestion, PostSummary (edit in
