@@ -101,7 +101,8 @@ backend:
     fase: F1 (github) / F2 (gitlab)
     reglas: >
       Contrato mínimo: HandleWebhook (eventos suscritos cerrados: pull_request
-      (edited entra solo por cambio de base.sha — retarget) / issue_comment /
+      (edited entra solo por cambio de base del PR — changes.base en el
+      payload, retarget) / issue_comment /
       pull_request_review_comment en GitHub, merge_request (update entra solo
       por push, cambio de target_branch o paso de draft a ready (la vuelta a
       draft descarta los jobs pendientes, mismo tratamiento que
