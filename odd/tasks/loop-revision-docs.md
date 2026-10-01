@@ -84,3 +84,11 @@ todos los claims de la tabla siguen en pie).
       evento suscrito → repo queda enabled con estado huérfano en triage. Agregada
       la mitigación: el operador desconecta el repo en settings.
 
+### Iteración 2 — 2 hallazgos (micro)
+
+- [x] I1 §3.5: inciso anidado con triple raya en el spec de eventos GitHub
+      ("— reopened como un opened — y devuelve state a open —;") → paréntesis.
+- [x] I2 §3.3: "self-managed viejas" sin umbral → "anteriores a 19.1, donde el
+      signing token no existe" (conecta con el GA de §9.3 sin salto de sección).
+
+
