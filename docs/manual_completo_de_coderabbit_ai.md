@@ -15,6 +15,9 @@ A diferencia de las herramientas tradicionales de IA que solo analizan el diff l
 ## 2. Stack Tecnológico y Arquitectura del Sistema
 
 ### 2.1. Stack Tecnológico
+
+> **Nota de evidencia:** CodeRabbit no publica la especificación de su arquitectura interna. Esta sección se infiere de material público (blog, changelog, esquema de configuración) y describe tendencias, no hechos verificados. La única fuente oficial citada en este manual es el esquema de configuración (`docs.coderabbit.ai/reference/configuration`).
+
 Aunque CodeRabbit es un producto SaaS comercial, su infraestructura combina tecnologías modernas para garantizar baja latencia y alta precisión:
 
 * **Lenguajes Backend:**

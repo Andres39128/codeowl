@@ -54,7 +54,7 @@ servicios:
   analyzer:
     imagen: analyzer/Containerfile
     responsabilidad: tree-sitter + linters en sandbox sin red; salida JSON normalizada
-    ejecucion: "podman run --network=none --read-only --pids-limit=64 --memory=<config>"
+    ejecucion: "podman run --network=none --read-only --pids-limit=<config> --memory=<config>"
     despliegue: "deploy/quadlet/analyzer.build (build de la imagen del sandbox)"
     fase: F1
   dashboard:
@@ -88,7 +88,7 @@ backend:
     ruta: backend/internal/api
     proposito: routing (ServeMux stdlib), middleware (auth, logging, recover), handlers REST + webhooks
     nota: "depende de llm solo para la acción 'probar conexión' de proveedores en settings (una llamada mínima por rol); los handlers de webhook jamás tocan el gateway (guía §3.5)"
-    expone: ["Handler http.Handler", "POST /webhooks/github", "POST /webhooks/gitlab", "REST /api/*"]
+    expone: ["Handler http.Handler", "GET /healthz (F0)", "POST /webhooks/github", "POST /webhooks/gitlab", "REST /api/*"]
     depende_de: [store, vcs, jobs, llm]
     pruebas: backend/internal/api/api_test.go (webhook firmado simulado)
     fase: F0 (auth) / F1 (webhook GitHub) / F2 (webhook GitLab)
