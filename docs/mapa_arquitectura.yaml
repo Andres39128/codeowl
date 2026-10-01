@@ -13,6 +13,9 @@
 #      mapa EN EL MISMO PR (checklist §10 de la guía). Un mapa desactualizado
 #      es peor que no tener mapa.
 #
+# EXCEPCIÓN DE FORMA: backend.vcs.reglas y dashboard.features.expone usan
+# key-mappings (en vez de texto/lista plegada) para lookup directo por ítem.
+#
 # NOTA: este mapa describe la estructura objetivo. Cada entrada indica la fase
 # en que se materializa. Lo que aún no existe tiene su fase como pista.
 # ============================================================================
@@ -180,7 +183,7 @@ backend:
   jobs:
     ruta: backend/internal/jobs
     proposito: wrapper fino de la cola — interfaz JobQueue propia sobre River; enqueue transaccional y tipos de job del dominio
-    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard; transición dual MASTER_KEY + MASTER_KEY_PREVIOUS en api y worker durante la rotación, guía §9.2)", "ReconcileJob (reconexión de repo: consulta los PRs abiertos al VCS vía ListOpenPRs del adapter — sin LLM — y marca cerrados los que ya no figuran; on-demand desde el dashboard, la API solo encola — guía §3.5)", "MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias y resolución de threads —, encolado al cierre del PR; sin LLM)"]
+    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard; transición dual MASTER_KEY + MASTER_KEY_PREVIOUS en api y worker durante la rotación, guía §9.2)", "ReconcileJob (reconexión de repo: consulta los PRs abiertos al VCS vía ListOpenPRs del adapter — sin LLM — y marca cerrados los que ya no figuran; on-demand desde el dashboard, la API solo encola — guía §3.5)", "MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias y resolución de threads — encolado al cierre del PR; sin LLM)"]
     depende_de: [store]
     pruebas: backend/internal/jobs/jobs_test.go
     fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob, ReconcileJob) / F2 (ChatJob) / F4 (IndexJob) / F5 (MetricsJob)

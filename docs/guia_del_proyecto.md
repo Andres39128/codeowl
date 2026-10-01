@@ -128,8 +128,8 @@ Fase → hitos verticales → PR por hito → revisión con checklist (§10) →
 
 ```
 codeowl/                   (raíz del monorepo — justfile; la guía, el manual y el mapa viven en docs/)
-├── README.md                  # entrada del repo: qué es codeowl y cómo navegar docs/
-├── LICENSE                    # Apache-2.0
+├── README.md                   # entrada del repo: qué es codeowl y cómo navegar docs/
+├── LICENSE                     # Apache-2.0
 ├── justfile                    # recetas: dev, test, lint, migrate, up, down, deploy (§9.13)
 ├── .github/workflows/          # CI: lint + build + test (F0), reutiliza recetas del justfile
 ├── odd/                        # documentos de trabajo de las sesiones de edición de docs — bookkeeping del repo, no es producto ni parte del monorepo objetivo
@@ -226,7 +226,7 @@ Los webhooks de GitHub/GitLab exigen un endpoint HTTPS públicamente alcanzable 
 - **Producción (self-host):** VPS con dominio propio; Caddy como reverse proxy con TLS automático (ACME) hacia la API en `:8080`. Único puerto expuesto: 443. Postgres, worker y analyzer nunca exponen puertos. Las unidades Quadlet viven en el manager de usuario (`systemctl --user`): `rootless` aplica también al analyzer que el worker invoca — un worker en unidad de sistema correría podman rootful y vaciaría la promesa del sandbox. El usuario del deploy lleva `loginctl enable-linger` activado: sin linger, las unidades de usuario no arrancan al boot sin sesión abierta.
 - **Desarrollo:** `compose.dev.yml` + túnel para webhooks (smee.io para la GitHub App, o cloudflared). Los tests de integración usan payloads firmados de fixtures y no necesitan salida a internet.
 - Dashboard y API comparten origen (la API sirve los estáticos de `dashboard/` con fallback SPA: las rutas de cliente que no son `/api` ni `/webhooks` sirven `index.html`) → sin CORS.
-- **Respuesta inmediata, cero trabajo en el handler:** valida firma e idempotencia, filtra, y upserta/encola en la misma transacción — responde 2xx inmediato y jamás llama LLM ni ejecuta análisis: todo el trabajo vive en jobs (`ReviewJob`/`ChatJob`), nunca en el proceso del webhook.
+- **Respuesta inmediata, cero trabajo en el handler:** valida firma e idempotencia, filtra, y upserta/encola en la misma transacción — responde 2xx inmediato y jamás llama LLM ni ejecuta análisis: todo el trabajo vive en jobs (`ReviewJob`/`ChatJob`), nunca en el proceso del webhook. Excepción: si el upsert/enqueue falla (p. ej. BD caída), el handler responde 5xx para que el VCS re-entregue; la dedup por delivery ID hace la re-entrega segura.
 - **Eventos suscritos (y nada más):**
   - GitHub App — `pull_request` (opened/synchronize/reopened/ready_for_review disparan review (`reopened` se trata como un `opened`: devuelve `state` a `open`); closed y converted_to_draft no; `edited` tampoco, salvo que cambió la base del PR (`changes.base` en el payload): un retarget deja vigente una review calculada contra la base vieja y debe disparar re-review), `issue_comment` (created), `pull_request_review_comment` (created).
   - GitLab:
@@ -424,7 +424,7 @@ Cada fase termina con **demo runnable** y su checklist de aceptación completa. 
   - repos conectados — conectar es registrar el repo en settings (GitHub `owner/repo`; GitLab project path + su signing token) antes de instalar el webhook: el de un repo no registrado se descarta (§3.5)
   - la instalación en el VCS es manual del operador — GitHub: instalar la App en el repo; GitLab: crear el webhook del proyecto apuntando a `https://<host>/webhooks/gitlab` generando su signing token, y registrar en el proyecto una deploy key de solo lectura cuya privada se guarda en settings (§3.3 — el clonado del MR la necesita)
   - el sistema no escribe configuración del VCS
-- [ ] Desconexión/reconexión de repos: flag `enabled`, descarte de jobs pendientes, `ReconcileJob` (ListOpenPRs) y re-indexación completa (§3.5)
+- [ ] Desconexión/reconexión de repos: flag `enabled`, descarte de jobs pendientes, `ReconcileJob` (ListOpenPRs) y re-indexación completa (§3.5) — la re-indexación completa se materializa en F4: en F1 la reconexión solo dispara el `ReconcileJob`
 - [ ] Dashboard: gestión de usuarios — invitación de miembros, reset de contraseña y desactivación por el admin (§3.4)
 - [ ] Tests de integración del pipeline con webhook simulado
 
@@ -540,7 +540,7 @@ API keys LLM cifradas en reposo (AES-256-GCM, master key en env, nunca en BD pla
 
 - En el deploy Quadlet, los secretos de las unidades `api` y `worker` se inyectan con `LoadCredential=` — nunca con `Environment=`: `systemctl show` expone el Environment de una unidad. Ambas necesitan la master key (la API cifra al guardar credenciales; el worker descifra al usarlas); el webhook secret de la App vive en la unidad `api`; la private key de la App (mint de installation tokens para clonar) vive en la unidad `worker`.
 - La contraseña de Postgres sigue el mismo criterio: `LoadCredential=` + `POSTGRES_PASSWORD_FILE` en la unidad `postgres` — `systemctl show` expone el `Environment` de cualquier unidad, no solo de api y worker.
-- `config` acepta cada secreto como valor directo o como ruta `_FILE` (p. ej. `GITHUB_APP_PRIVATE_KEY_FILE=/run/credentials/api/...`); en Quadlet se usa siempre la variante `_FILE`.
+- `config` acepta cada secreto como valor directo o como ruta `_FILE` (p. ej. `GITHUB_APP_PRIVATE_KEY_FILE=/run/credentials/worker/...`); en Quadlet se usa siempre la variante `_FILE`.
 
 ### 9.3. Webhooks: firma e idempotencia
 
@@ -550,13 +550,13 @@ Webhooks verificados por firma + idempotencia por delivery ID.
 - **GitLab** (signing token, GA desde 19.1): HMAC-SHA256 en formato Standard Webhooks — la firma se computa sobre `webhook-id.webhook-timestamp.body` con la clave del signing token, que llega con prefijo `whsec_`: se quita el prefijo y se base64-decodea para obtener la clave cruda del HMAC. El header `webhook-signature` trae una o más firmas `v1,{base64}` separadas por espacio; la verificación es en tiempo constante contra cada una, con chequeo de frescura del timestamp contra replay.
 - **GitLab legacy** (secret token plano, `X-Gitlab-Token`): queda como fallback solo para instancias self-managed viejas — GitLab no lo recomienda para webhooks nuevos.
 - **Idempotencia por delivery ID:** toda entrega de GitLab lleva `webhook-id`, que es el delivery ID de la dedup; en self-managed anteriores a 19.0 — donde `webhook-id` no existe — el header `Idempotency-Key`, presente desde 17.4, porta el mismo valor y hace de delivery ID de la dedup.
-- **Topes de tamaño:** los payloads por encima del tope del proveedor (25 MB en GitHub) se rechazan antes de parsear; GitLab no publica un tope comparable, así que aplica además un tope propio (config) igual para ambos proveedores.
+- **Topes de tamaño:** por encima de 25 MB GitHub ni siquiera entrega la solicitud; el chequeo de tamaño aplica de facto a GitLab —que no publica un tope comparable— y a cualquier tope propio (config) más bajo que el del proveedor; en esos casos el payload se rechaza antes de parsear — el tope propio vale igual para ambos proveedores.
 
 El handler procesa en orden de costo — tope de tamaño → firma → idempotencia por delivery ID → parseo → filtro de evento — y nada toca la cola ni la BD antes de pasar la firma.
 
 ### 9.4. Sandbox del analyzer
 
-`--network=none --read-only --pids-limit --memory` (tope de RAM, config — un linter compilando un repo enorme no tumba el VPS), sin privilegios, timeout duro. El rootfs queda read-only: los caches y artefactos de compilación de los linters (`target/` de Clippy, `GOCACHE` de golangci-lint) se escriben en el workdir montado o en un tmpfs propio con tope de tamaño (config) — sin espacio escribible, los linters que compilan no corren ni con las deps disponibles. Las versiones de tree-sitter y de cada linter se fijan (pinning) en el Containerfile: la salida del analyzer debe ser reproducible entre rebuilds de la imagen. Los linters corren con **configs propios de la imagen, pasados explícitamente por el CLI** — los configs del repo revisado se ignoran: un config de repo es código arbitrario ejecutándose en el sandbox (un `.eslintrc` es JS) y además permite silenciar reglas — un repo malicioso no apaga su propia detección. Configs fijos es también condición de la salida reproducible.
+`--network=none --read-only --pids-limit --memory` (tope de RAM, config — un linter compilando un repo enorme no tumba el VPS), sin privilegios, timeout duro. El rootfs queda read-only: los caches y artefactos de compilación de los linters (`target/` de Clippy, `GOCACHE` de golangci-lint) se escriben en el workdir montado o en un tmpfs propio con tope de tamaño (config) — sin espacio escribible, los linters que compilan no corren ni con las deps disponibles. Las versiones de tree-sitter y de cada linter se fijan (pinning) en el Containerfile: la salida del analyzer debe ser reproducible entre rebuilds de la imagen. Los linters corren con **configs propios de la imagen, pasados explícitamente por el CLI** — los configs del repo revisado se ignoran: un config de repo es código arbitrario ejecutándose en el sandbox (un `eslint.config.js` es JS ejecutable) y además permite silenciar reglas — un repo malicioso no apaga su propia detección. Configs fijos es también condición de la salida reproducible.
 
 **Linters best-effort según dependencias:** Clippy y golangci-lint necesitan compilar contra dependencias que el sandbox sin red no puede descargar (y casi ningún repo las vendorea). Reglas: tree-sitter corre siempre; los linters sin grafo de dependencias (Ruff, ESLint, Gitleaks) corren siempre; los que necesitan deps corren solo si las deps están disponibles en el clon y se saltan si no. **La salida reporta qué linter corrió y cuál no pudo** — la ausencia de un linter jamás se interpreta como ausencia de hallazgos, ni por el Verifier ni por el resumen. La normalización de la salida mapea la severidad propia de cada linter a los niveles del conjunto cerrado de `findings.severity` (§3.3). Gitleaks sobre clon shallow solo ve la historia clonada: detección de secrets limitada al tramo traído — tradeoff aceptado y documentado, no una promesa de escaneo histórico.
 

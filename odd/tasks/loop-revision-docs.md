@@ -166,5 +166,23 @@ recalculados (todos OK).
       bg.base claro / 1.55:1 sobre bg.surface oscuro).
 - Commit: 63c8dbddea78 (+106/−27, 4 archivos).
 
+### Iteración 3 — 8 hallazgos (3 menores, 5 micro; cero mayores)
+
+- [x] H1 §6 F1: checklist sin los flujos de desconexión/reconexión que §3.5 y el
+      mapa asignan a F1 → checkbox agregado (enabled, descarte, ReconcileJob,
+      re-indexo).
+- [x] H2 §9.12: "Quadlet fija TimeoutStopSec" → atribuido a la unidad host
+      `worker.service`.
+- [x] H3 mapa vcs.reglas: párrafo plegado ~2.000 chars → mapping por método
+      (9 claves), descripción de PostSuggestion agregada, huérfano
+      "config por repo)," corregido.
+- [x] H4 §3.2: "Quadlet solo genera..." acotado a este deploy (.container/.build
+      son fuentes aquí).
+- [x] H5 §9.9: fragmento "— ver backlog" agramatical → corregido.
+- [x] H6 §6 F0: "no contradicta" → "no lo contradice".
+- [x] H7 mapa analyzer: key `imagen:` → `build:` (convención podman-build).
+- [x] H8 §9.2/§9.3: muros de texto → listas de pasos con paridad de cláusulas.
+- Commit: 8a7383169ac2 (+62/−43, 3 archivos).
+
 
 
