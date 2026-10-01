@@ -332,7 +332,7 @@
 - [x] T2 — Parent readback: all 5 edits verified in full context (E1/E3 §9.6 flow reads clean, E4/E5 folded blocks ≤80 cols, 6-space indent preserved), YAML safe_load PASS
 - [x] T3 — Pass 2 full re-read: 2 residuals applied inline; F3/F4 checked against the new degradation rules — no contradiction
 - [x] T4 — Pass 3 structural sweep: YAML OK, parens 0/0 both files (bracket 1 = pre-existing §3.1 ASCII art, benign), 11 `##` sections, diff = exactly the 7 intended changes — loop terminated
-- [x] T5 — Work-unit commit + RDD assess (base-ref 8591f0108e9d, committed-only)
+- [x] T5 — Work-unit commit 953fad2b01aa + RDD assess: medium (config-file heuristic on the YAML), review_due=false (under_budget, 43 lines) — stays pending in slice; untracked `.atl/` excluded with explicit inventory declaration
 
 **Outcome:** 7 changes across 2 files (5 writer + 2 parent). Manual + README untouched. Cumulative: 13 sessions, 230 changes.
 
