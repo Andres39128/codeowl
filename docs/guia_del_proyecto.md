@@ -68,7 +68,7 @@ Fase → hitos verticales → PR por hito → revisión con checklist (§10) →
 | Frontend | **Preact + Vite + TanStack Query + Tailwind v4** | Runtime ~3KB (core) / ~4KB con el alias `preact/compat` (misma API que React); server-state sin boilerplate |
 | Parseo AST | **Tree-sitter** (en contenedor analyzer) | Aísla cgo del binario Go; un solo punto de parseo multi-lenguaje |
 | SAST/Linters | ESLint, Ruff, golangci-lint, Clippy, Gitleaks | Dentro de la imagen analyzer; salida JSON normalizada que reporta qué linter corrió y cuál no pudo (§9.4) |
-| LLM | **Gateway OpenAI-compatible propio** | Multi-proveedor (zhipuai, MiniMax, Ollama local, cualquier endpoint compatible); routing por rol configurado en dashboard |
+| LLM | **Gateway OpenAI-compatible propio** | Multi-proveedor (ZhipuAI, MiniMax, Ollama local, cualquier endpoint compatible); routing por rol configurado en dashboard |
 | Contenedores | **Podman 6 rootless + Quadlet** | Sin daemon residente, sin root; servicios como unidades systemd nativas. `compose.dev.yml` solo como fallback de desarrollo |
 | Sandbox | Podman (`--network=none --read-only`) | Ejecución de analizadores sin riesgo de fuga ni escape |
 | Runner de tareas | **just** | Recetas declarativas y listables (`just --list`), sin los gotchas de Make (timestamps, quoting de shell) |
@@ -381,7 +381,7 @@ Los tokens se nombran por **rol**, no por color — así el tema cambia sin toca
 | `border.subtle` | `#8FBF9F` | `#2E4A3A` | Bordes suaves, dividers — decorativo (§5.2) |
 | `accent` | `#C2611A` | `#E8853D` | Focus rings, highlights, indicadores (≥ 3:1 no-texto también en claro; naranja quemado en claro — el naranja pleno no llega) |
 | `severity.alta` | `#B3261E` | `#F87171` | Error / riesgo alto (≥ 4.5:1) |
-| `severity.media` | `#92400E` | `#FBBF24` | Warning / riesgo medio (≥ 4.5:1 — amber-700 quedaba en 4.45:1 sobre crema; 800 da 6.3-6.6:1) |
+| `severity.media` | `#92400E` | `#FBBF24` | Warning / riesgo medio (≥ 4.5:1 en ambos fondos — amber-700 quedaba en 4.45:1 sobre `bg.surface` (4.68 sobre la base: el token debe cumplir en los dos); 800 da 6.3-6.6:1) |
 | `severity.baja` | `#1E6B3C` | `#4ADE80` | Success / riesgo bajo (≥ 4.5:1) |
 
 Implementación: variables CSS nativas en `theme/`, activas por atributo `data-theme` en `<html>`. Toggle manual (persistido en localStorage) + `prefers-color-scheme` como default inicial. Tailwind v4 referencia los tokens vía `@theme` — los componentes NUNCA conocen el tema activo.
@@ -558,7 +558,7 @@ Webhooks verificados por firma + idempotencia por delivery ID.
 - **GitHub:** HMAC-SHA256 sobre el body crudo (`X-Hub-Signature-256`) y delivery GUID (`X-GitHub-Delivery`).
 - **GitLab** (signing token, GA desde 19.1): HMAC-SHA256 en formato Standard Webhooks — la firma se computa sobre `webhook-id.webhook-timestamp.body` con la clave del signing token, que llega con prefijo `whsec_`: se quita el prefijo y se base64-decodea para obtener la clave cruda del HMAC. El header `webhook-signature` trae una o más firmas `v1,{base64}` separadas por espacio; la verificación es en tiempo constante contra cada una, con chequeo de frescura del timestamp contra replay.
 - **GitLab legacy** (secret token plano, `X-Gitlab-Token`): queda como fallback solo para instancias self-managed viejas — GitLab no lo recomienda para webhooks nuevos.
-- **Idempotencia por delivery ID:** toda entrega de GitLab lleva `webhook-id`, que es el delivery ID de la dedup; en self-managed anteriores a 19.0 — donde `webhook-id` no existe — el header `Idempotency-Key`, presente desde 17.4, porta el mismo valor y hace de delivery ID de la dedup.
+- **Idempotencia por delivery ID:** toda entrega de GitLab lleva `webhook-id`, que es el delivery ID de la dedup; en self-managed anteriores a 19.0 — donde `webhook-id` no existe — el header `Idempotency-Key`, presente desde 17.4, porta el mismo valor y hace de delivery ID de la dedup. Antes de 17.4 no existe header de entrega alguno: esas instancias corren sin dedup por delivery — el upsert idempotente del PR y la unicidad de jobs (§3.6) acotan el efecto de una re-entrega.
 - **Topes de tamaño:** por encima de 25 MB GitHub ni siquiera entrega la solicitud; el chequeo de tamaño aplica de facto a GitLab —que no publica un tope comparable— y a cualquier tope propio (config) más bajo que el del proveedor; en esos casos el payload se rechaza antes de parsear — el tope propio vale igual para ambos proveedores.
 
 El handler procesa en orden de costo — tope de tamaño → firma → idempotencia por delivery ID → parseo → filtro de evento — y nada toca la cola ni la BD antes de pasar la firma.
@@ -598,7 +598,7 @@ Todos los topes de esta sección son config. La regla común: nada se recorta en
 
 ### 9.7. Reintentos, rate limits y failover
 
-Jobs River con máximo de intentos y backoff exponencial (config); un job que agota intentos queda visible como `discarded` en el dashboard — nunca silenciado. Su corrida queda `failed` (§3.3) y el resumen del PR se re-edita una vez, mejor esfuerzo, con el estado final: un resumen provisional de la fase 1 de la publicación jamás queda como último estado visible. El poster del VCS respeta `Retry-After` y aplica backoff ante secondary rate limits de GitHub antes de reintentar. El gateway LLM aplica el mismo criterio ante el proveedor: timeout por llamada (config), backoff ante 429/5xx (respeta `Retry-After` cuando existe) con reintentos acotados (config); agotados, conmuta al siguiente proveedor `enabled` del mismo rol (orden `priority`); si ninguno responde, la review se marca `partial` (§9.6) — nunca se recorta en silencio.
+Jobs River con máximo de intentos y backoff exponencial (config); un job que agota intentos queda visible como `discarded` en el dashboard — nunca silenciado (la ventana de visibilidad es la retención de jobs de River, §9.11; el registro duradero es la corrida en `reviews`). Su corrida queda `failed` (§3.3) y el resumen del PR se re-edita una vez, mejor esfuerzo, con el estado final: un resumen provisional de la fase 1 de la publicación jamás queda como último estado visible. El poster del VCS respeta `Retry-After` y aplica backoff ante secondary rate limits de GitHub antes de reintentar. El gateway LLM aplica el mismo criterio ante el proveedor: timeout por llamada (config), backoff ante 429/5xx (respeta `Retry-After` cuando existe) con reintentos acotados (config); agotados, conmuta al siguiente proveedor `enabled` del mismo rol (orden `priority`); si ninguno responde, la review se marca `partial` (§9.6) — nunca se recorta en silencio.
 
 ### 9.8. Validación de salida de agentes
 
@@ -614,7 +614,7 @@ Dump diario de Postgres documentado en `deploy/`, con restore verificado mensual
 
 ### 9.11. Retención y limpieza
 
-Job diario de limpieza (`CleanupJob`) de `webhook_deliveries` (default 30 días, config — esa retención acota la ventana de cálculo del P95 de §6 a la misma ventana), sesiones expiradas de `sessions` y workdirs huérfanos `/var/tmp/rev-*` con más de N días (config) — un worker crasheado a mitad de job no debe llenar el disco. `findings`, `comments_sent` y `llm_usage` se conservan — son el histórico de dedup y la base de las métricas F5; el volumen single-org lo permite.
+Job diario de limpieza (`CleanupJob`) de `webhook_deliveries` (default 30 días, config — esa retención acota la ventana de cálculo del P95 de §6 a la misma ventana), sesiones expiradas de `sessions` y workdirs huérfanos `/var/tmp/rev-*` con más de N días (config) — un worker crasheado a mitad de job no debe llenar el disco. Las filas de jobs de River en estados terminales se podan aparte, con la retención propia del cliente River (config de River, no del `CleanupJob`: `completed` y `cancelled` 24 h, `discarded` 7 días por defecto): el panel de cola de §9.9 muestra un `discarded` dentro de esa ventana, y el registro duradero de una corrida agotada es su fila en `reviews` (`failed`, §3.3) — esa no se poda. `findings`, `comments_sent` y `llm_usage` se conservan — son el histórico de dedup y la base de las métricas F5; el volumen single-org lo permite.
 
 ### 9.12. Apagado ordenado del worker
 

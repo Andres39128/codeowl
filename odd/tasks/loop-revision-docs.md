@@ -202,5 +202,58 @@ recalculados (todos OK).
       GitLab y tope propio.
 - Commit: 4ddc9ba66dd4 (+29/−8, 3 archivos).
 
+### Iteración 5 — 5 hallazgos (3 menores, 2 micro)
+
+- [x] H1 §2/§2.1: cifra de Preact oficializada (padre verificó preactjs.com:
+      "Fast 3kB") → "~3KB core / ~4KB con preact/compat".
+- [x] H2 mapa dashboard.fase: omitía F1/F3 (que el propio features asigna) →
+      F0 (shell) / F1 (queue) / F3 (prs) / F5 (triage completo).
+- [x] H3 legibilidad: fila repositories (etiqueta corregida: el hallazgo decía
+      reviews), §3.6 1.6, §9.6 cache, §3.5 draft → sub-bullets con paridad.
+- [x] H4 §3.5: anotación inline de la postergación a F4 (consistente con F1).
+- [x] H5 mapa vcs.reglas: nota de naming (keys = método del contrato).
+- Commit: 16490dcb46b6 (+41/−8, 3 archivos).
+
+## Ejecución 5 (2026-10-01) — quinta pasada desde cero
+
+Verificación web fresca (12 fuentes, todas OK): go.dev (go1.27.1), postgresql.org
+(18.6 + PG19 Beta 4, 24/09), riverqueue.com unique-jobs + maintenance-services
+(ByState default sin cancelled/discarded; estados obligatorios; retention
+horizons: completed/cancelled 24 h, discarded 7 días), docs.gitlab.com webhooks
+(signing 19.0-FF/19.1-GA, Standard Webhooks exacto, secret token "not
+recommended", webhook-id 19.0 = Idempotency-Key 17.4) + webhook_events
+(object_attributes.draft, changes.draft, acciones open/update/close/reopen/
+merge/approval), docs.github.com validating (HMAC-256 + timing-safe) +
+best-practices + events-and-payloads (cap 25 MB, delivery GUID),
+docs.coderabbit.ai/reference/configuration (2026-09-30: language, profile
+quiet/chill/assertive, request_changes_workflow, auto_title_placeholder,
+path_filters, path_instructions[].instructions, chat.auto_reply),
+hub.docker.com pgvector (tags pg18 / 0.8.7-pg18), podman v6.1.3,
+tailwindcss.com (v4.3; claims 5x/100x oficiales), preactjs.com (3kB).
+Contrastes WCAG recalculados con script propio (36 pares: todos los claims
+en pie; hallazgo H2 sobre el fondo del 4.45).
+
+### Iteración 1 — 6 hallazgos (2 menores, 4 micro)
+
+- [x] H1 (menor) §9.7/§9.11: "discarded nunca silenciado" sin horizonte —
+      River poda estados terminales (completed/cancelled 24 h, discarded 7 d
+      por defecto, config de River). §9.11 documenta la retención propia y
+      el registro duradero (reviews.failed no se poda); §9.7 ancla la
+      ventana. La unicidad de ReviewJob (sin completed) ya era independiente
+      de esa retención — verificado en la fuente.
+- [x] H2 (micro) §5.1: "amber-700 4.45:1 sobre crema" — esa cifra es sobre
+      bg.surface (sobre base da 4.68 y pasaría AA ahí); corregido el fondo y
+      la exigencia "en ambos fondos".
+- [x] H3 (menor) mapa flujos.cerrar_pr: cortaba en el enqueue del
+      MetricsJob; agregados los pasos de ejecución (FetchPRTimeline →
+      outcome sobre filas existentes, sin LLM) — paridad con los demás
+      flujos.
+- [x] H4 (micro) §2: "zhipuai" → "ZhipuAI" (casing de marca, consistente
+      con MiniMax/Ollama).
+- [x] H5 (micro) §9.3: GitLab <17.4 no expone ningún header de entrega —
+      documentado el límite y su mitigación (upsert idempotente + unicidad
+      de jobs).
+- [x] H6 (micro) .gitignore: .atl/ (caché del skill registry) sin ignorar —
+      agregado; fuera del status.
 
 

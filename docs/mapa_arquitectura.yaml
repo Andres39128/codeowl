@@ -311,6 +311,8 @@ flujos:
     pasos:
       - vcs (webhook closed/close/merge)
       - "api (actualiza pull_requests.state; descarta ReviewJob/ChatJob del PR — cero LLM — y encola el MetricsJob de F5; el IndexJob es por repo y sigue: tras merge indexa la nueva base — y el merge lo encola)"
+      - "worker (MetricsJob: input vía FetchPRTimeline — commits del PR y estado final de sus threads, sin LLM)"
+      - "store (outcome persistido sobre las filas existentes de findings/comments_sent — sin tablas nuevas)"
   chatear_con_bot:
     pasos:
       - vcs (comentario @bot llega por webhook; se ignora si el autor es el propio bot u otro bot)
