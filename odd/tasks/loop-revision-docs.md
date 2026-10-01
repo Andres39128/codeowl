@@ -101,5 +101,14 @@ todos los claims de la tabla siguen en pie).
       running obligatorios al customizar; retryable se conserva (quitarlo puede
       descartar un reintento por conflicto). Fuente: riverqueue.com/docs/unique-jobs.
 
+### Iteración 4 — convergencia
+
+- [x] Pasada final sin hallazgos: pasajes editados re-leídos en contexto
+      (balance de paréntesis ✓, sin palabras duplicadas ✓, refs § y anchors ✓,
+      YAML ✓), terminología ByState/changes.draft consistente guía↔mapa ✓.
+
+**Convergencia declarada a la iteración 4 de la ejecución 3 (6 hallazgos: 2 mayores, 2 menores, 2 micro).**
+Rama: `docs/web-verified-review-loop`.
+
 
 
