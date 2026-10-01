@@ -549,7 +549,7 @@ API keys LLM cifradas en reposo (AES-256-GCM, master key en env, nunca en BD pla
 
 - En el deploy Quadlet, los secretos de las unidades `api` y `worker` se inyectan con `LoadCredential=` — nunca con `Environment=`: `systemctl show` expone el Environment de una unidad. Ambas necesitan la master key (la API cifra al guardar credenciales y descifra las que consume; el worker descifra al usarlas); el webhook secret de la App vive en la unidad `api`; la private key de la App (mint de installation tokens) vive en ambas unidades — el worker clona y publica en el VCS, la API resuelve el diff del detalle de PR (`GetDiff`, §6 F3).
 - La contraseña de Postgres sigue el mismo criterio: `LoadCredential=` + `POSTGRES_PASSWORD_FILE` en la unidad `postgres` — `systemctl show` expone el `Environment` de cualquier unidad, no solo de api y worker.
-- `config` acepta cada secreto como valor directo o como ruta `_FILE` (p. ej. `GITHUB_APP_PRIVATE_KEY_FILE=/run/credentials/worker/...`); en Quadlet se usa siempre la variante `_FILE`.
+- `config` acepta cada secreto como valor directo o como ruta `_FILE` (p. ej. `GITHUB_APP_PRIVATE_KEY_FILE=/run/credentials/<unidad>/...` — cada unidad monta el suyo); en Quadlet se usa siempre la variante `_FILE`.
 
 ### 9.3. Webhooks: firma e idempotencia
 

@@ -279,4 +279,11 @@ en pie; hallazgo H2 sobre el fondo del 4.45).
       (escalar con ": " entre comillas — lección exec 4 H1) + YAML
       validado tras la edición.
 
+### Iteración 3 — 1 hallazgo (micro)
+
+- [x] J1 §9.2: el ejemplo `_FILE` apuntaba al dir de credenciales del
+      worker solo — la private key ahora vive en ambas unidades →
+      `/run/credentials/<unidad>/...` (cada unidad monta el suyo).
+      Auditoría programática de refs §X.Y: ninguna rota (35 subsecciones).
+
 
