@@ -274,3 +274,38 @@
 
 **Route evidence:** Batch 11 pass 1 = writer trigger (3 non-trivial files, 17 ops) → one delegated writer + parent readback; pass 2 = 1 mechanical one-liner inline (trivial-edit exemption). Passive docs; work-unit commit on main (repo precedent for docs batches); assess run post-commit with explicit untracked inventory (.atl excluded).
 
+
+---
+
+# Batch 12 — Twelfth-pass gap closure (2026-10-01, twelfth review session, fresh from zero — engram NOT consulted per user instruction)
+
+**Objective:** Fresh full doc review from scratch (no engram reads). Pass 1: 10 findings; pass 2: zero (second-order effects of pass-1 edits all closed clean); pass 3: zero — loop terminated (10→0→0).
+
+**External facts verified against primary sources this session (web, 2026-10-01):** Go 1.27.1 current (go.dev) ✓ · PostgreSQL 18.6 stable + PG 19 Beta 4 (postgresql.org via Wikipedia infobox + press-release title) ✓ · Tailwind v4.3.3 (GitHub tags) ✓ · River v0.48.0 — still 0.x as the guide claims (GitHub releases) ✓ · `pgvector/pgvector:pg18` tag exists, 0.8.6 (Docker Hub) ✓ · GitLab signing token: introduced 19.0 behind FF `webhook_signing_token`, **GA 19.1** (docs.gitlab.com) — guide's "19+" imprecise + verification mechanics incomplete · **Podman current is v6.1.3, repo moved to podman-container-tools/podman** — guide said "Podman 5" (stale).
+
+**Findings pass 1 (10, all applied by delegated writer; 9 guide G1-G8 incl. one two-part + 1 mapa):**
+1. §2 stack table "Podman 5" stale → Podman 6 (web-verified v6.1.3, Sept 2026).
+2. §9.3 GitLab signing-token verification lacked implementable mechanics → exact recipe added: token prefix `whsec_` (strip + base64-decode = raw HMAC key), `webhook-signature` carries one-or-more `v1,{base64}` signatures space-separated, constant-time compare against each, timestamp freshness; "19+" → "GA desde 19.1".
+3. §3.3 `reviews.partial` enumerated only 2 causes but §9.6/§9.7 define 3 → "failover agotado" added (§9.6-§9.7 ref).
+4. Mapa jobs assigns `CleanupJob`+`RotationJob` to F1 but guide F1 checklist had no item → "Jobs de operación" bullet added (retención §9.11; rotación §9.2 acción settings/admin).
+5. Mapa `lib` fase F0 while `usePR` (PR detail) is F3 → "F0 (apiClient, useSession) / F3 (usePR)".
+6. Chat on closed PR undefined outside `/review` → F2 bullet: demás comandos responden igual, el hilo sigue vivo, solo `/review` se rehúsa.
+7. No guard against enabling a repo with zero `review`-role providers → §9.6: conectar/re-habilitar exige proveedor enabled en rol `review`; settings bloquea (each PR would burn a full retry run to `failed`).
+8. §3.5 "Eventos suscritos" was a single ~2.6 KB bullet covering 6 topics → parent + 6 nested sub-bullets (GitHub/GitLab events, early discard, repo ausente-desconectado, pre-conexión, filtros de comentario), text verbatim.
+9. SPA deep-link 404 gap → §3.5: API serves statics with SPA fallback (non-`/api`/`/webhooks` client routes → `index.html`).
+10. F1 had two redundant GitHub App bullets → merged (webhook/tokens/idempotencia + secrets en env + permisos mínimos in one).
+
+**Pass 2 (parent):** zero new findings — re-read changed regions + second-order checks (no other "Podman 5"/"19+" remnants; RotationJob trigger consistent with §9.2 settings action; guard consistent with mapa settings scope).
+
+**Pass 3 (parent):** structural sweep — parens 0/0 both files (1 stray `[` = pre-existing §3.1 ASCII art, benign), YAML safe_load PASS, 11 `##` sections, 12/12 writer verifications re-confirmed.
+
+**Tasks:**
+- [x] T1 — Writer: 10 edits, 0 failed anchors, skill cognitive-doc-design loaded
+- [x] T2 — Parent readback: §3.5 restructure, §9.3, F1/F2 bullets, §3.3 row verified in full context post-edit
+- [x] T3 — Pass 2 full re-read: zero findings
+- [x] T4 — Pass 3 verification sweep: zero findings — loop terminated
+- [x] T5 — Housekeeping: batch-11 odd record (left uncommitted by prior session) committed as 4e7e41b54b51, then this batch's record + docs as one work-unit commit
+
+**Outcome:** 10 changes across 2 files (manual + README untouched — no findings there this pass). Cumulative: 12 sessions, 223 changes.
+
+**Route evidence:** Batch 12 pass 1 = writer trigger (2 non-trivial files, 10 edits) → one delegated writer + parent readback; passes 2-3 = read-only (nothing to apply). Passive docs — no review ceremony; work-unit commits on main (repo precedent for docs batches); RDD assess run post-commit (base-ref b72fa7f7633c, committed-only).

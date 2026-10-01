@@ -290,7 +290,7 @@ dashboard:
     expone: ["apiClient", "useSession", "usePR"]
     depende_de: []
     pruebas: vitest
-    fase: F0
+    fase: F0 (apiClient, useSession) / F3 (usePR)
 
 # -----------------------------------------------------------------------------
 # FLUJOS (secuencias que cruzan componentes)
