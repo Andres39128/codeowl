@@ -54,7 +54,7 @@ servicios:
   analyzer:
     imagen: analyzer/Containerfile
     responsabilidad: tree-sitter + linters en sandbox sin red; salida JSON normalizada
-    ejecucion: "podman run --network=none --read-only --pids-limit=64"
+    ejecucion: "podman run --network=none --read-only --pids-limit=64 --memory=<config>"
     despliegue: "deploy/quadlet/analyzer.build (build de la imagen del sandbox)"
     fase: F1
   dashboard:
@@ -217,7 +217,9 @@ backend:
       la unicidad y el insert pasa) — sin corridas acumuladas y sin reviews
       perdidas por ningún interleaving de push o retarget.
       ChatJob se encola tras el filtro de mención/autor; su presupuesto por
-      comando es propio, no comparte el de la review.
+      comando es propio, no comparte el de la review; su idempotencia es el
+      comentario que la disparó (comment_id padre, guía §3.3) — un reintento
+      no duplica la respuesta.
 
       IndexJob: job único por repo mientras vive otro (misma mecánica de
       unicidad que ReviewJob); se encola al completar cada review
