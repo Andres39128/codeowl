@@ -48,7 +48,7 @@ servicios:
   worker:
     binario: backend/cmd/worker
     responsabilidad: consume jobs River y ejecuta el pipeline de revisión/indexación
-    nota: "requiere git y acceso al CLI de podman (invoca la imagen analyzer); unidades de usuario (systemctl --user): rootless también para el analyzer"
+    nota: "requiere git y acceso al CLI de podman (invoca la imagen analyzer); unidades de usuario (systemctl --user, con loginctl enable-linger para arrancar al boot): rootless también para el analyzer"
     despliegue: deploy/quadlet/worker.service
     fase: F0 (esqueleto) / F1 (pipeline)
   analyzer:
@@ -103,7 +103,9 @@ backend:
       Contrato mínimo: HandleWebhook (eventos suscritos cerrados: pull_request
       (edited entra solo por cambio de base.sha — retarget) / issue_comment /
       pull_request_review_comment en GitHub, merge_request (update entra solo
-      por push, cambio de target_branch o marca draft — título/labels se
+      por push, cambio de target_branch o paso de draft a ready (la vuelta a
+      draft descarta los jobs pendientes, mismo tratamiento que
+      converted_to_draft en GitHub) — título/labels se
       descartan) / note en GitLab; el cierre —closed en GitHub, close/merge en
       GitLab— actualiza pull_requests.state y descarta los ReviewJob/ChatJob
       del PR sin gastar LLM (el IndexJob es por repo y sigue su curso — tras
@@ -118,8 +120,9 @@ backend:
       ref del PR desde el repo base (refs/pull/<n>/head en GitHub,
       refs/merge-requests/<iid>/head en GitLab — head, no el merge ref: el
       test-merge de GitHub contamina el diff y desaparece en conflictos; el
-      head de un fork externo no es accesible con el token de instalación),
-      PostInlineComment
+      head de un fork externo no es accesible con el token de instalación)),
+      FetchDefaultBranch (clonado shallow de la rama por defecto al workdir
+      del job — insumo del IndexJob), PostInlineComment
       (recibe CommentPosition {file, line, side} — líneas nuevas anclan al
       lado RIGHT, eliminadas al LEFT; el mapeo diff→posición vive solo acá,
       testeado con fixtures), PostSuggestion, PostSummary (edit in
@@ -193,10 +196,10 @@ backend:
   jobs:
     ruta: backend/internal/jobs
     proposito: wrapper fino de la cola — interfaz JobQueue propia sobre River; enqueue transaccional y tipos de job del dominio
-    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard, guía §9.2)"]
+    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard; transición dual MASTER_KEY + MASTER_KEY_PREVIOUS en api y worker durante la rotación, guía §9.2)", "MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias y resolución de threads —, encolado al cierre del PR; sin LLM)"]
     depende_de: [store]
     pruebas: backend/internal/jobs/jobs_test.go
-    fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob) / F2 (ChatJob) / F4 (IndexJob)
+    fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob) / F2 (ChatJob) / F4 (IndexJob) / F5 (MetricsJob)
     reglas: >
       Único paquete que importa River. Reemplazar la cola = reescribir solo acá.
       Los handlers de API encolan a través de esta interfaz; jamás importan River directo.
@@ -212,8 +215,11 @@ backend:
 
       IndexJob: job único por repo mientras vive otro (misma mecánica de
       unicidad que ReviewJob); se encola al completar cada review
-      (success o partial) y al conectar el repo — la unicidad de ReviewJob
-      ya debouncea los push seguidos. Indexa solo código, respetando los
+      (success o partial), al conectar el repo y al fusionar el PR (merge —
+      la rama por defecto cambió; si ya hay uno vivo, la unicidad lo
+      deduplica) — la unicidad de ReviewJob ya debouncea los push seguidos.
+      Indexa la rama por defecto del repo en su estado al ejecutar (clon
+      propio vía FetchDefaultBranch), solo código, respetando los
       path_filters vigentes; presupuesto propio de embeddings por corrida
       (guía §9.6).
 
@@ -266,6 +272,7 @@ dashboard:
       auth: {ruta: dashboard/src/features/auth, proposito: login/sesión, fase: F0}
       settings: {ruta: dashboard/src/features/settings, proposito: proveedores LLM (BYOK cifrado) — acciones exclusivas del admin, repos conectados, usuarios (invitaciones y reset), fase: F1}
       prs: {ruta: dashboard/src/features/prs, proposito: detalle de PR con findings y diff, fase: F3}
+      queue: {ruta: dashboard/src/features/queue, proposito: estado de la cola de jobs (pending/running/discarded por tipo) — guía §9.9, fase: F1}
       triage: {ruta: dashboard/src/features/triage, proposito: cola de PRs por riesgo, fase: F5}
     depende_de: [components, lib]
     pruebas: vitest por feature
@@ -293,25 +300,26 @@ flujos:
       - vcs (publicación fase 1: resumen apenas listo, SLO 5 min; comments_sent tipo summary)
       - analyze (linters sandbox sobre el workdir → SASTFinding[])
       - llm.rol.review (agente Reviewer por archivo, con contexto de index si existe)
-      - review (deduplicación LLM vs SAST → Verifier filtra falsos positivos)
+      - review (deduplicación LLM vs SAST; F3: el Verifier filtra falsos positivos)
       - vcs (publicación fase 2: inline comments al cerrar el análisis y re-edición del resumen con el recuento de findings, SLO 15 min; comments_sent tipo inline)
       - review (F5: risk_score → pull_requests; Agente Pre-merge → veredicto como sección del resumen, edit in place)
   indexar_repo:
     pasos:
-      - worker (IndexJob al conectar el repo y al completar cada review (success o partial) — job único por repo, ver reglas de jobs)
-      - analyze (chunking simbólico tree-sitter)
+      - worker (IndexJob al conectar el repo, al completar cada review (success o partial) y al fusionar el PR (merge) — job único por repo, ver reglas de jobs)
+      - vcs (FetchDefaultBranch: clonado shallow de la rama por defecto al workdir del job)
+      - analyze (chunking simbólico tree-sitter sobre el clon)
       - llm.rol.embedding (embeddings por proveedor configurado)
       - store (upsert en repo_index con pgvector + grafo de imports)
   cerrar_pr:
     pasos:
       - vcs (webhook closed/close/merge)
-      - api (actualiza pull_requests.state; descarta ReviewJob/ChatJob del PR — cero LLM; el IndexJob es por repo y sigue: tras merge indexa la nueva base)
+      - api (actualiza pull_requests.state; descarta ReviewJob/ChatJob del PR — cero LLM — y encola el MetricsJob de F5; el IndexJob es por repo y sigue: tras merge indexa la nueva base — y el merge lo encola)
   chatear_con_bot:
     pasos:
       - vcs (comentario @bot llega por webhook; se ignora si el autor es el propio bot u otro bot)
       - api (encola ChatJob tras filtrar mención/autor)
       - llm.rol.review (agente Chat con contexto del hilo y del PR)
-      - vcs (respuesta publicada en el hilo; /review no responde: encola ReviewJob con la identidad actual — guía §3.6)
+      - "vcs (respuesta publicada en el hilo; /review no responde: encola ReviewJob con la identidad actual — guía §3.6; PR cerrado: responde sin encolar)"
 
 # -----------------------------------------------------------------------------
 # REGLAS DE REFACTOR (dónde ir cuando algo duele)
