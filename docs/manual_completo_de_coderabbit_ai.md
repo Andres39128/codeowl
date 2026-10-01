@@ -1,6 +1,6 @@
 # Manual Completo, Instructivo y Arquitectura de CodeRabbit.ai
 
-> **Nota de alcance:** este manual describe el producto externo CodeRabbit.ai como referencia funcional. El alcance real de este proyecto — incluidas las divergencias deliberadas (solo GitHub/GitLab, 5 linters, sin Issue Planner, sin `request_changes_workflow`, sin SOC 2) — está definido en `docs/guia_del_proyecto.md` §1.1; ante divergencia, la guía manda.
+> **Nota de alcance:** este manual describe el producto externo CodeRabbit.ai como referencia funcional. El alcance real de este proyecto — incluidas las divergencias deliberadas (solo GitHub/GitLab, 5 linters, sin Issue Planner, sin `request_changes_workflow`, sin SOC 2) — está definido en `docs/guia_del_proyecto.md` §1.1; ante divergencia, la guía manda. Los detalles del producto externo (modelos, analizadores, esquema de configuración) cambian con el producto: lo acá reflejado fue verificado contra la referencia oficial (`docs.coderabbit.ai/reference/configuration`) en octubre de 2026 y no se mantiene sincronizado — verificar antes de citarlo.
 
 ---
 
@@ -89,10 +89,9 @@ Cree un archivo `.coderabbit.yaml` en la raíz de su repositorio para personaliz
 
 ```yaml
 # Archivo de configuración de CodeRabbit
-version: "2"
 language: "es" # Idioma de los comentarios (ej. es, en)
 reviews:
-  profile: "chill" # Opciones: "assertive", "chill", "strict"
+  profile: "chill" # Opciones: "quiet", "chill", "assertive"
   request_changes_workflow: false
   high_level_summary: true
   sequence_diagrams: true
