@@ -331,7 +331,7 @@ flujos:
       - vcs (comentario @bot llega por webhook; se ignora si el autor es el propio bot u otro bot)
       - api (encola ChatJob tras filtrar mención/autor)
       - llm.rol.review (agente Chat con contexto del hilo y del PR)
-      - "vcs (respuesta publicada en el hilo; /review no responde: encola ReviewJob con la identidad actual — guía §3.6; PR cerrado: responde sin encolar)"
+      - "vcs (respuesta publicada en el hilo; /review no responde: encola ReviewJob con la identidad actual — guía §3.6; PR cerrado o draft: responde sin encolar)"
 
 # -----------------------------------------------------------------------------
 # REGLAS DE REFACTOR (dónde ir cuando algo duele)
