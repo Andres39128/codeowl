@@ -104,10 +104,14 @@ reviews:
     - "!vendor/**"
     - "!**/*.min.js"
     - "!node_modules/**"
-  instructions: |
-    - Sigue los principios de Código Limpio y SOLID.
-    - Prioriza la seguridad en endpoints HTTP.
-    - Asegura que todas las funciones exportadas tengan tipos explícitos en TypeScript.
+  path_instructions:
+    - path: "**"
+      instructions: |
+        - Sigue los principios de Código Limpio y SOLID.
+        - Prioriza la seguridad en endpoints HTTP.
+    - path: "**/*.ts"
+      instructions: |
+        - Asegura que todas las funciones exportadas tengan tipos explícitos en TypeScript.
 chat:
   auto_reply: true
 ```

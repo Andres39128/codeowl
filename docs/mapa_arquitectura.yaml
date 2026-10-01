@@ -31,25 +31,25 @@ servicios:
     imagen: caddy:2
     responsabilidad: reverse proxy con TLS automático (ACME) — único puerto expuesto (443) hacia la API en :8080
     puertos: "443 (único expuesto)"
-    despliegue: deploy/quadlet/caddy.container
+    despliegue: deploy/quadlet/caddy.container (fuente Quadlet — la unidad caddy.service que corre la imagen es producto del generador, no archivo fuente)
     fase: F0
   postgres:
     imagen: pgvector/pgvector:pg18
     responsabilidad: OLTP + embeddings (pgvector) + cola de jobs (River)
     puertos: "5432 (interno)"
-    despliegue: deploy/quadlet/postgres.container
+    despliegue: deploy/quadlet/postgres.container (fuente Quadlet — la unidad postgres.service que corre la imagen es producto del generador, no archivo fuente)
     fase: F0
   api:
     binario: backend/cmd/api
     responsabilidad: webhooks VCS firmados + REST del dashboard + auth por sesión (routing con ServeMux stdlib — sin dependencia de router)
     escucha: "config: API_ADDR (default :8080)"
-    despliegue: deploy/quadlet/api.service
+    despliegue: "deploy/quadlet/api.service (unidad systemd de usuario para el binario de host — archivo fuente propio, no Quadlet: el generador solo consume .container/.build)"
     fase: F0
   worker:
     binario: backend/cmd/worker
     responsabilidad: consume jobs River y ejecuta el pipeline de revisión/indexación
     nota: "requiere git y acceso al CLI de podman (invoca la imagen analyzer); unidades de usuario (systemctl --user, con loginctl enable-linger para arrancar al boot): rootless también para el analyzer"
-    despliegue: deploy/quadlet/worker.service
+    despliegue: "deploy/quadlet/worker.service (unidad systemd de usuario para el binario de host — archivo fuente propio, no Quadlet: el generador solo consume .container/.build)"
     fase: F0 (esqueleto) / F1 (pipeline)
   analyzer:
     imagen: analyzer/Containerfile
@@ -184,7 +184,7 @@ backend:
   llm:
     ruta: backend/internal/llm
     proposito: gateway multi-proveedor OpenAI-compatible con routing por rol y rate limit por proveedor
-    expone: ["interface Client", "Complete(ctx, Rol, Prompt) (string, error)"]
+    expone: ["interface Client", "Complete(ctx, Role, Prompt) (string, error)"]
     depende_de: [store, config]
     pruebas: backend/internal/llm/llm_test.go (servidor stub OpenAI-compatible)
     fase: F1
