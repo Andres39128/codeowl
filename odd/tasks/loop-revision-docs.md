@@ -286,4 +286,16 @@ en pie; hallazgo H2 sobre el fondo del 4.45).
       `/run/credentials/<unidad>/...` (cada unidad monta el suyo).
       Auditoría programática de refs §X.Y: ninguna rota (35 subsecciones).
 
+### Iteración 4 — convergencia
+
+- [x] Pasada final sin hallazgos: diff completo de la ejecución re-leído
+      (4 archivos), YAML válido, refs § verificadas programáticamente,
+      scan de palabras duplicadas con triaje manual (todas estructurales
+      o intencionales: "punta a punta", "Draft:/[Draft]/(Draft)",
+      "CodeRabbit (coderabbit.ai)"...), contrastes y claims web ya
+      verificados en la apertura de la ejecución.
+
+**Convergencia declarada a la iteración 4 de la ejecución 5 (13 hallazgos: 1 mayor, 3 menores, 9 micro).**
+Rama: `docs/web-verified-review-loop`. Assess por commit: medium/under_budget en los 3 (líneas 68/51/9 — sin review debido).
+
 
