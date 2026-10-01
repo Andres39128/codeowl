@@ -140,8 +140,10 @@ backend:
     fase: F1 (reviewer, summarizer) / F2 (chat) / F3 (verifier, mermaid) / F5 (pre-merge)
     reglas: >
       El loop de agente es código propio (~200 líneas) — sin framework.
-      Rol del gateway por agente: Reviewer/Summarizer/PreMerge → review,
-      Verifier → cheap (cross-check mecánico), IndexJob → embedding.
+      Rol del gateway por agente: Reviewer/Summarizer/Chat/PreMerge →
+      review, Verifier → cheap (cross-check mecánico; sin proveedor cheap
+      no corre), IndexJob → embedding (sin proveedor embedding no se
+      encola).
       El job guarda la identidad de la corrida — (head_sha, base_sha): push y
       retarget cambian el diff; si difiere del estado actual del PR, la corrida
       se marca stale y termina sin LLM ni publicaciones (check al iniciar y
@@ -225,7 +227,8 @@ backend:
       Indexa la rama por defecto del repo en su estado al ejecutar (clon
       propio vía FetchDefaultBranch), solo código, respetando los
       path_filters vigentes; presupuesto propio de embeddings por corrida
-      (guía §9.6).
+      (guía §9.6); sin proveedor `embedding` enabled no se encola (log —
+      queda latente hasta configurar el rol).
 
 # -----------------------------------------------------------------------------
 # COMPONENTES ANALYZER

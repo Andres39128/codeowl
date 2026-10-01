@@ -309,3 +309,31 @@
 **Outcome:** 10 changes across 2 files (manual + README untouched — no findings there this pass). Cumulative: 12 sessions, 223 changes.
 
 **Route evidence:** Batch 12 pass 1 = writer trigger (2 non-trivial files, 10 edits) → one delegated writer + parent readback; passes 2-3 = read-only (nothing to apply). Passive docs — no review ceremony; work-unit commits on main (repo precedent for docs batches); RDD assess run post-commit (base-ref b72fa7f7633c, committed-only).
+
+---
+
+# Batch 13 — Thirteenth-pass gap closure (2026-10-01, thirteenth review session, fresh from zero — engram NOT consulted per user instruction)
+
+**Objective:** Fresh full doc review from scratch (no engram reads). Pass 1: 4 findings (2 substantive + 2 consistency micros); pass 2: 2 residuals (second-order effects of the pass-1 per-file-cap edit); pass 3: zero — loop terminated (4→2→0).
+
+**External facts verified against primary sources this session (web, 2026-10-01):** go.dev/dl — Go 1.27.1 stable ✓ (guide "Go 1.27" current) · api.github.com riverqueue/river — v0.48.0 released today, still 0.x ✓ (guide claim holds) · postgresql.org — 18.6 latest stable (2026-08-13), PG 19 Beta 4 (2026-09-24) ✓ (guide claim exact). Podman 6 / Tailwind 4.3 / pgvector pg18 unchanged from batch-12 verification (same day).
+
+**Findings pass 1 (4, all applied by delegated writer, 5 edits: E1-E3 guide + E4-E5 mapa):**
+1. Roles `cheap`/`embedding` without an enabled provider: behavior undefined (§9.6 guard covered only `review`) → they degrade instead of block: no `cheap` → Verifier doesn't run, findings publish with `verified` null (§3.3), fase-2 re-edit declares it; no `embedding` → IndexJob not enqueued (structured log), indexing dormant — enqueueing it would burn retries on every completed review (§9.6 + mapa review reglas + mapa jobs reglas).
+2. Per-file size cap missing: a PR under the PR-level diff limit can carry one pathological file (context overflow + retry-budget burn) → per-file cap (config): file over cap is SAST-only, corrida ends `partial`, declared in the fase-2 coverage note (§9.6).
+3. Mapa role line omitted `Chat → review` (guide F2 declares it) → added, with per-role degradation clauses (mapa review reglas).
+4. §3.3 `comments_sent`: dedup huella attributed to every row, but it only applies to `inline` rows → "solo filas `inline`" scoping added.
+
+**Pass 2 residuals (parent inline, 2):** the new per-file cap is a 4th `partial` cause → §9.6 motivo list now "presupuesto agotado, diff o archivo sobre el tope, o failover agotado"; §3.3 `reviews` partial enumeration now includes "archivo sobre el tope por archivo".
+
+**Tasks:**
+
+- [x] T1 — Writer: 5 edits, 0 failed anchors, skill cognitive-doc-design loaded (paths-injected); writer caught spec error in parent's check #1 ("Sin proveedor" capitalized at sentence start → case-sensitive grep; content correct)
+- [x] T2 — Parent readback: all 5 edits verified in full context (E1/E3 §9.6 flow reads clean, E4/E5 folded blocks ≤80 cols, 6-space indent preserved), YAML safe_load PASS
+- [x] T3 — Pass 2 full re-read: 2 residuals applied inline; F3/F4 checked against the new degradation rules — no contradiction
+- [x] T4 — Pass 3 structural sweep: YAML OK, parens 0/0 both files (bracket 1 = pre-existing §3.1 ASCII art, benign), 11 `##` sections, diff = exactly the 7 intended changes — loop terminated
+- [x] T5 — Work-unit commit + RDD assess (base-ref 8591f0108e9d, committed-only)
+
+**Outcome:** 7 changes across 2 files (5 writer + 2 parent). Manual + README untouched. Cumulative: 13 sessions, 230 changes.
+
+**Route evidence:** Batch 13 pass 1 = writer trigger (2 non-trivial files, 5 edits) → one delegated writer + parent readback; pass 2 = 2 mechanical one-liners inline (trivial-edit exemption; exact-byte anchors). Passive docs — no review ceremony; work-unit commit on main (repo precedent); RDD assess post-commit.
