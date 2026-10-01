@@ -107,9 +107,9 @@ backend:
       draft descarta los jobs pendientes, mismo tratamiento que
       converted_to_draft en GitHub) — título/labels se
       descartan) / note en GitLab; el cierre —closed en GitHub, close/merge en
-      GitLab— actualiza pull_requests.state y descarta los ReviewJob/ChatJob
-      del PR sin gastar LLM (el IndexJob es por repo y sigue su curso — tras
-      merge indexa la nueva base); ignora comentarios del propio bot y de otros
+      GitLab— actualiza pull_requests.state, descarta los ReviewJob/ChatJob
+      del PR sin gastar LLM y encola el MetricsJob de F5 (el IndexJob es por
+      repo y sigue su curso — y el merge lo encola: indexa la nueva base); ignora comentarios del propio bot y de otros
       bots — anti-bucle;
       issue_comment solo pasa si es comentario en PR con mención al bot; note
       de GitLab solo con noteable_type == MergeRequest + mención; chat de
@@ -122,7 +122,8 @@ backend:
       test-merge de GitHub contamina el diff y desaparece en conflictos; el
       head de un fork externo no es accesible con el token de instalación)),
       FetchDefaultBranch (clonado shallow de la rama por defecto al workdir
-      del job — insumo del IndexJob), PostInlineComment
+      del job — insumo del IndexJob), FetchPRTimeline (commits del PR y
+      estado final de sus threads — insumo del MetricsJob), PostInlineComment
       (recibe CommentPosition {file, line, side} — líneas nuevas anclan al
       lado RIGHT, eliminadas al LEFT; el mapeo diff→posición vive solo acá,
       testeado con fixtures), PostSuggestion, PostSummary (edit in
@@ -295,7 +296,7 @@ flujos:
       - api (valida, upserta PR y encola ReviewJob vía jobs — misma transacción de BD)
       - worker (worker River toma el job, crea workdir efímero /var/tmp/rev-<job-id>)
       - review (skip stale: identidad del job (head_sha, base_sha) vs estado actual del PR; re-chequeo antes de cada publicación y re-encolo en la tx de finalización)
-      - vcs (FetchPR: clonado shallow con credencial efímera al workdir)
+      - vcs (FetchPR: clonado shallow con credencial efímera o deploy key al workdir)
       - review (Summarizer temprano: resumen + walkthrough + Mermaid — depende del diff, no de los findings)
       - vcs (publicación fase 1: resumen apenas listo, SLO 5 min; comments_sent tipo summary)
       - analyze (linters sandbox sobre el workdir → SASTFinding[])

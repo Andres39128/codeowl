@@ -206,3 +206,37 @@
 
 **Route evidence:** Batch 9 pass 1 = writer trigger (3 files, 26 edits) → one delegated writer + parent readback; pass 2 = 2 mechanical one-liners inline (trivial-edit exemption). Passive docs — no review ceremony; no git repo → no work-unit commits, no diff-based assess.
 
+---
+
+# Batch 10 — Tenth-pass gap closure (2026-09-30, tenth review session, fresh from zero — engram NOT consulted per user instruction)
+
+**Objective:** Fresh full doc review from scratch (no engram reads). Pass 1: 14 findings (5 substantive + 9 minor); pass 2: 6 residual micros (second-order effects of pass 1); pass 3: 1 micro (§3.1 diagram); pass 4: zero — loop terminated (14→6→1→0).
+
+**Session context:** mid-session the user renamed the repo `revisión-codigo` → `codeowl`, ran `git init`, and committed the writer's pass-1 output themselves (74e75925d701). Parent adapted: verification re-ran against the new path; the guide's §3.2 name alignment was done by the user in parallel (8926b19587df).
+
+**Findings pass 1 (all applied by delegated writer, 25 edits: G1-G14 guide + M1-M11 mapa):**
+1. GitLab ready→draft via title edit would enqueue a review of a draft PR (direction filter missing) → filter now passes only draft→ready; the reverse discards pending jobs like `converted_to_draft` (guide §3.5 + mapa vcs reglas).
+2. IndexJob: what it clones / when it triggers / how — flujo `indexar_repo` had no clone step, `VCSProvider` contract had no default-branch clone, and "tras un merge, indexar la nueva base" had no merge trigger → `FetchDefaultBranch` added to contract + flujo; merge added as IndexJob trigger (guide §3.5 cierre, F4 + mapa jobs reglas + flujo); index target declared = default branch at run time.
+3. Master-key rotation had no key-transition mechanism (naive rotation bricks data) → dual-key `MASTER_KEY` + `MASTER_KEY_PREVIOUS` in api+worker, restart, then RotationJob; refuses to start without the previous key (§9.2 + mapa RotationJob).
+4. F5 VCS-read metrics had no computation moment → `MetricsJob` enqueued once at PR close (conversation complete; no LLM) — guide §3.5 cierre + F5, mapa jobs expone/fase + flujo cerrar_pr.
+5. F1 queue-status panel deliverable had no structural home → `features/queue` added to guide §3.2 tree + §3.1 diagram (pass 3) + F1 item + mapa features.
+6-14. Minors: `loginctl enable-linger` for user units (§3.5 + mapa worker nota); VCS-side installation is manual by the operator (App install / GitLab webhook creation, F1); `/review` on closed PR replies without encola (F2 + mapa chatear flujo); unbalanced paren in mapa FetchPR block (verified +1 by script, fixed); §3.2 root annotation corrected (superseded by user's codeowl rename); `comments_sent` FK a pull_requests declared; member deactivation revokes sessions; "archivos sensibles" = configurable patterns; Verifier tagged F3 in flujo revisar_pr.
+
+**Pass 2 residuals (parent inline, 6 one-liners):** mapa vcs cierre clause updated (MetricsJob enqueue + merge-enqueues-IndexJob); MetricsJob added to repo-disconnect discard list (§3.5); flujo FetchPR "credencial efímera o deploy key"; `FetchPRTimeline` added to VCS contract (MetricsJob input: PR commits + final thread state) + guide F5 pointer; MetricsJob outcome persisted on existing `findings`/`comments_sent` rows (no new tables); metrics heuristics added to §8 unit-test row.
+
+**Pass 3 (parent inline, 1):** §3.1 dashboard diagram now lists Queue.
+
+**Tasks:**
+- [x] T1 — Writer: 25 edits (G1-G14, M1-M11), 0 failed anchors, 1 re-anchor on indentation (M9), 1 YAML quoting fix (M10, per config.proposito precedent)
+- [x] T2 — Parent readback: all markers grepped independently, YAML safe_load PASS, parens 0/0, 11 `##` sections, §9.2/§3.5/F1-F5/mapa blocks re-read in full context
+- [x] T3 — Pass 2 full re-read: 6 micros applied inline
+- [x] T4 — Pass 3 full re-read: 1 micro applied inline
+- [x] T5 — Pass 4 verification sweep: zero findings — loop terminated
+- [x] T6 — Work-unit commit of pass-2/3 residuals (pass-1 output committed by user as 74e75925d701)
+
+**Outcome:** 32 changes this session (25 writer + 7 parent) across 2 files. Cumulative: 10 sessions, 195 changes. Manual untouched. Git repo now exists (`codeowl`, main) — rename + `git init` done by the user mid-session (resolved the 9-session-old recommendation).
+
+**Verification:** `yaml.safe_load` PASS; paren balance 0/0 both files; `revision-codigo` remnants 0; grep markers all present (MetricsJob guia 3 / mapa 5, FetchDefaultBranch 3+1, FetchPRTimeline 1+1, queue feature/diagram, linger, dual-key, draft direction, FK, heurísticas).
+
+**Route evidence:** Batch 10 pass 1 = writer trigger (2 non-trivial files, 25 edits) → one delegated writer + parent readback; passes 2-3 = 7 mechanical one-liners inline (trivial-edit exemption; exact-byte anchors). Passive docs — no review ceremony; git repo now exists → residual edits closed as a work-unit commit.
+
