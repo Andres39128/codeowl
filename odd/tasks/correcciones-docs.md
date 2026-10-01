@@ -337,3 +337,43 @@
 **Outcome:** 7 changes across 2 files (5 writer + 2 parent). Manual + README untouched. Cumulative: 13 sessions, 230 changes.
 
 **Route evidence:** Batch 13 pass 1 = writer trigger (2 non-trivial files, 5 edits) → one delegated writer + parent readback; pass 2 = 2 mechanical one-liners inline (trivial-edit exemption; exact-byte anchors). Passive docs — no review ceremony; work-unit commit on main (repo precedent); RDD assess post-commit.
+
+---
+
+# Batch 14 — Fourteenth-pass gap closure (2026-10-01, fourteenth review session, fresh from zero — engram NOT consulted per user instruction)
+
+**Objective:** Fresh full doc review from scratch (no engram reads) with web knowledge refresh. Pass 1: 14 findings (all applied); iteration continues until a clean pass.
+
+**External facts verified against primary sources this session (web, 2026-10-01):** go.dev — Go 1.27.0 (2026-08-19) current ✓ · postgresql.org — PG 18.6 current minor, PG 19 Beta 4 (2026-09-24) ✓ exact · riverqueue/river releases — v0.48.0, still 0.x ✓ · containers/podman releases — v6.1.3, major 6 ✓ · tailwindcss.com/blog — v4.3 latest ✓ · docs.gitlab.com webhooks — signing token GA 19.1, Standard Webhooks mechanics (whsec_ strip + b64, v1,{b64} space-separated, id.timestamp.body, constant-time, timestamp freshness) exact match with §9.3 ✓ · docs.gitlab.com drafts — prefixes [Draft]/Draft:/(Draft), WIP gone ✓ · hub.docker.com — pgvector/pgvector:pg18 tag exists (0.8.6) ✓ · docs.coderabbit.ai/reference/configuration (updated 2026-09-30) — `version` field REMOVED from schema (manual sample stale), profile set = quiet/chill/assertive (manual comment said assertive/chill/strict — stale) ✗→fixed.
+
+**WCAG numeric audit of §5.1 (computed, not trusted):** all TEXT pairs pass AA exactly as documented (12.67:1, 14.12:1, 6.30:1, 8.25:1, muted 5.54/9.14, severities 6.09-10.26). `border.subtle` = 1.93:1 claro / 1.76:1 oscuro — below WCAG 1.4.11 non-text 3:1 while §5.2 claimed "cada token ya cumple" ✗→fixed (decorative-only exception documented).
+
+**Findings pass 1 (14, all applied: 11 guide via delegated writer E1-E11 + 3 manual E12-E14):**
+1. §5.2 "cada token ya cumple" vs border.subtle <3:1 → rule 1 now scopes to text tokens + explicit decorative exception (dividers; interactive components identify via label/placeholder/text.muted, focus ring for active state).
+2. §3.4 "preserva el histórico de sus acciones" — no audit table backs it → reworded to what flag-not-delete actually preserves; "sin bitácora de auditoría por usuario" made explicit (YAGNI single-org).
+3. §9.3 processing order unpinned → cheap-first order appended (tamaño → firma → dedup → parseo → filtro; nothing touches queue/BD before signature passes).
+4. §3.5 chat on draft PRs unspecified → chat operative on drafts (own budget §9.6), `/review` refuses while draft (same refusal class as closed PR, F2).
+5. §3.3 `llm_usage.job_id` nullability for the settings connection-probe call → documented inline.
+6. §9.6 = single 3052-char paragraph, ~10 limits → restructured to lead line + 7 grouped bullets, zero content loss (12-clause audit passed).
+7. §3.2 tree missing `.github/workflows/` (F0 CI) → added.
+8. §3.2 justfile comment missing `deploy` (used by §9.13) → added with §9.13 ref.
+9. §3.2 tree missing `odd/` (real repo dir) → added as process-docs line.
+10. §3.2 config label "validación al arranque" contradicted mapa's staged validation → aligned (essentials at boot, VCS creds on connect).
+11. §2.1 date septiembre→octubre 2026 (all claims re-verified current this session).
+12. Guide ToC added (11 anchor links, GitHub slug algorithm with accents/em-dash).
+13. Manual: stale `version: "2"` removed from .coderabbit.yaml sample (field gone from schema).
+14. Manual: profile comment corrected to quiet/chill/assertive + scope note gains freshness caveat (verified 2026-10, not kept in sync).
+
+**Open (user decision, NOT written):** repo license — no LICENSE file, README silent; product decision pending.
+
+**Tasks:**
+
+- [x] T1 — Writer: 14 edits applied, 0 failed anchors, 0 deviations; writer verified §9.6 content-loss audit (12 clauses) + all greps green; writer flagged 2 observations (mapa uncommitted residual → reconciled as batch-13 leftover commit 90345984cdd8; guide F3 profile set divergence → deferred to pass 2)
+- [x] T2 — Parent readback: ToC + §9.6 verified in full; all 11 grep markers independently confirmed
+- [x] T3 — Reconciled uncommitted mapa residual (--memory, ChatJob idempotency anchor — mirrors committed guide §9.4/§3.3) → separate commit 90345984cdd8 before batch 14 files
+- [x] T4 — Work-unit commit batch 14 files
+- [x] T5 — RDD assess post-commit; iterate pass 2 fresh from zero
+
+**Outcome:** 14 changes across 2 files (guide 11, manual 3) + 1 reconciliation commit. Cumulative: 14 sessions, 244+ changes.
+
+**Route evidence:** Batch 14 pass 1 = writer trigger (2 non-trivial files, 14 edits) → one delegated writer with exact-byte edit spec + parent readback. Passive docs — no review ceremony; work-unit commits on main (repo precedent).
