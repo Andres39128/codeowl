@@ -160,7 +160,7 @@ codeowl/                   (raíz del monorepo — justfile; la guía, el manual
 │   │   └── theme/               # tokens de diseño (§5)
 │   └── index.html
 ├── deploy/
-│   ├── quadlet/                 # unidades systemd: caddy.container (proxy TLS, único puerto expuesto) y postgres.container (fuente Quadlet); api.service y worker.service (unidades de host para los binarios — Quadlet solo genera .service desde .container/.build); analyzer.build construye la imagen del sandbox
+│   ├── quadlet/                 # unidades systemd: caddy.container (proxy TLS, único puerto expuesto) y postgres.container (fuente Quadlet); api.service y worker.service (unidades de host para los binarios — aquí, solo .container/.build son fuentes Quadlet; las .service son unidades de host escritas a mano); analyzer.build construye la imagen del sandbox
 │   ├── compose.dev.yml          # fallback de desarrollo (compatible Podman/Docker)
 │   ├── backup.md                # runbook de dump diario y restore verificado (§9.10) + respaldo de la master key (§9.2)
 │   └── .env.example             # toda variable de entorno documentada
@@ -401,7 +401,7 @@ Cada fase termina con **demo runnable** y su checklist de aceptación completa. 
 
 **Entregable:** monorepo corriendo: API con auth, dashboard con login, servicios base completos.
 
-- [ ] Estructura de monorepo (§3.2) coincidente con `docs/mapa_arquitectura.yaml` — coincidente = cada componente listado en el mapa existe exactamente en la ruta que el mapa declara (el mapa es la autoridad estructural de F0; lo del árbol de §3.2 que el mapa no lista — README, LICENSE, justfile, docs/ — no contradicta); `just dev` levanta todo (Quadlet en self-host, compose.dev en desarrollo)
+- [ ] Estructura de monorepo (§3.2) coincidente con `docs/mapa_arquitectura.yaml` — coincidente = cada componente listado en el mapa existe exactamente en la ruta que el mapa declara (el mapa es la autoridad estructural de F0; lo del árbol de §3.2 que el mapa no lista — README, LICENSE, justfile, docs/ — no lo contradice); `just dev` levanta todo (Quadlet en self-host, compose.dev en desarrollo)
 - [ ] API: healthcheck, login por sesión, migraciones aplicadas
 - [ ] Dashboard: shell con login y navegación vacía, tokens de tema claro/oscuro aplicados con toggle persistido
 - [ ] CI (GitHub Actions, reutilizando recetas del `justfile`): lint + build + test en backend y dashboard
@@ -424,6 +424,7 @@ Cada fase termina con **demo runnable** y su checklist de aceptación completa. 
   - repos conectados — conectar es registrar el repo en settings (GitHub `owner/repo`; GitLab project path + su signing token) antes de instalar el webhook: el de un repo no registrado se descarta (§3.5)
   - la instalación en el VCS es manual del operador — GitHub: instalar la App en el repo; GitLab: crear el webhook del proyecto apuntando a `https://<host>/webhooks/gitlab` generando su signing token, y registrar en el proyecto una deploy key de solo lectura cuya privada se guarda en settings (§3.3 — el clonado del MR la necesita)
   - el sistema no escribe configuración del VCS
+- [ ] Desconexión/reconexión de repos: flag `enabled`, descarte de jobs pendientes, `ReconcileJob` (ListOpenPRs) y re-indexación completa (§3.5)
 - [ ] Dashboard: gestión de usuarios — invitación de miembros, reset de contraseña y desactivación por el admin (§3.4)
 - [ ] Tests de integración del pipeline con webhook simulado
 
@@ -527,11 +528,31 @@ Entrada **no confiable** por diseño: diff y archivos del repo, `review.yaml`, c
 
 ### 9.2. Secretos y cifrado
 
-API keys LLM cifradas en reposo (AES-256-GCM, master key en env, nunca en BD plana ni logs). La master key tiene backup documentado en `deploy/` — sin ella, todo lo cifrado es irrecuperable — y rotación por `RotationJob` de re-cifrado de las tablas cifradas (bajo demanda, encolado desde el dashboard — settings, admin; corre con la cola drenada — single worker: espera a que terminen los jobs en vuelo, para que ningún descifrado agarre la clave a mitad de cambio). La transición de clave es dual: `MASTER_KEY` (nueva) + `MASTER_KEY_PREVIOUS` (vieja) en las unidades `api` y `worker`, reinicio de ambas, y recién entonces se encola el `RotationJob`; mientras las dos vivan, la API cifra con la nueva y ambas leen la vieja. El job se rehúsa a arrancar sin la previa — re-cifrar lo que no se puede descifrar no es rotación — y, terminado, `_PREVIOUS` se retira del env. En el deploy Quadlet, los secretos de las unidades `api` y `worker` se inyectan con `LoadCredential=` — nunca con `Environment=`: `systemctl show` expone el Environment de una unidad. Ambas necesitan la master key (la API cifra al guardar credenciales; el worker descifra al usarlas); el webhook secret de la App vive en la unidad `api`; la private key de la App (mint de installation tokens para clonar) vive en la unidad `worker`. La contraseña de Postgres sigue el mismo criterio: `LoadCredential=` + `POSTGRES_PASSWORD_FILE` en la unidad `postgres` — `systemctl show` expone el `Environment` de cualquier unidad, no solo de api y worker. `config` acepta cada secreto como valor directo o como ruta `_FILE` (p. ej. `GITHUB_APP_PRIVATE_KEY_FILE=/run/credentials/api/...`); en Quadlet se usa siempre la variante `_FILE`.
+API keys LLM cifradas en reposo (AES-256-GCM, master key en env, nunca en BD plana ni logs). La master key tiene backup documentado en `deploy/` — sin ella, todo lo cifrado es irrecuperable.
+
+**Rotación de la master key** (por `RotationJob` de re-cifrado de las tablas cifradas — bajo demanda, encolado desde el dashboard, settings, admin; corre con la cola drenada — single worker: espera a que terminen los jobs en vuelo, para que ningún descifrado agarre la clave a mitad de cambio):
+
+1. Transición dual: `MASTER_KEY` (nueva) + `MASTER_KEY_PREVIOUS` (vieja) en las unidades `api` y `worker`, reinicio de ambas; mientras las dos vivan, la API cifra con la nueva y ambas leen la vieja.
+2. Recién entonces se encola el `RotationJob`. El job se rehúsa a arrancar sin la previa — re-cifrar lo que no se puede descifrar no es rotación.
+3. Terminado el job, `_PREVIOUS` se retira del env.
+
+**Inyección de secretos:**
+
+- En el deploy Quadlet, los secretos de las unidades `api` y `worker` se inyectan con `LoadCredential=` — nunca con `Environment=`: `systemctl show` expone el Environment de una unidad. Ambas necesitan la master key (la API cifra al guardar credenciales; el worker descifra al usarlas); el webhook secret de la App vive en la unidad `api`; la private key de la App (mint de installation tokens para clonar) vive en la unidad `worker`.
+- La contraseña de Postgres sigue el mismo criterio: `LoadCredential=` + `POSTGRES_PASSWORD_FILE` en la unidad `postgres` — `systemctl show` expone el `Environment` de cualquier unidad, no solo de api y worker.
+- `config` acepta cada secreto como valor directo o como ruta `_FILE` (p. ej. `GITHUB_APP_PRIVATE_KEY_FILE=/run/credentials/api/...`); en Quadlet se usa siempre la variante `_FILE`.
 
 ### 9.3. Webhooks: firma e idempotencia
 
-Webhooks verificados por firma + idempotencia por delivery ID. GitHub: HMAC-SHA256 sobre el body crudo (`X-Hub-Signature-256`) y delivery GUID (`X-GitHub-Delivery`). GitLab (signing token, GA desde 19.1): HMAC-SHA256 en formato Standard Webhooks — la firma se computa sobre `webhook-id.webhook-timestamp.body` con la clave del signing token, que llega con prefijo `whsec_`: se quita el prefijo y se base64-decodea para obtener la clave cruda del HMAC. El header `webhook-signature` trae una o más firmas `v1,{base64}` separadas por espacio; la verificación es en tiempo constante contra cada una, con chequeo de frescura del timestamp contra replay. Toda entrega de GitLab lleva `webhook-id`, que es el delivery ID de la dedup. En self-managed anteriores a 19.0 — donde `webhook-id` no existe — el header `Idempotency-Key`, presente desde 17.4, porta el mismo valor y hace de delivery ID de la dedup. El secret token plano (`X-Gitlab-Token`) queda como fallback solo para instancias self-managed viejas — GitLab no lo recomienda para webhooks nuevos. Los payloads por encima del tope del proveedor (25 MB en GitHub) se rechazan antes de parsear; GitLab no publica un tope comparable, así que aplica además un tope propio (config) igual para ambos proveedores. El handler procesa en orden de costo — tope de tamaño → firma → idempotencia por delivery ID → parseo → filtro de evento — y nada toca la cola ni la BD antes de pasar la firma.
+Webhooks verificados por firma + idempotencia por delivery ID.
+
+- **GitHub:** HMAC-SHA256 sobre el body crudo (`X-Hub-Signature-256`) y delivery GUID (`X-GitHub-Delivery`).
+- **GitLab** (signing token, GA desde 19.1): HMAC-SHA256 en formato Standard Webhooks — la firma se computa sobre `webhook-id.webhook-timestamp.body` con la clave del signing token, que llega con prefijo `whsec_`: se quita el prefijo y se base64-decodea para obtener la clave cruda del HMAC. El header `webhook-signature` trae una o más firmas `v1,{base64}` separadas por espacio; la verificación es en tiempo constante contra cada una, con chequeo de frescura del timestamp contra replay.
+- **GitLab legacy** (secret token plano, `X-Gitlab-Token`): queda como fallback solo para instancias self-managed viejas — GitLab no lo recomienda para webhooks nuevos.
+- **Idempotencia por delivery ID:** toda entrega de GitLab lleva `webhook-id`, que es el delivery ID de la dedup; en self-managed anteriores a 19.0 — donde `webhook-id` no existe — el header `Idempotency-Key`, presente desde 17.4, porta el mismo valor y hace de delivery ID de la dedup.
+- **Topes de tamaño:** los payloads por encima del tope del proveedor (25 MB en GitHub) se rechazan antes de parsear; GitLab no publica un tope comparable, así que aplica además un tope propio (config) igual para ambos proveedores.
+
+El handler procesa en orden de costo — tope de tamaño → firma → idempotencia por delivery ID → parseo → filtro de evento — y nada toca la cola ni la BD antes de pasar la firma.
 
 ### 9.4. Sandbox del analyzer
 
@@ -571,7 +592,7 @@ Todo agente responde contra un schema JSON (contrato de finding/resumen); la sal
 
 ### 9.9. Logs y observabilidad
 
-Logs estructurados (JSON): request ID propagado de webhook a job a llamada LLM. Prohibido loguear secrets, diffs completos o API keys. El dashboard expone el estado de la cola (pending/running/discarded por tipo de job), la última ejecución de cada uno y el P95 de los SLO de §6 por tipo de comentario (summary/inline/chat) — ver backlog, un job caído o un SLO incumplido no debería requerir `psql`.
+Logs estructurados (JSON): request ID propagado de webhook a job a llamada LLM. Prohibido loguear secrets, diffs completos o API keys. El dashboard expone el estado de la cola (pending/running/discarded por tipo de job), la última ejecución de cada uno y el P95 de los SLO de §6 por tipo de comentario (summary/inline/chat) — así, revisar el backlog, un job caído o un SLO incumplido no requiere `psql`.
 
 ### 9.10. Backups
 
@@ -583,7 +604,7 @@ Job diario de limpieza (`CleanupJob`) de `webhook_deliveries` (default 30 días,
 
 ### 9.12. Apagado ordenado del worker
 
-En SIGTERM el worker deja de tomar jobs nuevos, termina el job en curso dentro de una ventana de gracia (config) y cierra limpio; pasada la ventana, el job vuelve a la cola por el mecanismo de reintentos (§9.7). Las publicaciones al VCS son idempotentes: el resumen edita in place por `comment_id` persistido, y el publicador de inline reconcilia antes de reintentar — chequea `comments_sent` y los comentarios ya publicados por el bot en el PR, porque un corte entre publicar y registrar deja el comentario vivo sin fila. La respuesta de chat reconcilia igual contra el comentario padre: si `comments_sent` ya registra la respuesta a ese comentario, no se republica. Un corte a mitad de publicación no duplica comentarios en la reintentada. Quadlet fija `TimeoutStopSec` en consecuencia.
+En SIGTERM el worker deja de tomar jobs nuevos, termina el job en curso dentro de una ventana de gracia (config) y cierra limpio; pasada la ventana, el job vuelve a la cola por el mecanismo de reintentos (§9.7). Las publicaciones al VCS son idempotentes: el resumen edita in place por `comment_id` persistido, y el publicador de inline reconcilia antes de reintentar — chequea `comments_sent` y los comentarios ya publicados por el bot en el PR, porque un corte entre publicar y registrar deja el comentario vivo sin fila. La respuesta de chat reconcilia igual contra el comentario padre: si `comments_sent` ya registra la respuesta a ese comentario, no se republica. Un corte a mitad de publicación no duplica comentarios en la reintentada. La unidad `worker.service` fija `TimeoutStopSec` (ventana de gracia, config) en consecuencia.
 
 ### 9.13. Deploy y actualización
 

@@ -52,7 +52,7 @@ servicios:
     despliegue: "deploy/quadlet/worker.service (unidad systemd de usuario para el binario de host — archivo fuente propio, no Quadlet: el generador solo consume .container/.build)"
     fase: F0 (esqueleto) / F1 (pipeline)
   analyzer:
-    imagen: analyzer/Containerfile
+    build: analyzer/Containerfile
     responsabilidad: tree-sitter + linters en sandbox sin red; salida JSON normalizada
     ejecucion: "podman run --network=none --read-only --pids-limit=<config> --memory=<config>"
     despliegue: "deploy/quadlet/analyzer.build (build de la imagen del sandbox)"
@@ -99,42 +99,16 @@ backend:
     depende_de: [store, config]
     pruebas: backend/internal/vcs/vcs_test.go + fixtures de payload por proveedor
     fase: F1 (github) / F2 (gitlab)
-    reglas: >
-      Contrato mínimo: HandleWebhook (eventos suscritos cerrados: pull_request
-      (edited entra solo por cambio de base del PR — changes.base en el
-      payload, retarget) / issue_comment /
-      pull_request_review_comment en GitHub, merge_request (update entra solo
-      por push, cambio de target_branch o paso de draft a ready (la vuelta a
-      draft descarta los jobs pendientes, mismo tratamiento que
-      converted_to_draft en GitHub) — título/labels se
-      descartan) / note en GitLab; el cierre —closed en GitHub, close/merge en
-      GitLab— actualiza pull_requests.state, descarta los ReviewJob/ChatJob
-      del PR sin gastar LLM y encola el MetricsJob de F5 (el IndexJob es por
-      repo y sigue su curso — y el merge lo encola: indexa la nueva base);
-      ignora comentarios del propio bot y de otros bots (GitHub: tipo de autor
-      en el payload; GitLab: username del bot, config) — anti-bucle;
-      issue_comment solo pasa si es comentario en PR con mención al bot; note
-      de GitLab solo con noteable_type == MergeRequest + mención; chat de
-      autores fuera de la organización se ignora (config);
-      PRs draft no se revisan por default, config por repo),
-      FetchPR (clonado shallow al workdir del job, con credencial efímera o
-      deploy key; merge-base con --deepen si falta profundidad; en forks, el
-      ref del PR desde el repo base (refs/pull/<n>/head en GitHub,
-      refs/merge-requests/<iid>/head en GitLab — head, no el merge ref: el
-      test-merge de GitHub contamina el diff y desaparece en conflictos; el
-      head de un fork externo no es accesible con el token de instalación)),
-      FetchDefaultBranch (clonado shallow de la rama por defecto al workdir
-      del job — insumo del IndexJob), FetchPRTimeline (commits del PR y
-      estado final de sus threads — insumo del MetricsJob), ListOpenPRs
-      (PRs abiertos del repo — reconciliación de estado en la reconexión:
-      los cierres durante la desconexión no llegaron como evento, guía §3.5),
-      PostInlineComment
-      (recibe CommentPosition {file, line, side} — líneas nuevas anclan al
-      lado RIGHT, eliminadas al LEFT; el mapeo diff→posición vive solo acá,
-      testeado con fixtures), PostSuggestion, PostSummary (edit in
-      place; si el comentario fue borrado, lo recrea y actualiza comments_sent).
-      Agregar un VCS nuevo = paquete nuevo que cumpla la interfaz; prohibido que
-      el resto del código sepa qué proveedor está activo.
+    reglas:
+      contrato_minimo: "Agregar un VCS nuevo = paquete nuevo que cumpla la interfaz; prohibido que el resto del código sepa qué proveedor está activo."
+      HandleWebhook: "eventos suscritos cerrados: pull_request (edited entra solo por cambio de base del PR — changes.base en el payload, retarget) / issue_comment / pull_request_review_comment en GitHub, merge_request (update entra solo por push, cambio de target_branch o paso de draft a ready (la vuelta a draft descarta los jobs pendientes, mismo tratamiento que converted_to_draft en GitHub) — título/labels se descartan) / note en GitLab; el cierre —closed en GitHub, close/merge en GitLab— actualiza pull_requests.state, descarta los ReviewJob/ChatJob del PR sin gastar LLM y encola el MetricsJob de F5 (el IndexJob es por repo y sigue su curso — y el merge lo encola: indexa la nueva base); ignora comentarios del propio bot y de otros bots (GitHub: tipo de autor en el payload; GitLab: username del bot, config) — anti-bucle; issue_comment solo pasa si es comentario en PR con mención al bot; note de GitLab solo con noteable_type == MergeRequest + mención; chat de autores fuera de la organización se ignora (config); PRs draft no se revisan por default (config por repo)"
+      FetchPR: "clonado shallow al workdir del job, con credencial efímera o deploy key; merge-base con --deepen si falta profundidad; en forks, el ref del PR desde el repo base (refs/pull/<n>/head en GitHub, refs/merge-requests/<iid>/head en GitLab — head, no el merge ref: el test-merge de GitHub contamina el diff y desaparece en conflictos; el head de un fork externo no es accesible con el token de instalación)"
+      FetchDefaultBranch: "clonado shallow de la rama por defecto al workdir del job — insumo del IndexJob"
+      FetchPRTimeline: "commits del PR y estado final de sus threads — insumo del MetricsJob"
+      ListOpenPRs: "PRs abiertos del repo — reconciliación de estado en la reconexión: los cierres durante la desconexión no llegaron como evento, guía §3.5"
+      PostInlineComment: "recibe CommentPosition {file, line, side} — líneas nuevas anclan al lado RIGHT, eliminadas al LEFT; el mapeo diff→posición vive solo acá, testeado con fixtures"
+      PostSuggestion: "publica la sugerencia de cambio en un comentario inline, aplicable con un clic (GitHub suggestion blocks / GitLab suggested changes, §6 F2 de la guía)"
+      PostSummary: "edit in place; si el comentario fue borrado, lo recrea y actualiza comments_sent"
   review:
     ruta: backend/internal/review
     proposito: pipeline de revisión — orquesta agentes, deduplicación, findings

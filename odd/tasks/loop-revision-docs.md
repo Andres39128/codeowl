@@ -142,5 +142,29 @@ recalculados (todos OK).
       19.0 con flag `webhook_signing_token` deshabilitado)".
 - Commit: d2d7b103d89c (+25/−14, 3 archivos).
 
+### Iteración 2 — 7 hallazgos (3 mayores, 3 menores, 1 micro)
+
+- [x] H1 (mayor) mapa `settings.proposito`: flow mapping sin comillas con comas →
+      valor truncado + claves espurias null (confirmado con pyyaml antes del fix).
+      Audit posterior del archivo completo encontró 9 instancias más de la misma
+      clase en `flujos.*.pasos` (escalares con `: ` parseados como dicts de una
+      clave) — las 10 citadas, contenido idéntico verificado por diff.
+- [x] H2 (mayor) §3.5 vs §9.2: reconciliación por ListOpenPRs exigía la private
+      key que solo vive en el worker → la API ahora encola un `ReconcileJob`
+      (nuevo en jobs del mapa, fase F1); el worker ejecuta ListOpenPRs sin LLM.
+- [x] H3 (mayor) manual: `auto_title_placeholder` llevaba el default de
+      `high_level_summary_placeholder` → corregido a `"@coderabbitai"`.
+- [x] H4 §1.1: divergencia de perfiles (CR quiet/chill/assertive vs propio
+      chill/assertive/strict) ahora listada en Fuera-de-alcance.
+- [x] H5 §6 F0: "coincidente" definido = cada componente del mapa existe en su
+      ruta (mapa = autoridad estructural); `odd/` en el árbol §3.2 anotado como
+      bookkeeping, no parte del monorepo objetivo.
+- [x] H6 legibilidad: mega-bullets de §3.3/§3.5/§3.6/F1/F2/F5 trozados en
+      sub-listas (una decisión por bullet), política de invalidación de
+      repo_index extraída a bullet propio; paridad de cláusulas verificada.
+- [x] H7 §5.2: fondos de las cifras border.subtle anotados (1.93:1 sobre
+      bg.base claro / 1.55:1 sobre bg.surface oscuro).
+- Commit: 63c8dbddea78 (+106/−27, 4 archivos).
+
 
 
