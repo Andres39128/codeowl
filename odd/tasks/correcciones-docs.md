@@ -240,3 +240,37 @@
 
 **Route evidence:** Batch 10 pass 1 = writer trigger (2 non-trivial files, 25 edits) → one delegated writer + parent readback; passes 2-3 = 7 mechanical one-liners inline (trivial-edit exemption; exact-byte anchors). Passive docs — no review ceremony; git repo now exists → residual edits closed as a work-unit commit.
 
+---
+
+# Batch 11 — Eleventh-pass gap closure (2026-10-01, eleventh review session, fresh from zero — engram NOT consulted per user instruction)
+
+**Objective:** Fresh full doc review from scratch (no engram reads). Pass 1: 10 findings (1 verified against GitLab primary docs via webfetch); pass 2: 1 micro (mapa `actualizado` date); pass 3: zero — loop terminated (10→1→0).
+
+**External facts verified against primary sources this session:** docs.gitlab.com webhooks — GitLab 19+ ships signing tokens (HMAC-SHA256, Standard Webhooks: `webhook-signature` over `webhook-id.webhook-timestamp.body`, constant-time compare, timestamp freshness vs replay; `webhook-id` on every delivery); plain `X-Gitlab-Token` not recommended for new webhooks → guide §9.3 was documenting the weak deprecated mechanism.
+
+**Findings pass 1 (all applied by delegated writer, 17 ops: A1-A14 guide + B1-B3 mapa + README):**
+1. §9.3 verification outdated → GitHub (`X-Hub-Signature-256` + `X-GitHub-Delivery`) and GitLab 19+ (signing token, Standard Webhooks, replay freshness; secret-token fallback for old self-managed) both specified; delivery-ID sources named in §9.3 + §3.3 `webhook_deliveries`.
+2. Analyzer read-only rootfs vs compilers needing writable space → caches/artifacts to workdir or size-capped tmpfs (config) (§9.4 + mapa analyzer reglas).
+3. §9.12 "no duplica comentarios" claim was optimistic → publisher reconciles comments_sent + bot's live comments before retrying inline posts.
+4. Natural keys for idempotent upsert: pull_requests (repo + número/iid), repositories.external_id = numeric VCS repo id.
+5. GitLab connect mechanics missing deploy-key operator step → F1 item now includes it.
+6. GitLab bot detection: no bot flag in payload → match bot username (config) (§3.5 + mapa vcs reglas).
+7. No README at repo root → README.md created (entry point + doc index + governance) + §3.2 tree entry.
+8. Partial coverage undisclosed in PR → fase-2 re-edit declares partial + reason (§9.6 + mapa llm reglas).
+9. llm_providers priority tie-break → by id, stable order.
+10. Cycle time definition → creación → merge (§3.3).
+
+**Pass 2 micro (parent inline):** mapa `actualizado` 2026-09-30 → 2026-10-01.
+
+**Tasks:**
+
+- [x] T1 — Writer: 17 ops, 0 failed anchors, skill cognitive-doc-design loaded (paths-injected)
+- [x] T2 — Parent readback: 15 semantic checks PASS, YAML safe_load PASS, parens 0/0 both files, 11 `##` sections intact (unbalanced `[` in guia = pre-existing §3.1 ASCII art, benign in code block)
+- [x] T3 — Pass 2 full re-read: 1 micro applied inline
+- [x] T4 — Pass 3 verification sweep: zero findings — loop terminated
+- [x] T5 — Work-unit commit b72fa7f7633c + RDD assess: medium (config-file heuristic on the YAML), review_due=false (under_budget, 54 lines) — stays pending in slice
+
+**Outcome:** 18 changes across 3 files (17 writer + 1 parent). Manual untouched (scope note intact). Cumulative: 11 sessions, 213 changes.
+
+**Route evidence:** Batch 11 pass 1 = writer trigger (3 non-trivial files, 17 ops) → one delegated writer + parent readback; pass 2 = 1 mechanical one-liner inline (trivial-edit exemption). Passive docs; work-unit commit on main (repo precedent for docs batches); assess run post-commit with explicit untracked inventory (.atl excluded).
+
