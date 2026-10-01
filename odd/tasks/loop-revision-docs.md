@@ -55,3 +55,32 @@ Contrastes WCAG recalculados con script propio (16 pares).
 
 **Convergencia declarada a la iteración 4 de la ejecución 2.**
 Rama: `docs/web-verified-review-loop`.
+
+## Ejecución 3 (2026-10-01) — tercera pasada desde cero
+
+Verificación web fresca (11 fuentes, todas OK): go.dev (go1.27.1), postgresql.org
+(18.6 current + PG19 Beta 4 — versions.json no lista 19), River (v0.48.0), Podman
+(v6.1.3), Tailwind (v4.3.3), pgvector (v0.8.6), docs.gitlab.com webhooks (signing
+GA 19.1, Standard Webhooks whsec_/v1,/replay ✓) + webhook_events (changes.draft,
+object_attributes.draft, acciones open/close/reopen/update/merge/approval) +
+drafts ([Draft]/Draft:/(Draft), sin WIP:), docs.github.com (25 MB cap,
+X-Hub-Signature-256, X-GitHub-Delivery), docs.coderabbit.ai/reference/configuration
+(language/profile quiet-chill-assertive/request_changes_workflow/path_filters/
+instructions/chat.auto_reply — actualizado 2026-09-30), preactjs.com (3kB).
+Contrastes WCAG recalculados (21 pares: 12.67/14.12/6.30/8.25/3.90/1.93/1.55 —
+todos los claims de la tabla siguen en pie).
+
+### Iteración 1 — 3 hallazgos
+
+- [x] H1 (mayor) §3.5: filtro draft de GitLab comparaba prefijos del título — el
+      draft es un flag del MR (`object_attributes.draft`; transición en
+      `changes.draft {previous,current}`, lista oficial de atributos de changes).
+      Botón "Mark as ready" y acción rápida /ready cambian el flag sin tocar el
+      título: comparar prefijos pierde esas transiciones y esos MRs nunca se
+      revisan. Reescrito sobre el flag; prefijo documentado como forma visible.
+- [x] H2 (menor) mapa vcs.reglas: "la vuelta a draft descarta los jobs pendientes"
+      duplicado (dentro del filtro update y al final) — duplicado final eliminado.
+- [x] H3 (menor) §3.5: desinstalar la App / borrar el proyecto GitLab no genera
+      evento suscrito → repo queda enabled con estado huérfano en triage. Agregada
+      la mitigación: el operador desconecta el repo en settings.
+

@@ -116,7 +116,7 @@ backend:
       issue_comment solo pasa si es comentario en PR con mención al bot; note
       de GitLab solo con noteable_type == MergeRequest + mención; chat de
       autores fuera de la organización se ignora (config);
-      PRs draft no se revisan por default, config por repo; la vuelta a draft descarta los jobs pendientes del PR),
+      PRs draft no se revisan por default, config por repo),
       FetchPR (clonado shallow al workdir del job, con credencial efímera o
       deploy key; merge-base con --deepen si falta profundidad; en forks, el
       ref del PR desde el repo base (refs/pull/<n>/head en GitHub,
