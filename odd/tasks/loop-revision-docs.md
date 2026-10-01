@@ -184,5 +184,23 @@ recalculados (todos OK).
 - [x] H8 §9.2/§9.3: muros de texto → listas de pasos con paridad de cláusulas.
 - Commit: 8a7383169ac2 (+62/−43, 3 archivos).
 
+### Iteración 4 — 8 hallazgos (4 menores, 4 micro)
+
+- [x] H1 §6 F1: re-indexación completa era alcance F4 → anotado (en F1 la
+      reconexión solo dispara ReconcileJob).
+- [x] H2 §9.2: ejemplo `GITHUB_APP_PRIVATE_KEY_FILE` montaba la key en la
+      unidad api (prohibido por la propia sección) → ruta a worker.
+- [x] H3 §9.4: "un .eslintrc es JS" factualmente wrong → `eslint.config.js`.
+- [x] H4 §3.5: mitigación faltante ante caída de BD al encolar → excepción
+      documentada: 5xx para que el VCS re-entregue; dedup la hace segura.
+- [x] H5 mapa MetricsJob: par de raya roto "—," → reparado.
+- [x] H6 mapa: excepción de forma documentada (vcs.reglas y features.expone
+      usan key-mappings para lookup) — nota en convenciones, sin re-flatten.
+- [x] H7 §3.2: desalineado real eran README/LICENSE (col 31 vs 32) — hallazgo
+      señalaba la fila equivocada; corregidas las verdaderas.
+- [x] H8 §9.3: >25MB GitHub ni siquiera entrega → chequeo aplica de facto a
+      GitLab y tope propio.
+- Commit: 4ddc9ba66dd4 (+29/−8, 3 archivos).
+
 
 
