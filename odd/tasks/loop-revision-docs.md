@@ -91,4 +91,15 @@ todos los claims de la tabla siguen en pie).
 - [x] I2 §3.3: "self-managed viejas" sin umbral → "anteriores a 19.1, donde el
       signing token no existe" (conecta con el GA de §9.3 sin salto de sección).
 
+### Iteración 3 — 1 hallazgo (mayor técnico)
+
+- [x] J1 §3.6 + mapa jobs: unicidad de River documentada como "mientras viva",
+      pero el default de ByState incluye `completed` → con defaults, cada PR
+      tendría una sola review hasta que la retención borre la fila. El diseño
+      (re-encolo en la tx de finalización) exige ByState sin completed.
+      Documentado: ByArgs + ByState sin completed; pending/scheduled/available/
+      running obligatorios al customizar; retryable se conserva (quitarlo puede
+      descartar un reintento por conflicto). Fuente: riverqueue.com/docs/unique-jobs.
+
+
 

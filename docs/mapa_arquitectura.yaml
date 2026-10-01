@@ -213,7 +213,10 @@ backend:
     reglas: >
       Único paquete que importa River. Reemplazar la cola = reescribir solo acá.
       Los handlers de API encolan a través de esta interfaz; jamás importan River directo.
-      ReviewJob se encola como job único por PR (unique opts de River): el encolado
+      ReviewJob se encola como job único por PR (unique opts de River:
+      ByArgs + ByState sin completed — el default incluye completed y
+      bloquearía toda re-review; pending/scheduled/available/running son
+      obligatorios al customizar): el encolado
       duplicado se descarta mientras viva el anterior. El re-encolo tras una corrida
       stale vive dentro de la transacción que completa el job: esa tx re-chequea
       la identidad de la corrida (head_sha, base_sha) del PR y encola la corrida
