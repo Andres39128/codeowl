@@ -90,7 +90,7 @@ backend:
   api:
     ruta: backend/internal/api
     proposito: routing (ServeMux stdlib), middleware (auth, logging, recover), handlers REST + webhooks
-    nota: "depende de llm solo para la acción 'probar conexión' de proveedores en settings (una llamada mínima por rol); los handlers de webhook jamás tocan el gateway (guía §3.5)"
+    nota: "depende de llm solo para la acción 'probar conexión' de proveedores en settings (una llamada mínima por rol); depende de vcs para GetDiff (diff del detalle de PR, F3); los handlers de webhook jamás tocan el gateway (guía §3.5)"
     expone: ["Handler http.Handler", "GET /healthz (F0)", "POST /webhooks/github", "POST /webhooks/gitlab", "REST /api/*"]
     depende_de: [store, vcs, jobs, llm]
     pruebas: backend/internal/api/api_test.go (webhook firmado simulado)
@@ -109,6 +109,7 @@ backend:
       FetchPR: "clonado shallow al workdir del job, con credencial efímera o deploy key; merge-base con --deepen si falta profundidad; en forks, el ref del PR desde el repo base (refs/pull/<n>/head en GitHub, refs/merge-requests/<iid>/head en GitLab — head, no el merge ref: el test-merge de GitHub contamina el diff y desaparece en conflictos; el head de un fork externo no es accesible con el token de instalación)"
       FetchDefaultBranch: "clonado shallow de la rama por defecto al workdir del job — insumo del IndexJob"
       FetchPRTimeline: "commits del PR y estado final de sus threads — insumo del MetricsJob"
+      GetDiff: "diff unificado del PR contra el VCS bajo demanda — insumo del detalle de PR del dashboard (F3); sin copia del diff en BD: los findings anclan file/line contra este diff al renderizar"
       ListOpenPRs: "PRs abiertos del repo — reconciliación de estado en la reconexión: los cierres durante la desconexión no llegaron como evento, guía §3.5"
       PostInlineComment: "recibe CommentPosition {file, line, side} — líneas nuevas anclan al lado RIGHT, eliminadas al LEFT; el mapeo diff→posición vive solo acá, testeado con fixtures"
       PostSuggestion: "publica la sugerencia de cambio en un comentario inline, aplicable con un clic (GitHub suggestion blocks / GitLab suggested changes, §6 F2 de la guía)"

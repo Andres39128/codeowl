@@ -180,7 +180,7 @@ codeowl/                   (raíz del monorepo — justfile; la guía, el manual
 |-------|----------------|
 | `users` | usuarios del dashboard (1-5, single-org): username (único — identificador de login), role (admin/member), hash de contraseña (argon2id), must_change_password (en true tras invitación o reset — bloquea toda operación hasta el cambio) |
 | `llm_providers` | proveedores LLM: base_url, model, api_key cifrada, rol (review/cheap/embedding), priority (orden de failover dentro del rol; empate rompe por id — orden estable), enabled |
-| `repositories` | repos conectados:<br>• vcs, external_id (ID numérico del repo en el VCS)<br>• webhook_secret (solo GitLab: signing token del proyecto — §9.3)<br>• secret token alternativo al signing token en instancias self-managed anteriores a 19.0 (o 19.0 con el flag `webhook_signing_token` deshabilitado), donde el signing token no existe<br>• GitHub App usa el secret global de la App en env<br>• base_url de instancia (solo GitLab: default gitlab.com — soporta self-managed)<br>• deploy key de clonado de solo lectura (cifrada, solo GitLab)<br>• enabled (desconexión como flag, no delete — §3.5)<br>• config default: revisar drafts §3.5, idioma, chat solo-org §3.5<br>• idioma y reglas de revisión son las keys que `review.yaml` especializa (§9.5); drafts y chat son operativas, siempre del dashboard |
+| `repositories` | repos conectados:<br>• vcs, external_id (ID numérico del repo en el VCS)<br>• webhook_secret (solo GitLab: signing token del proyecto — §9.3)<br>• secret token alternativo al signing token en instancias self-managed anteriores a 19.0 (o 19.0 con el flag `webhook_signing_token` deshabilitado), donde el signing token no existe<br>• GitHub App usa el secret global de la App en env<br>• API token de proyecto (solo GitLab, cifrado como el resto — §9.2): autentica las llamadas REST del adapter — publicar comentarios, `ListOpenPRs`, `FetchPRTimeline`, tip de la base (§3.6) y `GetDiff` (§6 F3); la deploy key solo clona (SSH), no sirve para la API<br>• base_url de instancia (solo GitLab: default gitlab.com — soporta self-managed)<br>• deploy key de clonado de solo lectura (cifrada, solo GitLab)<br>• enabled (desconexión como flag, no delete — §3.5)<br>• config default: revisar drafts §3.5, idioma, chat solo-org §3.5<br>• idioma y reglas de revisión son las keys que `review.yaml` especializa (§9.5); drafts y chat son operativas, siempre del dashboard |
 | `pull_requests` | PRs observados (clave natural: repo + número/iid del PR en el VCS — el upsert por webhook es idempotente): author, state (conjunto cerrado: open/closed; el merge es un close con `merged_at` registrada), created_at (fecha del PR en el VCS — con `merged_at`, insumo del cycle time de F5: creación → merge), risk_score, head_sha, base_ref, base_sha (del último evento — en GitHub llega en el payload; en GitLab el payload no trae SHAs de la base y el adapter la resuelve por API, §3.6 — la base es necesaria para el retarget de §3.6 y la cache por merge-base de §9.6) |
 | `reviews` | una por corrida (FK a pull_requests): summary, walkthrough, mermaid, status — conjunto cerrado: `running`, `success`, `partial` (presupuesto agotado, diff sobre el tope de solo-resumen, archivo sobre el tope por archivo o failover agotado, §9.6-§9.7), `stale` (identidad reemplazada — push o retarget — o PR cerrado en vuelo, §3.6), `failed` (intentos agotados, §9.7); estados nuevos solo con actualización de este doc |
 | `findings` | hallazgos (FK a `reviews` — la corrida que los produjo: dedup, métricas de F5 y auditoría leen la atribución por corrida): file, line, severity, category, body, suggestion, source (llm/sast), verified — null hasta que el Verifier corre (F3), luego true/false; aplica a hallazgos `source=llm`: los SAST son deterministas y se publican sin verificación |
@@ -381,7 +381,7 @@ Los tokens se nombran por **rol**, no por color — así el tema cambia sin toca
 | `border.subtle` | `#8FBF9F` | `#2E4A3A` | Bordes suaves, dividers — decorativo (§5.2) |
 | `accent` | `#C2611A` | `#E8853D` | Focus rings, highlights, indicadores (≥ 3:1 no-texto también en claro; naranja quemado en claro — el naranja pleno no llega) |
 | `severity.alta` | `#B3261E` | `#F87171` | Error / riesgo alto (≥ 4.5:1) |
-| `severity.media` | `#92400E` | `#FBBF24` | Warning / riesgo medio (≥ 4.5:1 en ambos fondos — amber-700 quedaba en 4.45:1 sobre `bg.surface` (4.68 sobre la base: el token debe cumplir en los dos); 800 da 6.3-6.6:1) |
+| `severity.media` | `#92400E` | `#FBBF24` | Warning / riesgo medio (≥ 4.5:1 en ambos fondos — amber-700 daba 4.45:1 sobre `bg.surface` y 4.68 sobre la base: 800 cumple en los dos con 6.3-6.6:1) |
 | `severity.baja` | `#1E6B3C` | `#4ADE80` | Success / riesgo bajo (≥ 4.5:1) |
 
 Implementación: variables CSS nativas en `theme/`, activas por atributo `data-theme` en `<html>`. Toggle manual (persistido en localStorage) + `prefers-color-scheme` como default inicial. Tailwind v4 referencia los tokens vía `@theme` — los componentes NUNCA conocen el tema activo.
@@ -428,10 +428,10 @@ Cada fase termina con **demo runnable** y su checklist de aceptación completa. 
 - [ ] Agente Reviewer (rol `review`) sobre hunks con contexto de archivo
 - [ ] Publicación en dos fases (§6): resumen apenas el Summarizer termina, inline al cerrar el análisis — comentarios en el idioma default de config (español; por repo desde F3 vía `review.yaml`); registro en `findings`/`comments_sent`
 - [ ] Dashboard: panel de estado de la cola (pending/running/discarded por tipo de job — `features/queue`, §3.2)
-- [ ] Dashboard: CRUD de proveedores LLM (API keys cifradas AES-GCM) con acción de prueba de conexión; repos conectados
+- [ ] Dashboard: CRUD de proveedores LLM (API keys cifradas AES-256-GCM) con acción de prueba de conexión; repos conectados
   - prueba de conexión — una llamada mínima por rol vía gateway, único uso de `internal/llm` en la API; los handlers de webhook jamás lo tocan (§3.5)
-  - repos conectados — conectar es registrar el repo en settings (GitHub `owner/repo`; GitLab project path + su signing token) antes de instalar el webhook: el de un repo no registrado se descarta (§3.5)
-  - la instalación en el VCS es manual del operador — GitHub: instalar la App en el repo; GitLab: crear el webhook del proyecto apuntando a `https://<host>/webhooks/gitlab` generando su signing token, y registrar en el proyecto una deploy key de solo lectura cuya privada se guarda en settings (§3.3 — el clonado del MR la necesita)
+  - repos conectados — conectar es registrar el repo en settings (GitHub `owner/repo`; GitLab project path + su signing token + su API token de proyecto) antes de instalar el webhook: el de un repo no registrado se descarta (§3.5)
+  - la instalación en el VCS es manual del operador — GitHub: instalar la App en el repo; GitLab: crear el webhook del proyecto apuntando a `https://<host>/webhooks/gitlab` generando su signing token, crear un project access token (scope `api`) cuyo valor se guarda cifrado en settings (§3.3 — las llamadas REST del adapter lo necesitan), y registrar en el proyecto una deploy key de solo lectura cuya privada se guarda en settings (§3.3 — el clonado del MR la necesita)
   - el sistema no escribe configuración del VCS
 - [ ] Desconexión/reconexión de repos: flag `enabled`, descarte de jobs pendientes, `ReconcileJob` (ListOpenPRs) y re-indexación completa (§3.5) — la re-indexación completa se materializa en F4: en F1 la reconexión solo dispara el `ReconcileJob`
 - [ ] Dashboard: gestión de usuarios — invitación de miembros, reset de contraseña y desactivación por el admin (§3.4)
@@ -461,7 +461,7 @@ Cada fase termina con **demo runnable** y su checklist de aceptación completa. 
 - [ ] Agente Verifier (rol `cheap` — cross-check mecánico contra evidencia determinista): findings LLM vs SAST/AST → marca `verified`; los falsos positivos confirmados no se publican — quedan en `findings` con `verified=false`, auditables en el dashboard
 - [ ] Resumen con walkthrough + diagrama de secuencia Mermaid
 - [ ] `review.yaml` por repo: `path_filters`, `instructions`, `profile` (chill: solo hallazgos alta/media; assertive: + baja y estilo; strict: + nits — regula cuánto comenta el bot, jamás un veredicto de bloqueo, §1.1), idioma — se lee **solo de la rama base** del PR; los cambios al archivo dentro del diff se ignoran (§9.5)
-- [ ] Dashboard: detalle de PR con findings y diff (`features/prs` + `DiffViewer`, §5.3 — su única consumidora)
+- [ ] Dashboard: detalle de PR con findings y diff (`features/prs` + `DiffViewer`, §5.3 — su única consumidora; el diff se resuelve por el adapter (`GetDiff`) bajo demanda, sin copia en BD)
 
 ### Fase 4 — RAG: Indexación y Contexto Simbólico (semanas 11-12)
 
@@ -524,7 +524,7 @@ El mapeo finding→posición de comentario (§3.6) se testea igual: fixtures de 
 
 | Activo | Amenaza | Mitigación |
 |--------|---------|------------|
-| Secrets (API keys LLM, deploy keys, private key de la App, master key) | Robo vía BD, logs o `systemctl show` | Cifrado en reposo + `LoadCredential` (§9.2) |
+| Secrets (API keys LLM, API tokens de GitLab, deploy keys, private key de la App, master key) | Robo vía BD, logs o `systemctl show` | Cifrado en reposo + `LoadCredential` (§9.2) |
 | Webhooks | Spoofing y re-entrega duplicada | Firma HMAC/token + idempotencia (§9.3) |
 | Worker y analyzer | Código arbitrario del repo revisado — un PR forkeado es territorio hostil por definición | Sandbox sin red (§9.4) |
 | Prompts y agentes | Inyección vía diff, comentarios o `review.yaml` | Contenido = dato, lista cerrada de acciones (§9.5) |
@@ -547,7 +547,7 @@ API keys LLM cifradas en reposo (AES-256-GCM, master key en env, nunca en BD pla
 
 **Inyección de secretos:**
 
-- En el deploy Quadlet, los secretos de las unidades `api` y `worker` se inyectan con `LoadCredential=` — nunca con `Environment=`: `systemctl show` expone el Environment de una unidad. Ambas necesitan la master key (la API cifra al guardar credenciales; el worker descifra al usarlas); el webhook secret de la App vive en la unidad `api`; la private key de la App (mint de installation tokens para clonar) vive en la unidad `worker`.
+- En el deploy Quadlet, los secretos de las unidades `api` y `worker` se inyectan con `LoadCredential=` — nunca con `Environment=`: `systemctl show` expone el Environment de una unidad. Ambas necesitan la master key (la API cifra al guardar credenciales y descifra las que consume; el worker descifra al usarlas); el webhook secret de la App vive en la unidad `api`; la private key de la App (mint de installation tokens) vive en ambas unidades — el worker clona y publica en el VCS, la API resuelve el diff del detalle de PR (`GetDiff`, §6 F3).
 - La contraseña de Postgres sigue el mismo criterio: `LoadCredential=` + `POSTGRES_PASSWORD_FILE` en la unidad `postgres` — `systemctl show` expone el `Environment` de cualquier unidad, no solo de api y worker.
 - `config` acepta cada secreto como valor directo o como ruta `_FILE` (p. ej. `GITHUB_APP_PRIVATE_KEY_FILE=/run/credentials/worker/...`); en Quadlet se usa siempre la variante `_FILE`.
 
@@ -614,7 +614,14 @@ Dump diario de Postgres documentado en `deploy/`, con restore verificado mensual
 
 ### 9.11. Retención y limpieza
 
-Job diario de limpieza (`CleanupJob`) de `webhook_deliveries` (default 30 días, config — esa retención acota la ventana de cálculo del P95 de §6 a la misma ventana), sesiones expiradas de `sessions` y workdirs huérfanos `/var/tmp/rev-*` con más de N días (config) — un worker crasheado a mitad de job no debe llenar el disco. Las filas de jobs de River en estados terminales se podan aparte, con la retención propia del cliente River (config de River, no del `CleanupJob`: `completed` y `cancelled` 24 h, `discarded` 7 días por defecto): el panel de cola de §9.9 muestra un `discarded` dentro de esa ventana, y el registro duradero de una corrida agotada es su fila en `reviews` (`failed`, §3.3) — esa no se poda. `findings`, `comments_sent` y `llm_usage` se conservan — son el histórico de dedup y la base de las métricas F5; el volumen single-org lo permite.
+Job diario de limpieza (`CleanupJob`) y retención del sistema:
+
+- `webhook_deliveries`: default 30 días (config — esa retención acota la ventana de cálculo del P95 de §6 a la misma ventana).
+- `sessions`: sesiones expiradas.
+- Workdirs huérfanos `/var/tmp/rev-*` con más de N días (config) — un worker crasheado a mitad de job no debe llenar el disco.
+- Filas de jobs de River en estados terminales: se podan aparte, con la retención propia del cliente River (config de River, no del `CleanupJob`: `completed` y `cancelled` 24 h, `discarded` 7 días por defecto) — el panel de cola de §9.9 muestra un `discarded` dentro de esa ventana y el registro duradero de una corrida agotada es su fila en `reviews` (`failed`, §3.3), que no se poda.
+
+`findings`, `comments_sent` y `llm_usage` se conservan — son el histórico de dedup y la base de las métricas F5; el volumen single-org lo permite.
 
 ### 9.12. Apagado ordenado del worker
 

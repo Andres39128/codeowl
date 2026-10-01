@@ -256,4 +256,27 @@ en pie; hallazgo H2 sobre el fondo del 4.45).
 - [x] H6 (micro) .gitignore: .atl/ (caché del skill registry) sin ignorar —
       agregado; fuera del status.
 
+### Iteración 2 — 6 hallazgos (1 mayor, 1 menor, 4 micro)
+
+- [x] I1 (mayor) §3.3/§6 F1/§9.1: credencial API de GitLab inexistente en
+      el doc — la deploy key solo clona (SSH) y el signing token solo
+      verifica entregas; ninguna llamada REST del adapter (publicar
+      comentarios, ListOpenPRs, FetchPRTimeline, tip de base) tenía
+      credencial documentada. Agregado: API token de proyecto (cifrado) en
+      repositories, flujo de conexión F1 (project access token scope api),
+      lista de secrets de §9.1.
+- [x] I2 (menor) §6 F3 + mapa: DiffViewer sin fuente de datos del diff —
+      GetDiff agregado al contrato VCSProvider (bajo demanda, sin copia en
+      BD); encadena el fix de §9.2: la private key de la App pasa a vivir
+      en api y worker (la API resuelve el diff; el worker clona y publica).
+      Mapa api.nota anotado.
+- [x] I3 (micro) §9.11: el párrafo creció con H1 → reestructurado en
+      lista (misma clase que exec 4 H6).
+- [x] I4 (micro) §6 F1: "AES-GCM" → "AES-256-GCM" (paridad con §3.3/§9.2).
+- [x] I5 (micro) §5.1: severidad media — paréntesis anidado eliminado
+      (4.45 surface / 4.68 base en cláusulas planas).
+- [x] I6 (micro) mapa cerrar_pr: pasos agregados con quoting correcto
+      (escalar con ": " entre comillas — lección exec 4 H1) + YAML
+      validado tras la edición.
+
 
