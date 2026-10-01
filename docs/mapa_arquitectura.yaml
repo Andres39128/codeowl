@@ -1,0 +1,331 @@
+# =============================================================================
+# MAPA DE ARQUITECTURA — fuente única de verdad estructural del sistema
+# =============================================================================
+# CÓMO USAR ESTE ARCHIVO (agente o humano):
+#   1. ¿Dónde toco?: buscá el componente por nombre o ruta; la entrada dice
+#      qué hace, qué expone, de qué depende y dónde se prueba.
+#   2. ¿Qué rompo si cambio X?: mirá 'depende_de' del componente y buscá quién
+#      lista a X en su propio 'depende_de' — ese es el radio de impacto.
+#   3. ¿Puedo refactorizar?: respetá 'expone' (contrato público). Cambiar
+#      'expone' = PR propio, anunciado, sin mezclar con funcionalidad.
+#   4. ¿Dónde están las reglas de estilo?: docs/guia_del_proyecto.md (§4).
+#   5. Mantenimiento: si creás, movés o borrás componentes, actualizá este
+#      mapa EN EL MISMO PR (checklist §10 de la guía). Un mapa desactualizado
+#      es peor que no tener mapa.
+#
+# NOTA: este mapa describe la estructura objetivo. Cada entrada indica la fase
+# en que se materializa. Lo que aún no existe tiene su fase como pista.
+# ============================================================================
+
+version: 1
+actualizado: "2026-09-30"
+fuente_de_verdad:
+  convenciones_y_fases: docs/guia_del_proyecto.md
+  referencia_funcional: docs/manual_completo_de_coderabbit_ai.md
+
+# -----------------------------------------------------------------------------
+# SERVICIOS (unidades de despliegue)
+# -----------------------------------------------------------------------------
+servicios:
+  caddy:
+    imagen: caddy:2
+    responsabilidad: reverse proxy con TLS automático (ACME) — único puerto expuesto (443) hacia la API en :8080
+    puertos: "443 (único expuesto)"
+    despliegue: deploy/quadlet/caddy.container
+    fase: F0
+  postgres:
+    imagen: pgvector/pgvector:pg18
+    responsabilidad: OLTP + embeddings (pgvector) + cola de jobs (River)
+    puertos: "5432 (interno)"
+    despliegue: deploy/quadlet/postgres.container
+    fase: F0
+  api:
+    binario: backend/cmd/api
+    responsabilidad: webhooks VCS firmados + REST del dashboard + auth por sesión (routing con ServeMux stdlib — sin dependencia de router)
+    escucha: "config: API_ADDR (default :8080)"
+    despliegue: deploy/quadlet/api.service
+    fase: F0
+  worker:
+    binario: backend/cmd/worker
+    responsabilidad: consume jobs River y ejecuta el pipeline de revisión/indexación
+    nota: "requiere git y acceso al CLI de podman (invoca la imagen analyzer); unidades de usuario (systemctl --user): rootless también para el analyzer"
+    despliegue: deploy/quadlet/worker.service
+    fase: F0 (esqueleto) / F1 (pipeline)
+  analyzer:
+    imagen: analyzer/Containerfile
+    responsabilidad: tree-sitter + linters en sandbox sin red; salida JSON normalizada
+    ejecucion: "podman run --network=none --read-only --pids-limit=64"
+    despliegue: "deploy/quadlet/analyzer.build (build de la imagen del sandbox)"
+    fase: F1
+  dashboard:
+    ruta: dashboard/
+    responsabilidad: SPA Preact — triage, PRs, settings
+    entrega: estáticos servidos por la API
+    fase: F0 (shell) / F5 (triage completo)
+
+# -----------------------------------------------------------------------------
+# COMPONENTES BACKEND (paquetes Go)
+# -----------------------------------------------------------------------------
+backend:
+  config:
+    ruta: backend/internal/config
+    proposito: "carga y validación al arranque: fail-fast solo para lo esencial del arranque (DB, master key, escucha, sesión); las credenciales de GitHub App (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET — secret global por App, no por repo; variante _FILE para LoadCredential de Quadlet) validan al conectar el primer repo GitHub — F0 corre sin credenciales VCS"
+    expone: ["struct Config", "Load() (*Config, error)"]
+    depende_de: []
+    pruebas: backend/internal/config/config_test.go
+    fase: F0
+  store:
+    ruta: backend/internal/store
+    proposito: acceso a datos — queries sqlc generadas + modelos de dominio
+    expone: ["Queries (sqlc)", "modelos de dominio", "migraciones aplicadas"]
+    depende_de: [config]
+    pruebas: backend/internal/store/store_test.go
+    fase: F0
+    reglas: >
+      Único lugar con SQL. Nada más importa database/sql ni pgx directamente.
+      Cambios de esquema = migración nueva en backend/migrations/ + regenerar sqlc.
+  api:
+    ruta: backend/internal/api
+    proposito: routing (ServeMux stdlib), middleware (auth, logging, recover), handlers REST + webhooks
+    nota: "depende de llm solo para la acción 'probar conexión' de proveedores en settings (una llamada mínima por rol); los handlers de webhook jamás tocan el gateway (guía §3.5)"
+    expone: ["Handler http.Handler", "POST /webhooks/github", "POST /webhooks/gitlab", "REST /api/*"]
+    depende_de: [store, vcs, jobs, llm]
+    pruebas: backend/internal/api/api_test.go (webhook firmado simulado)
+    fase: F0 (auth) / F1 (webhook GitHub) / F2 (webhook GitLab)
+  vcs:
+    ruta: backend/internal/vcs
+    proposito: contrato VCSProvider + adapters por proveedor
+    expone: ["interface VCSProvider", "github.VCSProvider", "gitlab.VCSProvider"]
+    depende_de: [store, config]
+    pruebas: backend/internal/vcs/vcs_test.go + fixtures de payload por proveedor
+    fase: F1 (github) / F2 (gitlab)
+    reglas: >
+      Contrato mínimo: HandleWebhook (eventos suscritos cerrados: pull_request
+      (edited entra solo por cambio de base.sha — retarget) / issue_comment /
+      pull_request_review_comment en GitHub, merge_request (update entra solo
+      por push, cambio de target_branch o marca draft — título/labels se
+      descartan) / note en GitLab; el cierre —closed en GitHub, close/merge en
+      GitLab— actualiza pull_requests.state y descarta los ReviewJob/ChatJob
+      del PR sin gastar LLM (el IndexJob es por repo y sigue su curso — tras
+      merge indexa la nueva base); ignora comentarios del propio bot y de otros
+      bots — anti-bucle;
+      issue_comment solo pasa si es comentario en PR con mención al bot; note
+      de GitLab solo con noteable_type == MergeRequest + mención; chat de
+      autores fuera de la organización se ignora (config);
+      PRs draft no se revisan por default, config por repo; la vuelta a draft descarta los jobs pendientes del PR),
+      FetchPR (clonado shallow al workdir del job, con credencial efímera o
+      deploy key; merge-base con --deepen si falta profundidad; en forks, el
+      ref del PR desde el repo base (refs/pull/<n>/head en GitHub,
+      refs/merge-requests/<iid>/head en GitLab — head, no el merge ref: el
+      test-merge de GitHub contamina el diff y desaparece en conflictos; el
+      head de un fork externo no es accesible con el token de instalación),
+      PostInlineComment
+      (recibe CommentPosition {file, line, side} — líneas nuevas anclan al
+      lado RIGHT, eliminadas al LEFT; el mapeo diff→posición vive solo acá,
+      testeado con fixtures), PostSuggestion, PostSummary (edit in
+      place; si el comentario fue borrado, lo recrea y actualiza comments_sent).
+      Agregar un VCS nuevo = paquete nuevo que cumpla la interfaz; prohibido que
+      el resto del código sepa qué proveedor está activo.
+  review:
+    ruta: backend/internal/review
+    proposito: pipeline de revisión — orquesta agentes, deduplicación, findings
+    expone: ["Run(ctx, ReviewInput) (ReviewResult, error)", "agentes: Reviewer, Verifier, Summarizer, Chat, PreMerge"]
+    depende_de: [store, analyze, index, llm, vcs]
+    pruebas: backend/internal/review/review_test.go (contract con stub del gateway en CI; evals con proveedor real fuera de CI)
+    fase: F1 (reviewer, summarizer) / F2 (chat) / F3 (verifier, mermaid) / F5 (pre-merge)
+    reglas: >
+      El loop de agente es código propio (~200 líneas) — sin framework.
+      Rol del gateway por agente: Reviewer/Summarizer/PreMerge → review,
+      Verifier → cheap (cross-check mecánico), IndexJob → embedding.
+      El job guarda la identidad de la corrida — (head_sha, base_sha): push y
+      retarget cambian el diff; si difiere del estado actual del PR, la corrida
+      se marca stale y termina sin LLM ni publicaciones (check al iniciar y
+      antes de publicar — incluye PR cerrado: el handler de cierre descarta
+      los pendientes, pero una corrida en vuelo no se descarta y publicar en
+      un PR cerrado no aporta; re-chequeo definitivo y re-encolo dentro de la
+      tx que completa el job — ver reglas de jobs). Dedup de findings por file + categoría +
+      ancla (símbolo contenedor con AST, línea con drift ±3 config sin AST).
+      review.yaml se lee solo de la rama base del PR: sus instructions entran
+      en los prompts y leerlas del head sería inyección por diseño; los cambios
+      al archivo dentro del diff se ignoran para la corrida en curso.
+      Los prompts viven en backend/prompts/ versionados; cambiar un prompt = PR con justificación.
+      La salida de cada agente se valida contra schema JSON (contrato de finding):
+      malformada → reintentos acotados → descarte registrado. El Mermaid del
+      resumen se parsea antes de publicar; si no parsea, se omite y se registra.
+      El veredicto pre-merge (F5) se publica como sección del resumen, edit in
+      place — comments_sent no gana tipo nuevo. El risk_score (F5) se calcula
+      en el pipeline (tamaño de diff, archivos sensibles, severidad de
+      findings, proporción de test files) y se persiste en pull_requests.
+  analyze:
+    ruta: backend/internal/analyze
+    proposito: invoca el analyzer sandbox y normaliza su JSON — findings SAST y extracción de símbolos para indexing
+    expone: ["Run(ctx, Workdir) ([]SASTFinding, error)", "ExtractSymbols(ctx, Workdir) ([]Symbol, error) — modo --symbols del CLI"]
+    depende_de: [config]
+    pruebas: backend/internal/analyze/analyze_test.go (imagen analyzer en CI)
+    fase: F1
+  index:
+    ruta: backend/internal/index
+    proposito: "indexación RAG — chunking simbólico (símbolos del CLI analyzer vía internal/analyze: cgo no sale del contenedor), embeddings, grafo de imports, retrieval; anota embedding_model (+dims) y re-indexa al cambiar proveedor (pgvector fija la dimensión en DDL)"
+    expone: ["Index(ctx, Repo)", "Retrieve(ctx, Query) []Symbol"]
+    depende_de: [store, llm, analyze]
+    pruebas: backend/internal/index/index_test.go
+    fase: F4
+  llm:
+    ruta: backend/internal/llm
+    proposito: gateway multi-proveedor OpenAI-compatible con routing por rol y rate limit por proveedor
+    expone: ["interface Client", "Complete(ctx, Rol, Prompt) (string, error)"]
+    depende_de: [store, config]
+    pruebas: backend/internal/llm/llm_test.go (servidor stub OpenAI-compatible)
+    fase: F1
+    reglas: >
+      Ningún otro paquete habla con proveedores LLM — todo pasa por acá con un ROL
+      (review / cheap / embedding). Cambiar de proveedor = solo configuración.
+      Tope de concurrencia global (config) además del tope por review. Cada
+      llamada registra usage en llm_usage (tokens in/out, modelo, rol) — base de
+      las métricas de costo y de los presupuestos por review. Timeout por
+      llamada (config). Ante 429/5xx del proveedor: backoff (respeta
+      Retry-After) y reintentos acotados (config);
+      agotados, siguiente proveedor enabled del mismo rol (orden por priority); sin respuesta de
+      ninguno, la review queda partial — nunca recorte silencioso. Cache de
+      resultados LLM claveada por head SHA + merge-base + versión de prompt +
+      hash de config efectiva (guía §9.6); vive en memoria del worker con tope
+      de entradas y TTL (config).
+  jobs:
+    ruta: backend/internal/jobs
+    proposito: wrapper fino de la cola — interfaz JobQueue propia sobre River; enqueue transaccional y tipos de job del dominio
+    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard, guía §9.2)"]
+    depende_de: [store]
+    pruebas: backend/internal/jobs/jobs_test.go
+    fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob) / F2 (ChatJob) / F4 (IndexJob)
+    reglas: >
+      Único paquete que importa River. Reemplazar la cola = reescribir solo acá.
+      Los handlers de API encolan a través de esta interfaz; jamás importan River directo.
+      ReviewJob se encola como job único por PR (unique opts de River): el encolado
+      duplicado se descarta mientras viva el anterior. El re-encolo tras una corrida
+      stale vive dentro de la transacción que completa el job: esa tx re-chequea
+      la identidad de la corrida (head_sha, base_sha) del PR y encola la corrida
+      del estado actual en la misma transacción (el job completado ya no bloquea
+      la unicidad y el insert pasa) — sin corridas acumuladas y sin reviews
+      perdidas por ningún interleaving de push o retarget.
+      ChatJob se encola tras el filtro de mención/autor; su presupuesto por
+      comando es propio, no comparte el de la review.
+
+      IndexJob: job único por repo mientras vive otro (misma mecánica de
+      unicidad que ReviewJob); se encola al completar cada review
+      (success o partial) y al conectar el repo — la unicidad de ReviewJob
+      ya debouncea los push seguidos. Indexa solo código, respetando los
+      path_filters vigentes; presupuesto propio de embeddings por corrida
+      (guía §9.6).
+
+# -----------------------------------------------------------------------------
+# COMPONENTES ANALYZER
+# -----------------------------------------------------------------------------
+analyzer:
+  cli:
+    ruta: analyzer/src
+    proposito: binario Go del contenedor (cgo permitido solo aquí) — detecta lenguajes (go-enry), ejecuta linters del contenedor, emite JSON normalizado
+    expone: ["arg: ruta del repo montado (argv)", "stdout: {language, linter, file, line, severity, message}[]", "modo --symbols: {file, symbol, kind, start_line, end_line, imports}[] — insumo del chunking de internal/index (F4)"]
+    depende_de: []  # sin red, sin servicios — solo binarios locales del contenedor
+    pruebas: analyzer/src/test (repo fixture con errores semilla)
+    reglas: >
+      Versiones de tree-sitter y linters fijadas (pinning) en el Containerfile —
+      salida reproducible entre rebuilds. Los linters corren con configs propios
+      de la imagen pasados explícitamente por el CLI; los configs del repo
+      revisado se ignoran: config de repo es código arbitrario en el sandbox y
+      además permite silenciar reglas de detección. Linters best-effort según
+      dependencias: tree-sitter, Ruff, ESLint y Gitleaks corren siempre; Clippy
+      y golangci-lint solo si las deps del repo están disponibles en el clon
+      (sin red no se descargan) — la salida reporta qué linter corrió y cuál no
+      pudo, y la ausencia de un linter jamás cuenta como ausencia de hallazgos.
+      Gitleaks sobre clon shallow solo ve la historia clonada.
+    fase: F1
+
+# -----------------------------------------------------------------------------
+# COMPONENTES DASHBOARD
+# -----------------------------------------------------------------------------
+dashboard:
+  theme:
+    ruta: dashboard/src/theme
+    proposito: tokens de diseño por rol (claro/oscuro) como variables CSS + @theme de Tailwind
+    expone: ["tokens.css", "toggleTheme()"]
+    depende_de: []
+    pruebas: vitest — snapshot de tokens + test de contraste AA de cada par texto/fondo e indicadores no-texto (focus ring) en ambos temas
+    fase: F0
+    reglas: Único lugar con valores de color. Componentes usan roles, nunca hex. Contenido externo (findings, diffs, comentarios) se renderiza como texto — escaping de Preact, sin HTML crudo; Mermaid client-side solo con securityLevel=strict (§9.5 de la guía).
+  components:
+    ruta: dashboard/src/components
+    proposito: primitivas compartidas — Button, Badge, Table, Card, DiffViewer, Modal, Toast
+    expone: ["<Button>", "<Badge>", "<Table>", "<Card>", "<DiffViewer>", "<Modal>", "<Toast>"]
+    depende_de: [theme]
+    pruebas: vitest + testing-library
+    fase: F0 (Button/Badge/Table) / F3 (DiffViewer — se construye junto a features/prs, su única consumidora)
+  features:
+    ruta: dashboard/src/features
+    proposito: pantallas por dominio
+    expone:
+      auth: {ruta: dashboard/src/features/auth, proposito: login/sesión, fase: F0}
+      settings: {ruta: dashboard/src/features/settings, proposito: proveedores LLM (BYOK cifrado) — acciones exclusivas del admin, repos conectados, usuarios (invitaciones y reset), fase: F1}
+      prs: {ruta: dashboard/src/features/prs, proposito: detalle de PR con findings y diff, fase: F3}
+      triage: {ruta: dashboard/src/features/triage, proposito: cola de PRs por riesgo, fase: F5}
+    depende_de: [components, lib]
+    pruebas: vitest por feature
+    reglas: features NO importan de otras features — lo compartido baja a components/ o lib/.
+  lib:
+    ruta: dashboard/src/lib
+    proposito: cliente API tipado, hooks compartidos, utilidades puras
+    expone: ["apiClient", "useSession", "usePR"]
+    depende_de: []
+    pruebas: vitest
+    fase: F0
+
+# -----------------------------------------------------------------------------
+# FLUJOS (secuencias que cruzan componentes)
+# -----------------------------------------------------------------------------
+flujos:
+  revisar_pr:
+    pasos:
+      - vcs (webhook firmado + idempotencia por delivery ID)
+      - api (valida, upserta PR y encola ReviewJob vía jobs — misma transacción de BD)
+      - worker (worker River toma el job, crea workdir efímero /var/tmp/rev-<job-id>)
+      - review (skip stale: identidad del job (head_sha, base_sha) vs estado actual del PR; re-chequeo antes de cada publicación y re-encolo en la tx de finalización)
+      - vcs (FetchPR: clonado shallow con credencial efímera al workdir)
+      - review (Summarizer temprano: resumen + walkthrough + Mermaid — depende del diff, no de los findings)
+      - vcs (publicación fase 1: resumen apenas listo, SLO 5 min; comments_sent tipo summary)
+      - analyze (linters sandbox sobre el workdir → SASTFinding[])
+      - llm.rol.review (agente Reviewer por archivo, con contexto de index si existe)
+      - review (deduplicación LLM vs SAST → Verifier filtra falsos positivos)
+      - vcs (publicación fase 2: inline comments al cerrar el análisis y re-edición del resumen con el recuento de findings, SLO 15 min; comments_sent tipo inline)
+      - review (F5: risk_score → pull_requests; Agente Pre-merge → veredicto como sección del resumen, edit in place)
+  indexar_repo:
+    pasos:
+      - worker (IndexJob al conectar el repo y al completar cada review (success o partial) — job único por repo, ver reglas de jobs)
+      - analyze (chunking simbólico tree-sitter)
+      - llm.rol.embedding (embeddings por proveedor configurado)
+      - store (upsert en repo_index con pgvector + grafo de imports)
+  cerrar_pr:
+    pasos:
+      - vcs (webhook closed/close/merge)
+      - api (actualiza pull_requests.state; descarta ReviewJob/ChatJob del PR — cero LLM; el IndexJob es por repo y sigue: tras merge indexa la nueva base)
+  chatear_con_bot:
+    pasos:
+      - vcs (comentario @bot llega por webhook; se ignora si el autor es el propio bot u otro bot)
+      - api (encola ChatJob tras filtrar mención/autor)
+      - llm.rol.review (agente Chat con contexto del hilo y del PR)
+      - vcs (respuesta publicada en el hilo; /review no responde: encola ReviewJob con la identidad actual — guía §3.6)
+
+# -----------------------------------------------------------------------------
+# REGLAS DE REFACTOR (dónde ir cuando algo duele)
+# -----------------------------------------------------------------------------
+reglas_de_refactor:
+  - sintoma: "SQL duplicado o queries desde fuera de store"
+    ir_a: backend/internal/store — extraer query sqlc; prohibido SQL fuera del paquete
+  - sintoma: "lógica de proveedor LLM filtrada en review/"
+    ir_a: backend/internal/llm — el rol se resuelve en el gateway, no en el consumidor
+  - sintoma: "if provider == github disperso"
+    ir_a: backend/internal/vcs — comportamiento polimórfico en el adapter, nunca en el caller
+  - sintoma: "color hex fuera de theme/"
+    ir_a: dashboard/src/theme — nuevo token por rol con verificación de contraste AA en ambos temas
+  - sintoma: "job que hace demasiado (review + index + comentarios)"
+    ir_a: backend/internal/review — dividir en pasos del pipeline; un job River por unidad reintentable
+  - sintoma: "prompt editado dentro de código Go"
+    ir_a: backend/prompts — los prompts son archivos versionados, nunca literales en .go

@@ -1,0 +1,6 @@
+# LibreOffice lock files
+.~lock.*#
+
+# OS junk
+.DS_Store
+Thumbs.db
