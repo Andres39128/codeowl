@@ -261,6 +261,7 @@ func (a *Adapter) handlePullRequest(ctx context.Context, repo store.Repository, 
 	}
 
 	args, err := json.Marshal(jobs.ReviewJobArgs{
+		RepositoryID:  repo.ID,
 		PullRequestID: row.ID,
 		HeadSha:       pr.Head.Sha,
 		BaseSha:       pr.Base.Sha,

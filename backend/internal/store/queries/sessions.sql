@@ -18,3 +18,9 @@ DELETE FROM sessions WHERE token_hash = $1;
 -- name: DeleteSessionsForUser :exec
 -- Revoca todas las sesiones del usuario (reset de contraseña o baja, §3.4).
 DELETE FROM sessions WHERE user_id = $1;
+
+-- name: DeleteExpiredSessions :execrows
+-- Retención del CleanupJob (guía §9.11): borra sesiones ya expiradas y
+-- devuelve la cantidad eliminada.
+DELETE FROM sessions
+WHERE expires_at < now();

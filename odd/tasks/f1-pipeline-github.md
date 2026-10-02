@@ -39,7 +39,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
   - Containerfile: tree-sitter + 5 linters pinned, --network=none --read-only, configs propios de la imagen
   - internal/analyze: cliente del contenedor, normalización JSON (severidad mapeada al conjunto cerrado), reporte qué corrió/saltó
   - Verificación: build de imagen + test del CLI con repo fixture
-- [ ] T5 — feat: internal/review pipeline + agentes (ruta: delegado)
+- [x] T5 — feat: internal/review pipeline + agentes (ruta: delegado) — commit 69cd3ff61407; 13 contract tests con stubs; cache sha+merge-base+prompt+config; publicación 2 fases; dedup drift ±3; prompts embed
   - Run(ctx, ReviewInput) (ReviewResult, error); Reviewer sobre hunks con contexto; Summarizer; dedup por huella; publicación en dos fases; prompts versionados en backend/prompts/
   - Verificación: contract tests con stub del gateway
 - [ ] T6 — feat: jobs workers (ReviewJob, CleanupJob, RotationJob, ReconcileJob) (ruta: delegado)

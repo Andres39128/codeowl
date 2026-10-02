@@ -43,6 +43,9 @@ const (
 	DefaultAnalyzerPidsLimit     = 256               // §9.4: tope de procesos del sandbox
 	DefaultAnalyzerTimeout       = 120 * time.Second // timeout duro del sandbox (§9.4)
 	DefaultAnalyzerTmpfsSize     = "512m"            // §9.4: tmpfs de /tmp para caches de linters
+	DefaultReviewConcurrency     = 2                 // §9.6: ReviewJobs concurrentes en el worker
+	DefaultChatConcurrency       = 2                 // §9.6: slots propios del ChatJob (F2)
+	DefaultCleanupRetentionDays  = 30                // §9.11: retención de webhook_deliveries
 )
 
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
@@ -89,6 +92,10 @@ type Stage2Config struct {
 	AnalyzerPidsLimit int
 	AnalyzerTimeout   time.Duration
 	AnalyzerTmpfsSize string
+	// Jobs del worker (§9.6/§9.11): los consume internal/jobs.
+	ReviewConcurrency    int // ReviewJobs concurrentes (cola review)
+	ChatConcurrency      int // slots propios del ChatJob (cola chat, F2)
+	CleanupRetentionDays int // retención de webhook_deliveries (CleanupJob)
 }
 
 // ValidateGitHub verifica que las credenciales de la App estén completas.
@@ -310,6 +317,30 @@ func Load() (*Config, error) {
 		tmpfs = DefaultAnalyzerTmpfsSize
 	}
 	s2.AnalyzerTmpfsSize = tmpfs
+
+	reviewConc, err := loadInt("REVIEW_CONCURRENCY", DefaultReviewConcurrency)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if reviewConc < 1 {
+		errs = append(errs, "REVIEW_CONCURRENCY debe ser mayor o igual a 1")
+	}
+	s2.ReviewConcurrency = reviewConc
+
+	chatConc, err := loadInt("CHAT_CONCURRENCY", DefaultChatConcurrency)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if chatConc < 1 {
+		errs = append(errs, "CHAT_CONCURRENCY debe ser mayor o igual a 1")
+	}
+	s2.ChatConcurrency = chatConc
+
+	retentionDays, err := loadInt("CLEANUP_RETENTION_DAYS", DefaultCleanupRetentionDays)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if retentionDays < 1 {
+		errs = append(errs, "CLEANUP_RETENTION_DAYS debe ser mayor o igual a 1")
+	}
+	s2.CleanupRetentionDays = retentionDays
 
 	cfg.Stage2 = s2
 

@@ -48,8 +48,9 @@ func (q *recordingQueue) Enqueue(_ context.Context, kind string, args json.RawMe
 	return nil
 }
 
-func (q *recordingQueue) Start(context.Context) error { return nil }
-func (q *recordingQueue) Stop(context.Context) error  { return nil }
+func (q *recordingQueue) Register(...jobs.Worker) error { return nil }
+func (q *recordingQueue) Start(context.Context) error   { return nil }
+func (q *recordingQueue) Stop(context.Context) error    { return nil }
 
 func (q *recordingQueue) count() int {
 	q.mu.Lock()

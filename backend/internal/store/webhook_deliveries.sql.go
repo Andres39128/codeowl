@@ -7,6 +7,8 @@ package store
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createWebhookDelivery = `-- name: CreateWebhookDelivery :one
@@ -54,4 +56,20 @@ func (q *Queries) WebhookDeliveryExists(ctx context.Context, arg WebhookDelivery
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const deleteWebhookDeliveriesOlderThan = `-- name: DeleteWebhookDeliveriesOlderThan :execrows
+
+-- Retención del CleanupJob (guía §9.11): borra entregas más viejas que el
+-- corte y devuelve la cantidad eliminada.
+DELETE FROM webhook_deliveries
+WHERE created_at < $1
+`
+
+func (q *Queries) DeleteWebhookDeliveriesOlderThan(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWebhookDeliveriesOlderThan, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

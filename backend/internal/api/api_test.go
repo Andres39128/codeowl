@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Andres39128/codeowl/backend/internal/config"
+	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	vcsgh "github.com/Andres39128/codeowl/backend/internal/vcs/github"
 	"github.com/Andres39128/codeowl/backend/migrations"
@@ -365,5 +366,6 @@ func TestWebhookGitHubMontadoSinCSRF(t *testing.T) {
 type stubQueue struct{}
 
 func (stubQueue) Enqueue(context.Context, string, json.RawMessage) error { return nil }
+func (stubQueue) Register(...jobs.Worker) error                          { return nil }
 func (stubQueue) Start(context.Context) error                            { return nil }
 func (stubQueue) Stop(context.Context) error                             { return nil }

@@ -13,3 +13,9 @@ SELECT EXISTS (
     SELECT 1 FROM webhook_deliveries
     WHERE vcs = $1 AND delivery_id = $2
 );
+
+-- name: DeleteWebhookDeliveriesOlderThan :execrows
+-- Retención del CleanupJob (guía §9.11): borra entregas más viejas que el
+-- corte y devuelve la cantidad eliminada.
+DELETE FROM webhook_deliveries
+WHERE created_at < $1;

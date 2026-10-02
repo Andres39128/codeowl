@@ -93,3 +93,19 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, tokenHash string) (
 	)
 	return i, err
 }
+
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
+
+-- Retención del CleanupJob (guía §9.11): borra sesiones ya expiradas y
+-- devuelve la cantidad eliminada.
+DELETE FROM sessions
+WHERE expires_at < now()
+`
+
+func (q *Queries) DeleteExpiredSessions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredSessions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
