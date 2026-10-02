@@ -1,0 +1,98 @@
+# Containerfile — imagen sandbox del analyzer (mapa servicios.analyzer, §9.4).
+#
+# Reproducible: todas las versiones de linters están pinned acá — la salida
+# del analyzer debe ser idéntica entre rebuilds.
+# Sin red en ejecución: el invocador corre con --network=none --read-only
+# --pids-limit --memory; los caches de los linters que compilan (GOCACHE,
+# CARGO_HOME, target/) van al tmpfs de /tmp (§9.4).
+#
+# Build: podman build -t localhost/codeowl-analyzer:latest -f analyzer/Containerfile analyzer/
+
+# --- Pinning (verificados a octubre 2026; bump = PR) --------------------------
+ARG GOLANGCI_LINT_VERSION=v2.14.0
+ARG GITLEAKS_VERSION=v8.30.1
+ARG RUFF_VERSION=0.16.10
+ARG ESLINT_VERSION=10.11.0
+ARG ESLINT_JS_VERSION=10.0.1
+ARG TS_PARSER_VERSION=8.71.0
+ARG RUST_VERSION=1.99.0
+
+# --- Etapa 1: binario del CLI (cgo permitido solo acá — mapa analyzer.cli) ----
+FROM golang:1.27-alpine AS build
+WORKDIR /src
+COPY src/go.mod ./
+COPY src/*.go ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/analyzer .
+
+# --- Etapa 2: imagen final -----------------------------------------------------
+# Base golang: golangci-lint necesita la toolchain de Go en runtime (compila
+# contra vendor/); el resto de linters vive junto a ella.
+FROM golang:1.27-alpine
+ARG GOLANGCI_LINT_VERSION
+ARG GITLEAKS_VERSION
+ARG RUFF_VERSION
+ARG ESLINT_VERSION
+ARG ESLINT_JS_VERSION
+ARG TS_PARSER_VERSION
+ARG RUST_VERSION
+
+# git: golangci-lint lee metadatos VCS. gcc/musl-dev: linker que Clippy necesita
+# para compilar crates contra vendor. El resto: Node/ESLint, Python/Ruff.
+RUN apk add --no-cache git gcc musl-dev nodejs npm python3 py3-pip curl
+
+# Ruff (Python): wheel musl oficial, versión pinned.
+RUN pip install --no-cache-dir --break-system-packages ruff==${RUFF_VERSION}
+
+# ESLint + parser de TypeScript: instalados junto a sus configs en /opt/linters
+# (los imports del config resuelven contra ese node_modules).
+WORKDIR /opt/linters
+RUN npm init -y >/dev/null \
+    && npm install --no-audit --no-fund \
+        eslint@${ESLINT_VERSION} @eslint/js@${ESLINT_JS_VERSION} \
+        @typescript-eslint/parser@${TS_PARSER_VERSION} \
+    && npm cache clean --force
+ENV PATH="/opt/linters/node_modules/.bin:${PATH}"
+
+# tree-sitter (§2: parseo AST multi-lenguaje) entra en F4 como bindings de Go
+# compilados dentro del binario del CLI (cgo permitido solo en este contenedor,
+# mapa analyzer.cli) — el CLI oficial no publica build musl y no se usa hasta
+# F4. El pin de versión vivirá entonces en src/go.mod.
+
+# Rust + Clippy: toolchain pinned, perfil mínimo + clippy. rustup-init se
+# verifica contra su checksum oficial (pinning reproducible).
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:${PATH}
+RUN curl -sSfL https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-musl/rustup-init \
+        -o /tmp/rustup-init \
+    && curl -sSfL https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-musl/rustup-init.sha256 \
+        -o /tmp/rustup-init.sha256 \
+    && echo "$(grep -o '^[0-9a-f]*' /tmp/rustup-init.sha256)  /tmp/rustup-init" | sha256sum -c - \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --no-modify-path \
+        --profile minimal --default-toolchain ${RUST_VERSION} \
+        --component clippy \
+    && rustup --version && cargo clippy --version
+
+# golangci-lint: binario oficial de la release pinned.
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+        | sh -s -- -b /usr/local/bin ${GOLANGCI_LINT_VERSION} \
+    && golangci-lint version
+
+# Gitleaks: tarball oficial de la release pinned.
+RUN curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz \
+        -o /tmp/gitleaks.tar.gz \
+    && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
+    && rm /tmp/gitleaks.tar.gz \
+    && gitleaks version
+
+# Configs propios de la imagen — el CLI los pasa explícito a cada linter (§9.4).
+COPY eslint.config.mjs ruff.toml .golangci.yml clippy.toml .gitleaks.toml /opt/linters/
+
+# HOME y caches apuntan a /tmp: el rootfs es read-only y el invocador monta
+# /tmp como tmpfs con tope (§9.4).
+ENV HOME=/tmp
+
+COPY --from=build /out/analyzer /usr/local/bin/analyzer
+
+ENTRYPOINT ["/usr/local/bin/analyzer"]

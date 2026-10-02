@@ -1,0 +1,15 @@
+# .gitleaks.toml — config propio de la imagen (§9.4): el CLI pasa --config
+# explícito, el del repo revisado se ignora. Reglas default + exclusión de
+# dependencias: los fixtures de terceros (checksums de libc, etc.) no son
+# secrets del repo revisado.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "dependencias y artefactos de build"
+paths = [
+    '''(?:^|/)vendor/''',
+    '''(?:^|/)node_modules/''',
+    '''(?:^|/)target/''',
+    '''(?:^|/)dist/''',
+]

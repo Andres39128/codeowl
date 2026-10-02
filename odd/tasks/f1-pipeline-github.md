@@ -32,7 +32,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
 - [x] T2 — feat: internal/llm gateway multi-proveedor (ruta: delegado) — commit bc93e2717942; 10 tests (stub server: éxito+usage, failover, 429+Retry-After, client-error sin retry, exhausted, concurrency per-review+global, TestConnection); 4 vars config nuevas
   - Gateway OpenAI-compatible: base_url + model + api_key; roles (review/cheap/embedding); failover por priority; rate limit; usage logging a llm_usage
   - Verificación: tests con stub server OpenAI-compatible
-- [ ] T3 — feat: internal/vcs GitHub adapter (ruta: delegado)
+- [x] T3 — feat: internal/vcs GitHub adapter (ruta: delegado) — commit 4a5872cf2f99; 70 tests verde (15 webhook + 2 mapeo + 1 wiring); instalación token JWT RS256 cache; filtro eventos §3.5 completo
   - VCSProvider contract (interface); github.VCSProvider: HandleWebhook (firma HMAC-SHA256, filtro eventos, dedup delivery ID, upsert PR, enqueue ReviewJob); FetchPR (clon shallow + merge-base); PostInlineComment, PostSummary; instalación token efímero
   - Verificación: tests con payloads firmados de fixtures
 - [ ] T4 — feat: internal/analyze + analyzer Containerfile (ruta: delegado)

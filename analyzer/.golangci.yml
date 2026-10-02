@@ -1,0 +1,15 @@
+# .golangci.yml — config propio de la imagen (§9.4): el CLI lo pasa explícito,
+# el del repo revisado se ignora. Formato v2.
+version: "2"
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - gosec
+output:
+  formats:
+    # JSON en stdout: el CLI lo parsea (el formato text pisa stdout con el
+    # resumen "N issues" después del JSON — por eso se fija acá, en el config
+    # de la imagen, y no por flag).
+    json:
+      path: stdout

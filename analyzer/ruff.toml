@@ -1,0 +1,8 @@
+# ruff.toml — config propio de la imagen (§9.4): los pyproject.toml/ruff.toml
+# del repo revisado se ignoran; el CLI pasa --config explícito.
+line-length = 120
+
+[lint]
+# Default de Ruff (E4/E7/E9/F) + bugbear, bandit (S), performance, complejidad
+# e isort. Sin reglas de preview ni fixes automáticos.
+select = ["E4", "E7", "E9", "F", "B", "S", "PERF", "C90", "I"]

@@ -38,6 +38,10 @@ build target="all":
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "backend" ]; then cd backend && go build -o bin/ ./cmd/api ./cmd/worker; fi
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "dashboard" ]; then pnpm --dir dashboard build; fi
 
+# construye la imagen sandbox del analyzer (§9.4) — la invoca internal/analyze
+analyzer-build:
+    podman build -t localhost/codeowl-analyzer:latest -f analyzer/Containerfile analyzer/
+
 # lints backend y/o dashboard — just lint [backend|dashboard|all] (§4.5)
 lint target="all":
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "backend" ]; then cd backend && golangci-lint run; fi

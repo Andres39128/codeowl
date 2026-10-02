@@ -1,0 +1,3 @@
+# clippy.toml — config propio de la imagen (§9.4): el CLI apunta CLIPPY_CONF_DIR
+# acá, así el clippy.toml del repo revisado no participa. Vacío a propósito:
+# sin knobs que un repo pueda esperar silenciar.

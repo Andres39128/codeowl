@@ -33,6 +33,11 @@ const (
 	DefaultLLMMaxRetries     = 3                 // §9.7: reintentos por proveedor ante 429/5xx
 	DefaultWebhookMaxBytes   = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
 	DefaultVCSTimeout        = 30 * time.Second  // timeout por llamada HTTP al VCS
+	DefaultAnalyzerImage     = "localhost/codeowl-analyzer:latest"
+	DefaultAnalyzerMemory    = "1g"              // §9.4: tope de RAM del sandbox
+	DefaultAnalyzerPidsLimit = 256               // §9.4: tope de procesos del sandbox
+	DefaultAnalyzerTimeout   = 120 * time.Second // timeout duro del sandbox (§9.4)
+	DefaultAnalyzerTmpfsSize = "512m"            // §9.4: tmpfs de /tmp para caches de linters
 )
 
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
@@ -67,6 +72,12 @@ type Stage2Config struct {
 	// Webhook + VCS (§9.3/§4.5): los consumen internal/vcs.
 	WebhookMaxBytes int64
 	VCSTimeout      time.Duration
+	// Sandbox analyzer (§9.4): los consumen internal/analyze.
+	AnalyzerImage     string
+	AnalyzerMemory    string
+	AnalyzerPidsLimit int
+	AnalyzerTimeout   time.Duration
+	AnalyzerTmpfsSize string
 }
 
 // ValidateGitHub verifica que las credenciales de la App estén completas.
@@ -222,6 +233,34 @@ func Load() (*Config, error) {
 		errs = append(errs, err.Error())
 	}
 	s2.VCSTimeout = vcsTimeout
+
+	s2.AnalyzerImage = envOr("ANALYZER_IMAGE", DefaultAnalyzerImage)
+
+	memory := strings.TrimSpace(os.Getenv("ANALYZER_MEMORY"))
+	if memory == "" {
+		memory = DefaultAnalyzerMemory
+	}
+	s2.AnalyzerMemory = memory
+
+	pids, err := loadInt("ANALYZER_PIDS_LIMIT", DefaultAnalyzerPidsLimit)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if pids < 1 {
+		errs = append(errs, "ANALYZER_PIDS_LIMIT debe ser mayor o igual a 1")
+	}
+	s2.AnalyzerPidsLimit = pids
+
+	analyzerTimeout, err := loadDuration("ANALYZER_TIMEOUT", DefaultAnalyzerTimeout)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.AnalyzerTimeout = analyzerTimeout
+
+	tmpfs := strings.TrimSpace(os.Getenv("ANALYZER_TMPFS_SIZE"))
+	if tmpfs == "" {
+		tmpfs = DefaultAnalyzerTmpfsSize
+	}
+	s2.AnalyzerTmpfsSize = tmpfs
 
 	cfg.Stage2 = s2
 
