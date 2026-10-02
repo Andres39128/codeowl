@@ -1,9 +1,6 @@
-# =============================================================================
-# CI de Fase 0 (guía §6 F0): lint + build + test en backend y dashboard,
-# reutilizando las recetas del justfile (§3.2: ".github/workflows/ # CI:
-# lint + build + test (F0), reutiliza recetas del justfile").
-# Reglas de tests (§8): CI determinista — sin llamadas a proveedores LLM reales.
-# =============================================================================
+# CI de Fase 0 (guia 6 F0): lint + build + test en backend y dashboard,
+# reutilizando las recetas del justfile (guia 3.2).
+# Reglas de tests (guia 8): CI determinista - sin llamadas a proveedores LLM reales.
 name: CI
 
 on:
@@ -15,41 +12,47 @@ jobs:
   backend:
     # backend/cmd aterriza con el esqueleto de API de F0: el job se activa solo
     # cuando exista backend/cmd/api/main.go.
-    if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        uses: actions/checkout@v4
 
-      - uses: extractions/setup-just@v2
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        uses: extractions/setup-just@v2
 
-      - uses: actions/setup-go@v5
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.27" # guía §2 (stack): Go 1.27
+          go-version: "1.27" # guia 2 (stack): Go 1.27
 
       - name: Install golangci-lint
-        # v2.14.0 es la primera línea construida con go1.27 — versiones previas
-        # rechazan un módulo `go 1.27` ("Go language version ... is lower than
-        # the targeted Go version").
+        # v2.14.0 es la primera linea construida con go1.27 - versiones previas
+        # rechazan un modulo `go 1.27`.
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh |
             sh -s -- -b "$(go env GOPATH)/bin" v2.14.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - run: just lint backend
-      - run: just build backend
-      - run: just test backend
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        run: just lint backend
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        run: just build backend
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        run: just test backend
 
   dashboard:
-    # dashboard/ aterriza con el shell de F0 (guía §6): el job se activa solo
+    # dashboard/ aterriza con el shell de F0 (guia 6): el job se activa solo
     # cuando exista dashboard/package.json.
-    if: ${{ hashFiles('dashboard/package.json') != '' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        uses: actions/checkout@v4
 
-      - uses: extractions/setup-just@v2
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        uses: extractions/setup-just@v2
 
-      - uses: actions/setup-node@v4
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        uses: actions/setup-node@v4
         with:
           node-version: 24
 
@@ -59,6 +62,9 @@ jobs:
       - name: Install dependencies
         run: pnpm --dir dashboard install --frozen-lockfile
 
-      - run: just lint dashboard
-      - run: just build dashboard
-      - run: just test dashboard
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        run: just lint dashboard
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        run: just build dashboard
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        run: just test dashboard
