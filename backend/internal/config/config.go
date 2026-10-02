@@ -1,0 +1,268 @@
+// Package config carga y valida la configuración por etapas (mapa: backend.config).
+//
+// Etapa 1 (arranque): esenciales — DB, master key, escucha, sesión y seed del
+// admin. Load() falla si falta o es inválido alguno, listando todos los
+// problemas en un solo error.
+//
+// Etapa 2: credenciales de la GitHub App y topes de pipeline. Se modelan y se
+// cargan si están presentes (un valor presente con formato inválido sí falla
+// el arranque); su ausencia es válida — las credenciales de GitHub validan al
+// conectar el primer repo (F1, Stage2Config.ValidateGitHub) y F0 corre sin ellas.
+package config
+
+import (
+	"encoding/base64"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Defaults de .env.example (guía §3.3/§3.4: materializados desde F0).
+const (
+	DefaultAPIAddr           = ":8080"
+	DefaultSessionTTL        = 24 * time.Hour
+	DefaultPasswordMinLength = 12
+	DefaultWorkdirDiskBudget = 2 << 30 // 2 GiB
+	DefaultDiffMaxLines      = 4000
+)
+
+// masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
+const masterKeySize = 32
+
+type Config struct {
+	APIAddr           string
+	DatabaseURL       string
+	MasterKey         []byte
+	SessionTTL        time.Duration
+	PasswordMinLength int
+	AdminUsername     string
+	AdminPassword     string
+	Stage2            Stage2Config
+}
+
+// Stage2Config agrupa lo que no es esencial al arranque: credenciales de la
+// GitHub App (se validan al conectar el primer repo — F1) y topes de pipeline.
+type Stage2Config struct {
+	GitHubAppID         string
+	GitHubAppPrivateKey string
+	GitHubWebhookSecret string
+	WorkdirDiskBudget   int64  // bytes por workdir de job (§3.3)
+	DiffMaxLines        int    // tope de diff solo-resumen (§9.6)
+	MasterKeyPrevious   []byte // rotación de master key (§9.2), opcional
+}
+
+// ValidateGitHub verifica que las credenciales de la App estén completas.
+// Se llama al conectar el primer repo GitHub (guía §6 F1), no al arranque.
+func (s Stage2Config) ValidateGitHub() error {
+	var faltan []string
+	if s.GitHubAppID == "" {
+		faltan = append(faltan, "GITHUB_APP_ID")
+	}
+	if s.GitHubAppPrivateKey == "" {
+		faltan = append(faltan, "GITHUB_APP_PRIVATE_KEY")
+	}
+	if s.GitHubWebhookSecret == "" {
+		faltan = append(faltan, "GITHUB_WEBHOOK_SECRET")
+	}
+	if len(faltan) > 0 {
+		return fmt.Errorf("credenciales de GitHub App incompletas, faltan: %s", strings.Join(faltan, ", "))
+	}
+	return nil
+}
+
+// Load carga la configuración del entorno. Falla rápido listando todos los
+// errores encontrados, no solo el primero.
+func Load() (*Config, error) {
+	var errs []string
+
+	cfg := &Config{}
+	cfg.APIAddr = envOr("API_ADDR", DefaultAPIAddr)
+
+	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
+	if cfg.DatabaseURL == "" {
+		errs = append(errs, "DATABASE_URL es obligatorio")
+	}
+
+	key, err := loadKey("MASTER_KEY", true)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	cfg.MasterKey = key
+
+	ttl, err := loadDuration("SESSION_TTL", DefaultSessionTTL)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	cfg.SessionTTL = ttl
+
+	minLen, err := loadInt("PASSWORD_MIN_LENGTH", DefaultPasswordMinLength)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if minLen < 1 {
+		errs = append(errs, "PASSWORD_MIN_LENGTH debe ser mayor o igual a 1")
+	}
+	cfg.PasswordMinLength = minLen
+
+	user, err := secret("ADMIN_USERNAME")
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if user == "" {
+		errs = append(errs, "ADMIN_USERNAME es obligatorio (seed del admin, guía §3.4)")
+	}
+	cfg.AdminUsername = user
+
+	pass, err := secret("ADMIN_PASSWORD")
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if pass == "" {
+		errs = append(errs, "ADMIN_PASSWORD es obligatorio (seed del admin, guía §3.4)")
+	}
+	cfg.AdminPassword = pass
+
+	// Etapa 2: presente con formato inválido falla el arranque; ausente es válido.
+	s2 := Stage2Config{}
+	s2.GitHubAppID = os.Getenv("GITHUB_APP_ID")
+
+	priv, err := secret("GITHUB_APP_PRIVATE_KEY")
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.GitHubAppPrivateKey = priv
+
+	whSecret, err := secret("GITHUB_WEBHOOK_SECRET")
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.GitHubWebhookSecret = whSecret
+
+	prev, err := loadKey("MASTER_KEY_PREVIOUS", false)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.MasterKeyPrevious = prev
+
+	budget, err := loadDiskSize("WORKDIR_DISK_BUDGET", DefaultWorkdirDiskBudget)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.WorkdirDiskBudget = budget
+
+	diffMax, err := loadInt("DIFF_MAX_LINES", DefaultDiffMaxLines)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if diffMax < 1 {
+		errs = append(errs, "DIFF_MAX_LINES debe ser mayor o igual a 1")
+	}
+	s2.DiffMaxLines = diffMax
+
+	cfg.Stage2 = s2
+
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("configuración inválida:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return cfg, nil
+}
+
+// secret devuelve el valor directo de la variable o, si está seteada, el
+// contenido de su variante _FILE (§9.2; la variante gana — en Quadlet siempre
+// se usa _FILE). Un _FILE vacío equivale a no seteado (convención de
+// .env.example). El contenido se recorta.
+func secret(name string) (string, error) {
+	if file := os.Getenv(name + "_FILE"); file != "" {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("%s_FILE: no se pudo leer %q: %w", name, file, err)
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	return os.Getenv(name), nil
+}
+
+// loadKey carga una master key: vacía si es opcional y no está seteada;
+// base64 de masterKeySize bytes si está presente (guía §9.2).
+func loadKey(name string, required bool) ([]byte, error) {
+	raw, err := secret(name)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		if required {
+			return nil, fmt.Errorf("%s es obligatoria (base64 de %d bytes — generala con: openssl rand -base64 %d)", name, masterKeySize, masterKeySize)
+		}
+		return nil, nil
+	}
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s debe ser base64 válido (generala con: openssl rand -base64 %d)", name, masterKeySize)
+	}
+	if len(key) != masterKeySize {
+		return nil, fmt.Errorf("%s debe decodificar a exactamente %d bytes (tiene %d)", name, masterKeySize, len(key))
+	}
+	return key, nil
+}
+
+func loadDuration(name string, def time.Duration) (time.Duration, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s debe ser una duración válida (ej. 24h, 30m): %v", name, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s debe ser mayor a cero", name)
+	}
+	return d, nil
+}
+
+func loadInt(name string, def int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s debe ser un entero: %v", name, err)
+	}
+	return n, nil
+}
+
+// loadDiskSize interpreta tamaños tipo "2GiB", "512MiB", "1.5GiB" o bytes
+// planos (guía §3.3: presupuesto de disco por workdir).
+func loadDiskSize(name string, def int64) (int64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def, nil
+	}
+	units := []struct {
+		suf  string
+		mult float64
+	}{
+		{"KIB", 1 << 10}, {"MIB", 1 << 20}, {"GIB", 1 << 30}, {"TIB", 1 << 40},
+	}
+	up := strings.ToUpper(raw)
+	for _, u := range units {
+		if strings.HasSuffix(up, u.suf) {
+			n, err := strconv.ParseFloat(strings.TrimSpace(raw[:len(raw)-len(u.suf)]), 64)
+			if err != nil {
+				return 0, fmt.Errorf("%s debe ser un tamaño como 2GiB, 512MiB o bytes planos", name)
+			}
+			return int64(n * u.mult), nil
+		}
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%s debe ser un tamaño como 2GiB, 512MiB o bytes planos", name)
+	}
+	return n, nil
+}
+
+func envOr(name, def string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return def
+}

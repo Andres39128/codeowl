@@ -1,0 +1,89 @@
+// Servidor HTTP de codeowl: webhooks VCS + REST del dashboard (mapa: servicios.api).
+// F0: configuración esencial, migraciones, seed del admin y healthcheck —
+// las rutas reales (auth, webhooks, REST) aterrizan en T4.
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/Andres39128/codeowl/backend/internal/config"
+	"github.com/Andres39128/codeowl/backend/internal/store"
+	"github.com/Andres39128/codeowl/backend/migrations"
+)
+
+// shutdownGrace es la ventana para drenar conexiones al recibir SIGTERM.
+const shutdownGrace = 10 * time.Second
+
+func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil))) // logs JSON (§9.9)
+
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("configuración inválida", "err", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("no se pudo conectar a la base de datos", "err", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+	if err := st.Ping(ctx); err != nil {
+		slog.Error("la base de datos no responde", "err", err)
+		os.Exit(1)
+	}
+
+	// Migraciones forward-only (§3.3) antes de servir: el schema de River entra
+	// acá también — la tabla de jobs existe desde F0 (§6 F0).
+	if err := store.Migrate(cfg.DatabaseURL, migrations.FS); err != nil {
+		slog.Error("migraciones", "err", err)
+		os.Exit(1)
+	}
+
+	if err := store.SeedAdmin(ctx, st, cfg); err != nil {
+		slog.Error("seed del admin", "err", err)
+		os.Exit(1)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", handleHealthz)
+
+	srv := &http.Server{
+		Addr:              cfg.APIAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: shutdownGrace,
+	}
+
+	go func() {
+		slog.Info("api listening " + cfg.APIAddr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("sirviendo http", "err", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+	slog.Info("apagando la api")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("apagado ordenado", "err", err)
+	}
+}
+
+// handleHealthz responde 200 con JSON mínimo para el healthcheck de F0.
+func handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+}
