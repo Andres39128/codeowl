@@ -55,8 +55,10 @@ jobs:
           node-version: 24
 
       - if: ${{ hashFiles('dashboard/package.json') != '' }}
-        name: Enable pnpm (corepack)
-        run: corepack enable
+        name: Enable pnpm (corepack, pinned to match lockfile)
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.8.0 --activate
 
       - if: ${{ hashFiles('dashboard/package.json') != '' }}
         name: Install dependencies
