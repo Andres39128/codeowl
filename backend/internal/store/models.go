@@ -59,6 +59,102 @@ func (ns NullRiverJobState) Value() (driver.Value, error) {
 	return string(ns.RiverJobState), nil
 }
 
+type CommentsSent struct {
+	ID              int64
+	PullRequestID   int64
+	ReviewID        pgtype.Int8
+	CommentID       string
+	Type            string
+	File            pgtype.Text
+	Category        pgtype.Text
+	Anchor          pgtype.Text
+	ParentCommentID pgtype.Text
+	CreatedAt       pgtype.Timestamptz
+}
+
+type Finding struct {
+	ID         int64
+	ReviewID   int64
+	File       string
+	Line       int32
+	Severity   string
+	Category   string
+	Body       string
+	Suggestion pgtype.Text
+	Source     string
+	Verified   pgtype.Bool
+	CreatedAt  pgtype.Timestamptz
+}
+
+type LlmProvider struct {
+	ID        int64
+	BaseUrl   string
+	Model     string
+	ApiKey    string
+	Role      string
+	Priority  int32
+	Enabled   bool
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type LlmUsage struct {
+	ID        int64
+	JobID     pgtype.Int8
+	Role      string
+	Provider  string
+	Model     string
+	TokensIn  int32
+	TokensOut int32
+	CreatedAt pgtype.Timestamptz
+}
+
+type PullRequest struct {
+	ID           int64
+	RepositoryID int64
+	Number       int64
+	Author       string
+	State        string
+	HeadSha      string
+	BaseRef      string
+	BaseSha      string
+	MergedAt     pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type Repository struct {
+	ID            int64
+	Vcs           string
+	ExternalID    int64
+	Owner         string
+	Name          string
+	WebhookSecret pgtype.Text
+	SecretToken   pgtype.Text
+	ApiToken      pgtype.Text
+	BaseUrl       pgtype.Text
+	DeployKey     pgtype.Text
+	Enabled       bool
+	ReviewDrafts  bool
+	Language      string
+	ChatOrgOnly   bool
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type Review struct {
+	ID            int64
+	PullRequestID int64
+	HeadSha       string
+	BaseSha       string
+	Summary       string
+	Walkthrough   string
+	Mermaid       string
+	Status        string
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type RiverJob struct {
 	ID           int64
 	State        RiverJobState
@@ -125,4 +221,11 @@ type User struct {
 	Disabled           bool
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
+}
+
+type WebhookDelivery struct {
+	ID         int64
+	Vcs        string
+	DeliveryID string
+	CreatedAt  pgtype.Timestamptz
 }

@@ -85,7 +85,12 @@ func TestMigrateSobreBDEmpiezaLimpiaYEsIdempotente(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	for _, tabla := range []string{"users", "sessions", "river_job", "river_queue", "river_migration", "schema_migrations"} {
+	// Tablas núcleo: F0 (users/sessions/River) + F1 (guía §3.3, migración 0003).
+	for _, tabla := range []string{
+		"users", "sessions", "river_job", "river_queue", "river_migration", "schema_migrations",
+		"llm_providers", "repositories", "pull_requests", "reviews",
+		"findings", "comments_sent", "webhook_deliveries", "llm_usage",
+	} {
 		var n int
 		if err := st.Pool.QueryRow(context.Background(),
 			"SELECT COUNT(1) FROM information_schema.tables WHERE table_name = $1", tabla).Scan(&n); err != nil || n != 1 {
