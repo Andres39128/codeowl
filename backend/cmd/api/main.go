@@ -1,6 +1,6 @@
 // Servidor HTTP de codeowl: webhooks VCS + REST del dashboard (mapa: servicios.api).
-// F0: configuración esencial, migraciones, seed del admin y healthcheck —
-// las rutas reales (auth, webhooks, REST) aterrizan en T4.
+// F0: configuración esencial, migraciones, seed del admin y la superficie de
+// auth (login/logout/session + healthz); webhooks y REST de settings en F1+.
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Andres39128/codeowl/backend/internal/api"
 	"github.com/Andres39128/codeowl/backend/internal/config"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/migrations"
@@ -56,12 +57,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
-
+	// Routing y middleware (auth, logging, recover) viven en internal/api.
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           mux,
+		Handler:           api.New(st, cfg).Routes(),
 		ReadHeaderTimeout: shutdownGrace,
 	}
 
@@ -80,10 +79,4 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("apagado ordenado", "err", err)
 	}
-}
-
-// handleHealthz responde 200 con JSON mínimo para el healthcheck de F0.
-func handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
 }

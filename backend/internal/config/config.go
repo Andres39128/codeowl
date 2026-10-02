@@ -24,6 +24,7 @@ const (
 	DefaultAPIAddr           = ":8080"
 	DefaultSessionTTL        = 24 * time.Hour
 	DefaultPasswordMinLength = 12
+	DefaultLoginMaxFails     = 5       // §3.4: backoff de login tras N fallos por usuario
 	DefaultWorkdirDiskBudget = 2 << 30 // 2 GiB
 	DefaultDiffMaxLines      = 4000
 )
@@ -37,6 +38,7 @@ type Config struct {
 	MasterKey         []byte
 	SessionTTL        time.Duration
 	PasswordMinLength int
+	LoginMaxFails     int // fallos consecutivos antes del backoff (§3.4)
 	AdminUsername     string
 	AdminPassword     string
 	Stage2            Stage2Config
@@ -104,6 +106,14 @@ func Load() (*Config, error) {
 		errs = append(errs, "PASSWORD_MIN_LENGTH debe ser mayor o igual a 1")
 	}
 	cfg.PasswordMinLength = minLen
+
+	maxFails, err := loadInt("LOGIN_MAX_FAILS", DefaultLoginMaxFails)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if maxFails < 1 {
+		errs = append(errs, "LOGIN_MAX_FAILS debe ser mayor o igual a 1")
+	}
+	cfg.LoginMaxFails = maxFails
 
 	user, err := secret("ADMIN_USERNAME")
 	if err != nil {
