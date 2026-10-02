@@ -1,0 +1,72 @@
+# CI de Fase 0 (guia 6 F0): lint + build + test en backend y dashboard,
+# reutilizando las recetas del justfile (guia 3.2).
+# Reglas de tests (guia 8): CI determinista - sin llamadas a proveedores LLM reales.
+# Nota: hashFiles en if de JOB es rechazado por el parser de workflows; las
+# guardas viven a nivel step y el checkout va siempre sin guarda (hashFiles
+# necesita el workspace poblado).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        uses: extractions/setup-just@v2
+
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27" # guia 2 (stack): Go 1.27
+
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        name: Install golangci-lint
+        # v2.14.0 es la primera linea construida con go1.27 - versiones previas
+        # rechazan un modulo `go 1.27`.
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh |
+            sh -s -- -b "$(go env GOPATH)/bin" v2.14.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        run: just lint backend
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        run: just build backend
+      - if: ${{ hashFiles('backend/cmd/api/main.go') != '' }}
+        run: just test backend
+
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        uses: extractions/setup-just@v2
+
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        name: Enable pnpm (corepack, pinned to match lockfile)
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.8.0 --activate
+
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        name: Install dependencies
+        run: pnpm --dir dashboard install --frozen-lockfile
+
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        run: just lint dashboard
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        run: just build dashboard
+      - if: ${{ hashFiles('dashboard/package.json') != '' }}
+        run: just test dashboard

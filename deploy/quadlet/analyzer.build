@@ -1,0 +1,12 @@
+# =============================================================================
+# analyzer.build — fuente Quadlet para el build de la imagen del sandbox
+# (mapa servicios.analyzer: tree-sitter + linters, sin red; fase F1).
+# Genera la unidad oneshot analyzer-build.service (verificado con el generador
+# de podman 5.7). §9.13: la imagen no viaja preconstruida — `just deploy` sube
+# la fuente (analyzer/) y la reconstruye en el VPS con esta unidad.
+# Contexto de build: ~/opt/codeowl/analyzer (último argumento posicional).
+# =============================================================================
+[Build]
+ImageTag=localhost/codeowl-analyzer:latest
+File=%h/opt/codeowl/analyzer/Containerfile
+PodmanArgs=%h/opt/codeowl/analyzer
