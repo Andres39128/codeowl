@@ -61,3 +61,10 @@ Forecast: >400 líneas autoradas (Fase 0 es un phase completo). Estrategia: `ask
 ## Criterios de aceptación
 
 Checklist F0 §6 completo y verificado; docs actualizados primero; cada tarea cierra con commit work-unit Conventional Commit en `fase-0`.
+
+## Entrega (resuelta)
+
+- Estrategia: `ask-on-risk` → usuario eligió **PRs encadenados por tarea** + **stacked-to-main** (sin tracker).
+- Docs convergidas: merge ff a main (f845e6fa77ae). 4 branches acumulativas, todas → main, merge en orden; tras cada merge el diff del siguiente se reduce.
+- Todos los slices superan 400 líneas (una pasada honesta de slicing: T3 sin config/migraciones no compila; River schema es vendor verbatim) → `size:exception` aceptado por el maintainer en cada PR.
+- Issues: #1 (T1+T2 tooling), #2 (T3 backend), #3 (T4 auth), #4 (T5+T6 dashboard) — status:approved.
