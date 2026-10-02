@@ -37,7 +37,7 @@ func TestForwardSourceParseaMigracionesReales(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadUp(1): %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	if id == "" {
 		t.Error("ReadUp debe devolver el identificador")
 	}

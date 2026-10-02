@@ -30,7 +30,7 @@ func Migrate(databaseURL string, migrationsFS fs.FS) error {
 	}
 	connConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	db := stdlib.OpenDB(*connConfig)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	src, err := newForwardSource(migrationsFS)
 	if err != nil {
