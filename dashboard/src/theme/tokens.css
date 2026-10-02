@@ -1,0 +1,75 @@
+/*
+ * Tokens de diseño por rol (guía §5.1) — único lugar con valores de color.
+ * Temas activos por atributo data-theme en <html>: :root = claro,
+ * [data-theme="dark"] = oscuro. El default inicial lo fija el script inline
+ * de index.html (localStorage → prefers-color-scheme).
+ *
+ * Los componentes nunca leen estos valores: usan las utilidades de Tailwind
+ * generadas por el mapeo @theme inline de acá abajo (guía §5.1).
+ */
+
+:root {
+	--bg-base: #fdf6ec; /* fondo general */
+	--bg-surface: #faf0df; /* cards, paneles, tablas */
+	--bg-elevated: #ffffff; /* sidebar, headers, modals */
+	--text-primary: #16341f; /* texto principal (12.7:1) */
+	--text-muted: #4a6b58; /* texto secundario (≥ 4.5:1) */
+	--action-primary: #2e6b4f; /* botones primarios, links activos */
+	--action-primary-text: #ffffff; /* texto sobre botón primario (6.3:1) */
+	--border-subtle: #8fbf9f; /* bordes suaves, dividers — decorativo (§5.2) */
+	--accent: #c2611a; /* focus rings, highlights, indicadores (≥ 3:1 no-texto) */
+	--severity-alta: #b3261e; /* error / riesgo alto (≥ 4.5:1) */
+	--severity-media: #92400e; /* warning / riesgo medio (≥ 4.5:1) */
+	--severity-baja: #1e6b3c; /* success / riesgo bajo (≥ 4.5:1) */
+}
+
+[data-theme="dark"] {
+	--bg-base: #0e1f16;
+	--bg-surface: #142b1d;
+	--bg-elevated: #1c3a28;
+	--text-primary: #f2e8d8; /* 14.1:1 */
+	--text-muted: #a8c4b2;
+	--action-primary: #8fbf9f;
+	--action-primary-text: #0e1f16; /* 8.3:1 */
+	--border-subtle: #2e4a3a;
+	--accent: #e8853d;
+	--severity-alta: #f87171;
+	--severity-media: #fbbf24;
+	--severity-baja: #4ade80;
+}
+
+/* Mapeo a Tailwind v4: `inline` hace que las utilidades referencien la
+ * variable por nombre (var(--bg-base)) y reaccionen al data-theme en vivo. */
+@theme inline {
+	--color-bg-base: var(--bg-base);
+	--color-bg-surface: var(--bg-surface);
+	--color-bg-elevated: var(--bg-elevated);
+	--color-text-primary: var(--text-primary);
+	--color-text-muted: var(--text-muted);
+	--color-action-primary: var(--action-primary);
+	--color-action-primary-text: var(--action-primary-text);
+	--color-border-subtle: var(--border-subtle);
+	--color-accent: var(--accent);
+	--color-severity-alta: var(--severity-alta);
+	--color-severity-media: var(--severity-media);
+	--color-severity-baja: var(--severity-baja);
+
+	/* Tipografía: system stack sin webfonts (guía §5.2.5). La escala
+   * 12/14/16/20/24 es la de text-xs/sm/base/xl/2xl por defecto de v4. */
+	--font-sans:
+		-apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@layer base {
+	body {
+		background-color: var(--bg-base);
+		color: var(--text-primary);
+		line-height: 1.5;
+	}
+
+	/* Focus ring naranja 2px en todo interactivo, ambos temas (guía §5.2.4). */
+	:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+}
