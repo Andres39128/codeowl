@@ -21,23 +21,28 @@ import (
 
 // Defaults de .env.example (guía §3.3/§3.4: materializados desde F0).
 const (
-	DefaultAPIAddr           = ":8080"
-	DefaultSessionTTL        = 24 * time.Hour
-	DefaultPasswordMinLength = 12
-	DefaultLoginMaxFails     = 5       // §3.4: backoff de login tras N fallos por usuario
-	DefaultWorkdirDiskBudget = 2 << 30 // 2 GiB
-	DefaultDiffMaxLines      = 4000
-	DefaultLLMMaxPerReview   = 4                 // §9.6: llamadas LLM simultáneas por review
-	DefaultLLMMaxGlobal      = 8                 // §9.6: llamadas LLM simultáneas del gateway
-	DefaultLLMTimeout        = 120 * time.Second // §9.7: timeout por llamada LLM
-	DefaultLLMMaxRetries     = 3                 // §9.7: reintentos por proveedor ante 429/5xx
-	DefaultWebhookMaxBytes   = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
-	DefaultVCSTimeout        = 30 * time.Second  // timeout por llamada HTTP al VCS
-	DefaultAnalyzerImage     = "localhost/codeowl-analyzer:latest"
-	DefaultAnalyzerMemory    = "1g"              // §9.4: tope de RAM del sandbox
-	DefaultAnalyzerPidsLimit = 256               // §9.4: tope de procesos del sandbox
-	DefaultAnalyzerTimeout   = 120 * time.Second // timeout duro del sandbox (§9.4)
-	DefaultAnalyzerTmpfsSize = "512m"            // §9.4: tmpfs de /tmp para caches de linters
+	DefaultAPIAddr               = ":8080"
+	DefaultSessionTTL            = 24 * time.Hour
+	DefaultPasswordMinLength     = 12
+	DefaultLoginMaxFails         = 5       // §3.4: backoff de login tras N fallos por usuario
+	DefaultWorkdirDiskBudget     = 2 << 30 // 2 GiB
+	DefaultDiffMaxLines          = 4000
+	DefaultDiffFileMaxLines      = 1000              // §9.6: tope análogo por archivo (solo SAST)
+	DefaultReviewAgentRetries    = 2                 // §9.8: reintentos por salida malformada del agente
+	DefaultReviewDriftLines      = 3                 // §3.6.3: tolerancia de drift del ancla de dedup
+	DefaultReviewCacheTTL        = time.Hour         // §9.6: TTL de la cache de resultados
+	DefaultReviewCacheMaxEntries = 100               // §9.6: tope de entradas de la cache
+	DefaultLLMMaxPerReview       = 4                 // §9.6: llamadas LLM simultáneas por review
+	DefaultLLMMaxGlobal          = 8                 // §9.6: llamadas LLM simultáneas del gateway
+	DefaultLLMTimeout            = 120 * time.Second // §9.7: timeout por llamada LLM
+	DefaultLLMMaxRetries         = 3                 // §9.7: reintentos por proveedor ante 429/5xx
+	DefaultWebhookMaxBytes       = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
+	DefaultVCSTimeout            = 30 * time.Second  // timeout por llamada HTTP al VCS
+	DefaultAnalyzerImage         = "localhost/codeowl-analyzer:latest"
+	DefaultAnalyzerMemory        = "1g"              // §9.4: tope de RAM del sandbox
+	DefaultAnalyzerPidsLimit     = 256               // §9.4: tope de procesos del sandbox
+	DefaultAnalyzerTimeout       = 120 * time.Second // timeout duro del sandbox (§9.4)
+	DefaultAnalyzerTmpfsSize     = "512m"            // §9.4: tmpfs de /tmp para caches de linters
 )
 
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
@@ -61,9 +66,15 @@ type Stage2Config struct {
 	GitHubAppID         string
 	GitHubAppPrivateKey string
 	GitHubWebhookSecret string
-	WorkdirDiskBudget   int64  // bytes por workdir de job (§3.3)
-	DiffMaxLines        int    // tope de diff solo-resumen (§9.6)
-	MasterKeyPrevious   []byte // rotación de master key (§9.2), opcional
+	WorkdirDiskBudget   int64 // bytes por workdir de job (§3.3)
+	DiffMaxLines        int   // tope de diff solo-resumen (§9.6)
+	DiffFileMaxLines    int   // tope de diff por archivo: solo SAST (§9.6)
+	// Topes del pipeline de review (§3.6/§9.6/§9.8): los consumen internal/review.
+	ReviewAgentRetries    int           // reintentos por salida malformada del agente
+	ReviewDriftLines      int           // tolerancia de drift del ancla de dedup (±N líneas)
+	ReviewCacheTTL        time.Duration // TTL de la cache de resultados
+	ReviewCacheMaxEntries int           // tope de entradas de la cache
+	MasterKeyPrevious     []byte        // rotación de master key (§9.2), opcional
 	// Topes del gateway LLM (§9.6/§9.7): los consumen internal/llm.
 	LLMMaxPerReview int
 	LLMMaxGlobal    int
@@ -191,6 +202,44 @@ func Load() (*Config, error) {
 		errs = append(errs, "DIFF_MAX_LINES debe ser mayor o igual a 1")
 	}
 	s2.DiffMaxLines = diffMax
+
+	fileMax, err := loadInt("DIFF_FILE_MAX_LINES", DefaultDiffFileMaxLines)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if fileMax < 1 {
+		errs = append(errs, "DIFF_FILE_MAX_LINES debe ser mayor o igual a 1")
+	}
+	s2.DiffFileMaxLines = fileMax
+
+	agentRetries, err := loadInt("REVIEW_AGENT_RETRIES", DefaultReviewAgentRetries)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if agentRetries < 0 {
+		errs = append(errs, "REVIEW_AGENT_RETRIES debe ser mayor o igual a 0")
+	}
+	s2.ReviewAgentRetries = agentRetries
+
+	drift, err := loadInt("REVIEW_DRIFT_LINES", DefaultReviewDriftLines)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if drift < 0 {
+		errs = append(errs, "REVIEW_DRIFT_LINES debe ser mayor o igual a 0")
+	}
+	s2.ReviewDriftLines = drift
+
+	cacheTTL, err := loadDuration("REVIEW_CACHE_TTL", DefaultReviewCacheTTL)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.ReviewCacheTTL = cacheTTL
+
+	cacheMax, err := loadInt("REVIEW_CACHE_MAX_ENTRIES", DefaultReviewCacheMaxEntries)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if cacheMax < 1 {
+		errs = append(errs, "REVIEW_CACHE_MAX_ENTRIES debe ser mayor o igual a 1")
+	}
+	s2.ReviewCacheMaxEntries = cacheMax
 
 	maxPerReview, err := loadInt("LLM_MAX_PER_REVIEW", DefaultLLMMaxPerReview)
 	if err != nil {

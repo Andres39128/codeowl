@@ -16,6 +16,11 @@ SET author = EXCLUDED.author,
     updated_at = now()
 RETURNING *;
 
+-- name: GetPullRequest :one
+-- Por ID: el pipeline de review resuelve la fila desde el job (§3.6.1.3 —
+-- re-chequeo de la identidad de la corrida contra el estado actual del PR).
+SELECT * FROM pull_requests WHERE id = $1;
+
 -- name: GetPullRequestByRepoNumber :one
 SELECT * FROM pull_requests WHERE repository_id = $1 AND number = $2;
 

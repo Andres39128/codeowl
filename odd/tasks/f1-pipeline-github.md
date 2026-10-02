@@ -35,7 +35,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
 - [x] T3 — feat: internal/vcs GitHub adapter (ruta: delegado) — commit 4a5872cf2f99; 70 tests verde (15 webhook + 2 mapeo + 1 wiring); instalación token JWT RS256 cache; filtro eventos §3.5 completo
   - VCSProvider contract (interface); github.VCSProvider: HandleWebhook (firma HMAC-SHA256, filtro eventos, dedup delivery ID, upsert PR, enqueue ReviewJob); FetchPR (clon shallow + merge-base); PostInlineComment, PostSummary; instalación token efímero
   - Verificación: tests con payloads firmados de fixtures
-- [ ] T4 — feat: internal/analyze + analyzer Containerfile (ruta: delegado)
+- [x] T4 — feat: internal/analyze + analyzer Containerfile (ruta: delegado) — commit 8381a343fc06; 5 linters pinned, CLI standalone, tmpfs (§9.4), configs hostiles ignorados, secrets enmascarados
   - Containerfile: tree-sitter + 5 linters pinned, --network=none --read-only, configs propios de la imagen
   - internal/analyze: cliente del contenedor, normalización JSON (severidad mapeada al conjunto cerrado), reporte qué corrió/saltó
   - Verificación: build de imagen + test del CLI con repo fixture

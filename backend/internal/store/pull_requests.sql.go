@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getPullRequest = `-- name: GetPullRequest :one
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at FROM pull_requests WHERE id = $1
+`
+
+// Por ID: el pipeline de review resuelve la fila desde el job (§3.6.1.3 —
+// re-chequeo de la identidad de la corrida contra el estado actual del PR).
+func (q *Queries) GetPullRequest(ctx context.Context, id int64) (PullRequest, error) {
+	row := q.db.QueryRow(ctx, getPullRequest, id)
+	var i PullRequest
+	err := row.Scan(
+		&i.ID,
+		&i.RepositoryID,
+		&i.Number,
+		&i.Author,
+		&i.State,
+		&i.HeadSha,
+		&i.BaseRef,
+		&i.BaseSha,
+		&i.MergedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPullRequestByRepoNumber = `-- name: GetPullRequestByRepoNumber :one
 SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at FROM pull_requests WHERE repository_id = $1 AND number = $2
 `
