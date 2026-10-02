@@ -27,6 +27,10 @@ const (
 	DefaultLoginMaxFails     = 5       // §3.4: backoff de login tras N fallos por usuario
 	DefaultWorkdirDiskBudget = 2 << 30 // 2 GiB
 	DefaultDiffMaxLines      = 4000
+	DefaultLLMMaxPerReview   = 4                 // §9.6: llamadas LLM simultáneas por review
+	DefaultLLMMaxGlobal      = 8                 // §9.6: llamadas LLM simultáneas del gateway
+	DefaultLLMTimeout        = 120 * time.Second // §9.7: timeout por llamada LLM
+	DefaultLLMMaxRetries     = 3                 // §9.7: reintentos por proveedor ante 429/5xx
 )
 
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
@@ -53,6 +57,11 @@ type Stage2Config struct {
 	WorkdirDiskBudget   int64  // bytes por workdir de job (§3.3)
 	DiffMaxLines        int    // tope de diff solo-resumen (§9.6)
 	MasterKeyPrevious   []byte // rotación de master key (§9.2), opcional
+	// Topes del gateway LLM (§9.6/§9.7): los consumen internal/llm.
+	LLMMaxPerReview int
+	LLMMaxGlobal    int
+	LLMTimeout      time.Duration
+	LLMMaxRetries   int
 }
 
 // ValidateGitHub verifica que las credenciales de la App estén completas.
@@ -166,6 +175,36 @@ func Load() (*Config, error) {
 		errs = append(errs, "DIFF_MAX_LINES debe ser mayor o igual a 1")
 	}
 	s2.DiffMaxLines = diffMax
+
+	maxPerReview, err := loadInt("LLM_MAX_PER_REVIEW", DefaultLLMMaxPerReview)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if maxPerReview < 1 {
+		errs = append(errs, "LLM_MAX_PER_REVIEW debe ser mayor o igual a 1")
+	}
+	s2.LLMMaxPerReview = maxPerReview
+
+	maxGlobal, err := loadInt("LLM_MAX_GLOBAL", DefaultLLMMaxGlobal)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if maxGlobal < 1 {
+		errs = append(errs, "LLM_MAX_GLOBAL debe ser mayor o igual a 1")
+	}
+	s2.LLMMaxGlobal = maxGlobal
+
+	llmTimeout, err := loadDuration("LLM_TIMEOUT", DefaultLLMTimeout)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.LLMTimeout = llmTimeout
+
+	maxRetries, err := loadInt("LLM_MAX_RETRIES", DefaultLLMMaxRetries)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if maxRetries < 0 {
+		errs = append(errs, "LLM_MAX_RETRIES debe ser mayor o igual a 0")
+	}
+	s2.LLMMaxRetries = maxRetries
 
 	cfg.Stage2 = s2
 

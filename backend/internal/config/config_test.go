@@ -21,6 +21,7 @@ func setStage1(t *testing.T) {
 		"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY_FILE",
 		"GITHUB_WEBHOOK_SECRET", "GITHUB_WEBHOOK_SECRET_FILE",
 		"WORKDIR_DISK_BUDGET", "DIFF_MAX_LINES",
+		"LLM_MAX_PER_REVIEW", "LLM_MAX_GLOBAL", "LLM_TIMEOUT", "LLM_MAX_RETRIES",
 		"MASTER_KEY_PREVIOUS", "MASTER_KEY_PREVIOUS_FILE",
 	} {
 		t.Setenv(name, "")
@@ -136,6 +137,18 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Stage2.WorkdirDiskBudget != 2<<30 {
 		t.Errorf("WORKDIR_DISK_BUDGET default: got %d want 2GiB", cfg.Stage2.WorkdirDiskBudget)
 	}
+	if cfg.Stage2.LLMMaxPerReview != 4 {
+		t.Errorf("LLM_MAX_PER_REVIEW default: got %d want 4 (§9.6)", cfg.Stage2.LLMMaxPerReview)
+	}
+	if cfg.Stage2.LLMMaxGlobal != 8 {
+		t.Errorf("LLM_MAX_GLOBAL default: got %d want 8 (§9.6)", cfg.Stage2.LLMMaxGlobal)
+	}
+	if cfg.Stage2.LLMTimeout != 120*time.Second {
+		t.Errorf("LLM_TIMEOUT default: got %v want 120s (§9.7)", cfg.Stage2.LLMTimeout)
+	}
+	if cfg.Stage2.LLMMaxRetries != 3 {
+		t.Errorf("LLM_MAX_RETRIES default: got %d want 3 (§9.7)", cfg.Stage2.LLMMaxRetries)
+	}
 }
 
 func TestLoadMasterKeyInvalida(t *testing.T) {
@@ -200,6 +213,24 @@ func TestLoadEtapa2InvalidaFallaElArranque(t *testing.T) {
 	t.Setenv("SESSION_TTL", "5x")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SESSION_TTL") {
 		t.Errorf("SESSION_TTL inválido debe fallar mencionando el nombre: %v", err)
+	}
+
+	setStage1(t)
+	t.Setenv("LLM_MAX_PER_REVIEW", "abc")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LLM_MAX_PER_REVIEW") {
+		t.Errorf("LLM_MAX_PER_REVIEW inválido debe fallar mencionando el nombre: %v", err)
+	}
+
+	setStage1(t)
+	t.Setenv("LLM_MAX_GLOBAL", "0")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LLM_MAX_GLOBAL") {
+		t.Errorf("LLM_MAX_GLOBAL=0 debe fallar: el tope global no puede ser cero: %v", err)
+	}
+
+	setStage1(t)
+	t.Setenv("LLM_TIMEOUT", "5x")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LLM_TIMEOUT") {
+		t.Errorf("LLM_TIMEOUT inválido debe fallar mencionando el nombre: %v", err)
 	}
 }
 

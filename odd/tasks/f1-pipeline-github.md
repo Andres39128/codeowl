@@ -25,7 +25,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
 
 ## Tareas
 
-- [ ] T1 — feat: migraciones F1 + store (8 tablas nuevas + queries) (ruta: delegado)
+- [x] T1 — feat: migraciones F1 + store (ruta: delegado) — commit 7ad757269fa3; 8 tablas, 35 queries, 21 tests (14 previos + 7 nuevos); migración BD limpia OK (16 tablas, version=3); spot check orquestador build/vet/test OK
   - Migración 0003: llm_providers, repositories, pull_requests, reviews, findings, comments_sent, webhook_deliveries, llm_usage
   - Queries sqlc para CRUD de cada tabla
   - Verificación: `go build ./...`, `go test ./...`, migración sobre BD limpia
