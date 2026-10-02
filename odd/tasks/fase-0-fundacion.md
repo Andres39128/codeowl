@@ -46,12 +46,17 @@ Forecast: >400 líneas autoradas (Fase 0 es un phase completo). Estrategia: `ask
 - [ ] T5 — feat: dashboard shell (ruta: delegado)
   - Vite + Preact (compat) + Tailwind v4 tokens §5.1 (light/dark persistido), login funcional, nav vacía, Button/Badge/Table, `lib/apiClient` + `useSession`.
   - Verificación: `pnpm build`, tests si aplica. Commit.
-- [ ] T6 — verify: pasada final (ruta: inline + spot check)
-  - Build+test backend y dashboard, `just dev` best-effort (podman pull), regla de coincidencia mapa §3.2, RDD assess por commit, reporte honesto.
+- [x] T5 — feat: dashboard shell (ruta: delegado) — commit "feat(dashboard): fase-0 shell..."; 23/23 tests, build 57KB JS (gzip 19KB), lint biome OK; 12/12 tokens × 2 temas con contraste AA verificado computacionalmente; desviaciones a favor de la guía (data-theme, UI español §4.7, rutas del mapa).
+- [x] T6 — verify: pasada final (ruta: inline + spot check) — backend build/vet/test 35/35; dashboard build/test/lint OK; smoke live: postgres healthy, healthz ok, login 401 en credencial inválida, round-trip login→logout verificado (T4/T5); coincidencia mapa §3.2 COMPLETA (config/store/api/jobs + lib/components/theme/features/auth en rutas exactas; F1+ ausente como corresponde); CI validado (se activa por hashFiles al pushear).
 
 ## Evidencia de progreso
 
-(se llena por tarea: commit, checks, resultado RDD)
+- T1 commit 915ee48562bd — 4 ajustes doc, YAML OK, assess medium/under_budget
+- T2 commit c52a24a29717 — assess high → consent DECLINED por usuario (ese candidato)
+- T3 commit a1ea1aa67717 — assess high → GRANTED → transacción 4R review-c82811c6492a95b9 → stop `unachievable_lens_slot` (transporte; risk+readability capturados, resilience+reliability 3x vacíos) → usuario: review PENDIENTE, continuar
+- T4 commit 2186a6cb2aec — assess high/3856 líneas → review pendiente por instrucción de sesión
+- T5 commit 5d727cf9debd — review pendiente por instrucción de sesión
+- Boundary RDD SIN avances en toda la fase (sigue f845e6fa77ae): ningún receipt emitido. Total: 69 archivos, ~8100 líneas.
 
 ## Criterios de aceptación
 
