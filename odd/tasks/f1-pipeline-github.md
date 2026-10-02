@@ -29,7 +29,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
   - Migración 0003: llm_providers, repositories, pull_requests, reviews, findings, comments_sent, webhook_deliveries, llm_usage
   - Queries sqlc para CRUD de cada tabla
   - Verificación: `go build ./...`, `go test ./...`, migración sobre BD limpia
-- [ ] T2 — feat: internal/llm gateway multi-proveedor (ruta: delegado)
+- [x] T2 — feat: internal/llm gateway multi-proveedor (ruta: delegado) — commit bc93e2717942; 10 tests (stub server: éxito+usage, failover, 429+Retry-After, client-error sin retry, exhausted, concurrency per-review+global, TestConnection); 4 vars config nuevas
   - Gateway OpenAI-compatible: base_url + model + api_key; roles (review/cheap/embedding); failover por priority; rate limit; usage logging a llm_usage
   - Verificación: tests con stub server OpenAI-compatible
 - [ ] T3 — feat: internal/vcs GitHub adapter (ruta: delegado)

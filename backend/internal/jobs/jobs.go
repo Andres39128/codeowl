@@ -18,6 +18,20 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
+// KindReview identifica el ReviewJob (guía §3.5/§3.6): pipeline de revisión
+// de un PR. El webhook lo encola; el worker registra el worker con el mismo
+// kind.
+const KindReview = "review"
+
+// ReviewJobArgs son los argumentos del ReviewJob. (HeadSha, BaseSha) es la
+// identidad de la corrida (§3.6.1): push y retarget la cambian y marcan
+// stale las corridas viejas.
+type ReviewJobArgs struct {
+	PullRequestID int64  `json:"pull_request_id"`
+	HeadSha       string `json:"head_sha"`
+	BaseSha       string `json:"base_sha"`
+}
+
 // JobQueue es el contrato que consumen los handlers de la api y el worker.
 // Los handlers jamás importan River directo (mapa: backend.jobs).
 type JobQueue interface {

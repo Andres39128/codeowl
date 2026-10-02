@@ -17,21 +17,30 @@ import (
 type Server struct {
 	store   *store.Store
 	cfg     *config.Config
-	limiter *limiter // backoff de login por usuario (§3.4), en memoria
+	limiter *limiter     // backoff de login por usuario (§3.4), en memoria
+	github  http.Handler // webhook de GitHub (firma HMAC, sin cookie ni CSRF)
 }
 
 // New arma el Server. El limiter de login vive en el Server (memoria del
 // proceso — §9.6: filosofía single-worker, suficiente para 1-5 usuarios).
-func New(st *store.Store, cfg *config.Config) *Server {
-	return &Server{store: st, cfg: cfg, limiter: newLimiter(cfg.LoginMaxFails)}
+// githubWebhook es el handler de POST /webhooks/github (adapter VCS).
+func New(st *store.Store, cfg *config.Config, githubWebhook http.Handler) *Server {
+	return &Server{store: st, cfg: cfg, limiter: newLimiter(cfg.LoginMaxFails), github: githubWebhook}
 }
 
-// Routes arma el mux con la superficie F0. El encadenado es:
-// logging → recover → (auth → csrf, solo endpoints de sesión).
+// Routes arma el mux con la superficie F0 + el webhook GitHub de F1. El
+// encadenado es: logging → recover → (auth → csrf, solo endpoints de sesión).
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /healthz", s.withLogging(s.withRecover(http.HandlerFunc(s.handleHealthz))))
+
+	// Webhook de GitHub: autenticado por firma HMAC, sin cookie — fuera del
+	// CSRF (§3.4). El handler valida, filtra y encola: jamás toca el gateway
+	// LLM (§3.5).
+	if s.github != nil {
+		mux.Handle("POST /webhooks/github", s.withLogging(s.withRecover(s.github)))
+	}
 
 	// Login es mutante pero no autenticado por cookie: el CSRF de §3.4 no
 	// aplica (la cookie SameSite=Lax + el rate limit son su defensa).

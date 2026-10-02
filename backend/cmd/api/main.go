@@ -15,7 +15,9 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/api"
 	"github.com/Andres39128/codeowl/backend/internal/config"
+	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
+	vcsgh "github.com/Andres39128/codeowl/backend/internal/vcs/github"
 	"github.com/Andres39128/codeowl/backend/migrations"
 )
 
@@ -57,10 +59,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Cola de jobs: el webhook encola ReviewJob; el worker (otro proceso)
+	// los consume. Sin Start acá: la api es insert-only (§3.5).
+	jq, err := jobs.New(ctx, st.Pool)
+	if err != nil {
+		slog.Error("cola de jobs", "err", err)
+		os.Exit(1)
+	}
+
 	// Routing y middleware (auth, logging, recover) viven en internal/api.
+	// El webhook GitHub entra como handler del adapter: sin CSRF (§3.4) —
+	// su autenticación es la firma HMAC del payload (§9.3).
+	gh := vcsgh.New(st, cfg, jq)
 	srv := &http.Server{
-		Addr:              cfg.APIAddr,
-		Handler:           api.New(st, cfg).Routes(),
+		Addr: cfg.APIAddr,
+		Handler: api.New(st, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gh.HandleWebhook(r.Context(), w, r)
+		})).Routes(),
 		ReadHeaderTimeout: shutdownGrace,
 	}
 

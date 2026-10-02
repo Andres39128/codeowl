@@ -3,6 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/config"
 	"github.com/Andres39128/codeowl/backend/internal/store"
+	vcsgh "github.com/Andres39128/codeowl/backend/internal/vcs/github"
 	"github.com/Andres39128/codeowl/backend/migrations"
 )
 
@@ -63,7 +67,7 @@ func newTestEnv(t *testing.T, maxFails int) *testEnv {
 	}
 
 	cfg := &config.Config{SessionTTL: time.Hour, LoginMaxFails: maxFails}
-	srv := New(st, cfg)
+	srv := New(st, cfg, nil) // webhook GitHub no ejercitado acá (tests propios en internal/vcs/github)
 	ts := httptest.NewTLSServer(srv.Routes())
 	t.Cleanup(ts.Close)
 	return &testEnv{ts: ts, st: st, user: user, pass: pass}
@@ -289,3 +293,77 @@ func TestLoginCuerpoInvalido(t *testing.T) {
 		t.Errorf("cuerpo no-json debe ser 400, fue %d", resp.StatusCode)
 	}
 }
+
+// Webhook firmado simulado (mapa: pruebas de backend.api): la ruta
+// /webhooks/github está montada con logging+recover, SIN auth de cookie ni
+// CSRF (§3.4) — su autenticación es la firma HMAC (§9.3).
+func TestWebhookGitHubMontadoSinCSRF(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL no está seteado: saltando tests de integración")
+	}
+	st, err := store.Open(context.Background(), url)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(st.Close)
+	if err := store.Migrate(url, migrations.FS); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	const secret = "secreto-del-webhook-api-test"
+	cfg := &config.Config{
+		SessionTTL:    time.Hour,
+		LoginMaxFails: 5,
+		Stage2:        config.Stage2Config{GitHubWebhookSecret: secret},
+	}
+	gh := vcsgh.New(st, cfg, &stubQueue{})
+	srv := httptest.NewServer(New(st, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gh.HandleWebhook(r.Context(), w, r)
+	})).Routes())
+	t.Cleanup(srv.Close)
+
+	// Ping firmado: evento suscrito por el filtro de descarte — sin BD,
+	// sin job: 200 prueba ruta + firma + ausencia de CSRF.
+	body := []byte(`{"zen":"todo sale bien","hook_id":1,"sender":{"login":"alguien"}}`)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/webhooks/github", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", "ping")
+	req.Header.Set("X-GitHub-Delivery", fmt.Sprintf("api-test-%d", time.Now().UnixNano()))
+	req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("ping firmado debe ser 200, fue %d", resp.StatusCode)
+	}
+
+	// Sin firma: 401 — el CSRF de sesión no aplica acá, la HMAC manda.
+	req, err = http.NewRequest(http.MethodPost, srv.URL+"/webhooks/github", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-GitHub-Event", "ping")
+	resp, err = srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("webhook sin firma debe ser 401, fue %d", resp.StatusCode)
+	}
+}
+
+// stubQueue es el mínimo jobs.JobQueue para el handler de webhook acá.
+type stubQueue struct{}
+
+func (stubQueue) Enqueue(context.Context, string, json.RawMessage) error { return nil }
+func (stubQueue) Start(context.Context) error                            { return nil }
+func (stubQueue) Stop(context.Context) error                             { return nil }

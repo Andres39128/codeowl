@@ -31,6 +31,8 @@ const (
 	DefaultLLMMaxGlobal      = 8                 // §9.6: llamadas LLM simultáneas del gateway
 	DefaultLLMTimeout        = 120 * time.Second // §9.7: timeout por llamada LLM
 	DefaultLLMMaxRetries     = 3                 // §9.7: reintentos por proveedor ante 429/5xx
+	DefaultWebhookMaxBytes   = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
+	DefaultVCSTimeout        = 30 * time.Second  // timeout por llamada HTTP al VCS
 )
 
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
@@ -62,6 +64,9 @@ type Stage2Config struct {
 	LLMMaxGlobal    int
 	LLMTimeout      time.Duration
 	LLMMaxRetries   int
+	// Webhook + VCS (§9.3/§4.5): los consumen internal/vcs.
+	WebhookMaxBytes int64
+	VCSTimeout      time.Duration
 }
 
 // ValidateGitHub verifica que las credenciales de la App estén completas.
@@ -205,6 +210,18 @@ func Load() (*Config, error) {
 		errs = append(errs, "LLM_MAX_RETRIES debe ser mayor o igual a 0")
 	}
 	s2.LLMMaxRetries = maxRetries
+
+	whBytes, err := loadDiskSize("WEBHOOK_MAX_BYTES", DefaultWebhookMaxBytes)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.WebhookMaxBytes = whBytes
+
+	vcsTimeout, err := loadDuration("VCS_TIMEOUT", DefaultVCSTimeout)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.VCSTimeout = vcsTimeout
 
 	cfg.Stage2 = s2
 
