@@ -10,8 +10,10 @@ const toneClasses = {
 	neutral: "text-text-muted",
 } as const;
 
+export type BadgeTone = keyof typeof toneClasses;
+
 interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
-	tone?: keyof typeof toneClasses;
+	tone?: BadgeTone;
 }
 
 export function Badge({

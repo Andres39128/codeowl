@@ -12,6 +12,7 @@
 	--bg-base: #fdf6ec; /* fondo general */
 	--bg-surface: #faf0df; /* cards, paneles, tablas */
 	--bg-elevated: #ffffff; /* sidebar, headers, modals */
+	--bg-scrim: rgb(0 0 0 / 0.5); /* fondo del modal — igual en ambos temas */
 	--text-primary: #16341f; /* texto principal (12.7:1) */
 	--text-muted: #4a6b58; /* texto secundario (≥ 4.5:1) */
 	--action-primary: #2e6b4f; /* botones primarios, links activos */
@@ -27,6 +28,7 @@
 	--bg-base: #0e1f16;
 	--bg-surface: #142b1d;
 	--bg-elevated: #1c3a28;
+	--bg-scrim: rgb(0 0 0 / 0.5);
 	--text-primary: #f2e8d8; /* 14.1:1 */
 	--text-muted: #a8c4b2;
 	--action-primary: #8fbf9f;
@@ -44,6 +46,7 @@
 	--color-bg-base: var(--bg-base);
 	--color-bg-surface: var(--bg-surface);
 	--color-bg-elevated: var(--bg-elevated);
+	--color-bg-scrim: var(--bg-scrim);
 	--color-text-primary: var(--text-primary);
 	--color-text-muted: var(--text-muted);
 	--color-action-primary: var(--action-primary);

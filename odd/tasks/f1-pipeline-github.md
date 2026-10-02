@@ -45,7 +45,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
 - [x] T6 — feat: jobs workers ReviewJob/CleanupJob/RotationJob/ReconcileJob (ruta: delegado) — commit c1d3efc9ee29; unicidad §3.6.1.4 exacta; periodic 24h; workdir lifecycle con cleanup; 10 tests
   - Worker River con workers registrados; ReviewJob con unicidad ByArgs por PR + ByState sin completed; CleanupJob retención; RotationJob re-cifrado; ReconcileJob ListOpenPRs
   - Verificación: integration test con webhook simulado
-- [ ] T7 — feat: API endpoints settings/repos/users/queue (ruta: delegado)
+- [x] T7 — feat: API endpoints settings/repos/users/queue (ruta: delegado) — commit 15146459d1a4; 15 endpoints/mutantes; guardas §3.4 (admin-only settings) y §9.6 (review-provider check); 22/22 tests api
   - REST según mapa rest_endpoints: GET/POST /api/providers, PUT/DELETE /api/providers/{id} (CRUD completo con prueba de conexión); GET/POST /api/repos, PUT /api/repos/{id} (conectar/desconectar); GET/POST /api/users, PUT /api/users/{id}; GET /api/jobs (queue panel)
   - Verificación: httptest e2e
 - [ ] T8 — feat: Dashboard settings + queue (ruta: delegado)

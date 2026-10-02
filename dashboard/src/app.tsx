@@ -1,22 +1,39 @@
-/** App F0: resuelve sesión → login o shell. */
+/** App F1: sesión → login o shell con routing hash. #/ aterriza según rol
+ * (admin → proveedores, member → cola); settings es exclusivo del admin y un
+ * member que navega a #/settings/* es redirigido a la cola (§3.4). */
 
 import { useEffect } from "preact/hooks";
+import { Layout } from "./components/Layout";
 import { Login } from "./features/auth/Login";
+import { Queue } from "./features/queue/Queue";
+import { Providers } from "./features/settings/Providers";
+import { Repos } from "./features/settings/Repos";
+import { Users } from "./features/settings/Users";
+import { resolveRoute } from "./lib/router";
+import { useHashRoute } from "./lib/useHashRoute";
 import { useSession } from "./lib/useSession";
-import { Shell } from "./Shell";
+
+// Routing hash sin librería (guía §2.1): el fallback SPA de la API (§3.5)
+// permite migrar a path routing cuando haga falta.
+const PAGES = {
+	queue: Queue,
+	providers: Providers,
+	repos: Repos,
+	users: Users,
+} as const;
 
 export function App() {
 	const session = useSession();
+	const hash = useHashRoute();
+	const isAdmin = session.user?.role === "admin";
 
-	// Routing hash mínimo de F0, sin librería de router (guía §2.1): el hash
-	// solo refleja el estado de sesión — #/login pública, #/ el shell. El
-	// fallback SPA de la API (guía §3.5) permite migrar a path routing cuando
-	// aparezca la segunda pantalla real.
 	useEffect(() => {
-		if (session.isLoading) return;
-		const expected = session.user ? "#/" : "#/login";
-		if (location.hash !== expected) location.hash = expected;
-	}, [session.isLoading, session.user]);
+		if (session.isLoading || session.error) return;
+		const target = session.user
+			? resolveRoute(hash, isAdmin).redirect
+			: "#/login";
+		if (target && location.hash !== target) location.hash = target;
+	}, [session.isLoading, session.error, session.user, isAdmin, hash]);
 
 	if (session.isLoading) {
 		return <p class="p-6 text-text-muted">Cargando…</p>;
@@ -31,11 +48,18 @@ export function App() {
 	if (!session.user) {
 		return <Login />;
 	}
+
+	const route = resolveRoute(hash, isAdmin).route;
+	const Page = PAGES[route];
+
 	return (
-		<Shell
+		<Layout
 			user={session.user}
+			route={route}
 			onLogout={() => session.logout.mutate()}
 			logoutPending={session.logout.isPending}
-		/>
+		>
+			<Page />
+		</Layout>
 	);
 }
