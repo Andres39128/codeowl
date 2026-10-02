@@ -48,7 +48,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
 - [x] T7 — feat: API endpoints settings/repos/users/queue (ruta: delegado) — commit 15146459d1a4; 15 endpoints/mutantes; guardas §3.4 (admin-only settings) y §9.6 (review-provider check); 22/22 tests api
   - REST según mapa rest_endpoints: GET/POST /api/providers, PUT/DELETE /api/providers/{id} (CRUD completo con prueba de conexión); GET/POST /api/repos, PUT /api/repos/{id} (conectar/desconectar); GET/POST /api/users, PUT /api/users/{id}; GET /api/jobs (queue panel)
   - Verificación: httptest e2e
-- [ ] T8 — feat: Dashboard settings + queue (ruta: delegado)
+- [x] T8 — feat: Dashboard settings + queue (ruta: delegado) — commit 9ebd7af907b7; 49 tests, 74kB JS, admin/member routing, Modal/Banner reutilizables
   - features/settings: proveedores LLM (CRUD + prueba conexión), repos conectados (conectar/desconectar), usuarios (invitar/reset/desactivar); features/queue: panel de estado
   - Verificación: pnpm build + test + lint
 - [ ] T9 — test: integration test webhook simulado end-to-end (ruta: delegado)

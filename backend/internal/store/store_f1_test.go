@@ -143,12 +143,20 @@ func TestLlmProvidersCRUDYOrdenFailover(t *testing.T) {
 		}
 	}
 
-	// Delete: después no se resuelve.
+	// Delete: después no se resuelve. Se borran todos para no dejar proveedores
+	// muertos en la BD compartida (un ciphertext huérfano hace que cada
+	// Complete del rol pague un salto de failover con error de descifrado).
 	if err := st.DeleteLlmProvider(ctx, pAlta.ID); err != nil {
 		t.Fatalf("DeleteLlmProvider: %v", err)
 	}
 	if _, err := st.GetLlmProvider(ctx, pAlta.ID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("el proveedor borrado no debe resolverse, got %v", err)
+	}
+	if err := st.DeleteLlmProvider(ctx, pBaja.ID); err != nil {
+		t.Fatalf("DeleteLlmProvider(pBaja): %v", err)
+	}
+	if err := st.DeleteLlmProvider(ctx, pEmpate.ID); err != nil {
+		t.Fatalf("DeleteLlmProvider(pEmpate): %v", err)
 	}
 }
 
