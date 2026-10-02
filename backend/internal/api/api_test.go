@@ -97,7 +97,7 @@ func (e *testEnv) do(t *testing.T, method, path string, cookie *http.Cookie, csr
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
 }
 
@@ -284,7 +284,7 @@ func TestLoginCuerpoInvalido(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("cuerpo no-json debe ser 400, fue %d", resp.StatusCode)
 	}
