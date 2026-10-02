@@ -26,7 +26,7 @@ Forecast: >400 líneas autoradas (Fase 0 es un phase completo). Estrategia: `ask
 
 ## Tareas
 
-- [ ] T1 — docs: ajustar 4 observaciones (ruta: delegado; trigger: 2 archivos no triviales)
+- [x] T1 — docs: ajustar 4 observaciones (ruta: delegado; trigger: 2 archivos no triviales) — commit 915ee48562bd; diff verificado (12+/5-), YAML parse OK; RDD assess: medium (configuration_change), review_due false (under_budget)
   - Obs1: inventario de endpoints REST en mapa `api.expose` con tag de fase (F0: healthz/auth; F1: settings/repos/queue). Guia manda si nombra paths.
   - Obs2: explícitar que la migración oficial de River entra en F0 (guia §3.3 y/o checklist §6).
   - Obs3: defaults numéricos documentados: password min length (§3.4), presupuesto disco workdir (§3.3), cap tamaño diff (§9.6) — valores concretos + overridable por env.
@@ -35,12 +35,14 @@ Forecast: >400 líneas autoradas (Fase 0 es un phase completo). Estrategia: `ask
 - [ ] T2 — chore: scaffold y tooling de repo (ruta: delegado)
   - go.mod, justfile (dev/lint/build/test §2.2), `.env.example` completo con defaults de Obs3, `.gitignore`, `compose.dev.yml`, `deploy/` (Quadlet + backup.md §9.2/§9.10), CI GitHub Actions reusando just.
   - Verificación: `just --list`, validación YAML/CI. Commit.
-- [ ] T3 — feat: backend foundation (ruta: delegado)
+- [x] T2 — chore: scaffold y tooling de repo (ruta: delegado) — commit "chore: fase-0 repo tooling"; verificado: go build OK (go1.27 toolchain auto), just --fmt --check OK, YAML+Quadlet validados con generador podman 5.7, `just up` levanta postgres healthy en 127.0.0.1:15432, `just down` limpio. .env.example: 23 vars. RDD: assess high (shell_source ci.yml) → consentimiento relayed → usuario DECLINED este candidato (sin receipt; próximas revisiones siguen habilitadas).
+- [x] T3 — feat: backend foundation (ruta: delegado) — commit "feat(backend): fase-0 foundation"; spot check orquestador: build+vet+test OK. RDD: assess high → usuario GRANTED → transacción 4R review-c82811c6492a95b9; risk+readability capturados, resilience+reliability unachievable (transporte, 3 intentos) → stop `unachievable_lens_slot` SIN receipt; usuario decidió dejar el review pendiente y continuar. Boundary NO avanza (sigue f845e6fa77ae).
   - `internal/config` (validación escalonada), `internal/store` (golang-migrate embedded, migración River, sqlc queries users/sessions, seed admin env), `cmd/api`/`cmd/worker` esqueletos levantables.
   - Verificación: `go build ./...`, `go test ./...`. Commit.
 - [ ] T4 — feat: api auth + jobs esqueleto (ruta: delegado)
   - `internal/api`: ServeMux, healthz, endpoints auth según mapa (Obs1), argon2id, cookie sesión, CSRF. `internal/jobs`: interfaz `JobQueue` + wrapper River esqueleto.
   - Verificación: `go build ./...`, `go test ./...` (auth middleware/CSRF). Commit.
+- [x] T4 — feat: api auth + jobs esqueleto (ruta: delegado) — commit "feat(backend): auth REST endpoints..."; 35/35 tests (11 nuevos: 8 api e2e + 3 jobs), smoke curl completo (login→session→logout revoca), CSRF = SHA-256 derivado del token de sesión vía X-CSRF-Token; worker con RiverQueue skeleton. RDD: assess high (3856 líneas) → review dejado PENDIENTE por instrucción del usuario (transporte roto); boundary no avanza.
 - [ ] T5 — feat: dashboard shell (ruta: delegado)
   - Vite + Preact (compat) + Tailwind v4 tokens §5.1 (light/dark persistido), login funcional, nav vacía, Button/Badge/Table, `lib/apiClient` + `useSession`.
   - Verificación: `pnpm build`, tests si aplica. Commit.
