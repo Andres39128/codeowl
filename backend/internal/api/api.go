@@ -5,11 +5,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/Andres39128/codeowl/backend/internal/config"
+	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 )
 
@@ -17,19 +19,42 @@ import (
 type Server struct {
 	store   *store.Store
 	cfg     *config.Config
-	limiter *limiter     // backoff de login por usuario (§3.4), en memoria
-	github  http.Handler // webhook de GitHub (firma HMAC, sin cookie ni CSRF)
+	limiter *limiter      // backoff de login por usuario (§3.4), en memoria
+	github  http.Handler  // webhook de GitHub (firma HMAC, sin cookie ni CSRF)
+	queue   jobs.JobQueue // encola ReconcileJob en la reconexión de repos (§3.5); nunca procesa
+	llm     LLMTester     // solo la prueba de conexión de settings (§3.5)
 }
+
+// nopQueue es el default cuando nadie inyecta cola (tests que no tocan repos):
+// los handlers jamás ven nil.
+type nopQueue struct{}
+
+func (nopQueue) Enqueue(context.Context, string, json.RawMessage) error { return nil }
+func (nopQueue) Register(...jobs.Worker) error                          { return nil }
+func (nopQueue) Start(context.Context) error                            { return nil }
+func (nopQueue) Stop(context.Context) error                             { return nil }
 
 // New arma el Server. El limiter de login vive en el Server (memoria del
 // proceso — §9.6: filosofía single-worker, suficiente para 1-5 usuarios).
-// githubWebhook es el handler de POST /webhooks/github (adapter VCS).
-func New(st *store.Store, cfg *config.Config, githubWebhook http.Handler) *Server {
-	return &Server{store: st, cfg: cfg, limiter: newLimiter(cfg.LoginMaxFails), github: githubWebhook}
+// githubWebhook es el handler de POST /webhooks/github (adapter VCS); queue
+// y llm son opcionales (nil → no-op / 503 en la prueba de conexión).
+func New(st *store.Store, cfg *config.Config, githubWebhook http.Handler, queue jobs.JobQueue, llm LLMTester) *Server {
+	if queue == nil {
+		queue = nopQueue{}
+	}
+	return &Server{
+		store:   st,
+		cfg:     cfg,
+		limiter: newLimiter(cfg.LoginMaxFails),
+		github:  githubWebhook,
+		queue:   queue,
+		llm:     llm,
+	}
 }
 
-// Routes arma el mux con la superficie F0 + el webhook GitHub de F1. El
-// encadenado es: logging → recover → (auth → csrf, solo endpoints de sesión).
+// Routes arma el mux con la superficie REST (mapa: rest_endpoints): F0 auth,
+// webhook GitHub de F1 y settings/cola de F1. El encadenado es: logging →
+// recover → (auth → csrf, endpoints de sesión; auth → csrf → admin, settings).
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -49,6 +74,30 @@ func (s *Server) Routes() *http.ServeMux {
 	// Logout y session requieren sesión vigente; logout es mutante → CSRF.
 	mux.Handle("POST /api/auth/logout", s.withLogging(s.withRecover(s.withAuth(s.withCSRF(http.HandlerFunc(s.handleLogout))))))
 	mux.Handle("GET /api/auth/session", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleSession)))))
+
+	// Settings: proveedores LLM, repos conectados y usuarios — admin-only
+	// (§3.4). La pila completa es s.admin: logging → recover → auth → csrf
+	// → RequireAdmin (el csrf pasa de largo los GET).
+	mux.Handle("GET /api/providers", s.admin(s.handleListProviders))
+	mux.Handle("POST /api/providers", s.admin(s.handleCreateProvider))
+	mux.Handle("PUT /api/providers/{id}", s.admin(s.handleUpdateProvider))
+	mux.Handle("DELETE /api/providers/{id}", s.admin(s.handleDeleteProvider))
+	mux.Handle("POST /api/providers/{id}/test", s.admin(s.handleTestProvider))
+
+	mux.Handle("GET /api/repos", s.admin(s.handleListRepos))
+	mux.Handle("POST /api/repos", s.admin(s.handleCreateRepo))
+	mux.Handle("PUT /api/repos/{id}", s.admin(s.handleUpdateRepo))
+	// §3.5: la baja del repo es el flag enabled, jamás un delete.
+	mux.Handle("DELETE /api/repos/{id}", s.admin(s.handleDeleteRepo))
+
+	mux.Handle("GET /api/users", s.admin(s.handleListUsers))
+	mux.Handle("POST /api/users", s.admin(s.handleInviteUser))
+	mux.Handle("PUT /api/users/{id}", s.admin(s.handleUserAction))
+
+	// Panel de cola (§9.9): cualquier usuario autenticado — el member opera
+	// el triage y consulta el estado de la cola (§3.4). Solo lectura: auth
+	// sin csrf.
+	mux.Handle("GET /api/jobs", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleListJobs)))))
 
 	return mux
 }

@@ -36,6 +36,21 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 	return i, err
 }
 
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
+DELETE FROM sessions
+WHERE expires_at < now()
+`
+
+// Retención del CleanupJob (guía §9.11): borra sesiones ya expiradas y
+// devuelve la cantidad eliminada.
+func (q *Queries) DeleteExpiredSessions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredSessions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1
 `
@@ -92,20 +107,4 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, tokenHash string) (
 		&i.Disabled,
 	)
 	return i, err
-}
-
-const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
-
--- Retención del CleanupJob (guía §9.11): borra sesiones ya expiradas y
--- devuelve la cantidad eliminada.
-DELETE FROM sessions
-WHERE expires_at < now()
-`
-
-func (q *Queries) DeleteExpiredSessions(ctx context.Context) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteExpiredSessions)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

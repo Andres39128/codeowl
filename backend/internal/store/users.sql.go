@@ -62,3 +62,95 @@ func (q *Queries) GetByUsername(ctx context.Context, username string) (User, err
 	)
 	return i, err
 }
+
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, username, role, password_hash, must_change_password, disabled, created_at, updated_at FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Role,
+		&i.PasswordHash,
+		&i.MustChangePassword,
+		&i.Disabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listUsers = `-- name: ListUsers :many
+SELECT id, username, role, password_hash, must_change_password, disabled, created_at, updated_at FROM users ORDER BY id
+`
+
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Role,
+			&i.PasswordHash,
+			&i.MustChangePassword,
+			&i.Disabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setUserDisabled = `-- name: SetUserDisabled :exec
+UPDATE users
+SET disabled = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type SetUserDisabledParams struct {
+	ID       int64
+	Disabled bool
+}
+
+// Habilitar/deshabilitar (§3.4: la baja es un flag; las sesiones las revoca
+// el caller con DeleteSessionsForUser).
+func (q *Queries) SetUserDisabled(ctx context.Context, arg SetUserDisabledParams) error {
+	_, err := q.db.Exec(ctx, setUserDisabled, arg.ID, arg.Disabled)
+	return err
+}
+
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users
+SET password_hash = $2,
+    must_change_password = $3,
+    updated_at = now()
+WHERE id = $1
+`
+
+type SetUserPasswordParams struct {
+	ID                 int64
+	PasswordHash       string
+	MustChangePassword bool
+}
+
+// Reset de contraseña del admin (§3.4): hash nuevo + must_change_password.
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash, arg.MustChangePassword)
+	return err
+}

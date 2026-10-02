@@ -49,7 +49,7 @@ lint target="all":
 
 # tests backend y/o dashboard — just test [backend|dashboard|all] (§8)
 test target="all":
-    @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "backend" ]; then cd backend && go test ./...; fi
+    @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "backend" ]; then cd backend && go test -count=1 -p 1 ./...; fi
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "dashboard" ]; then pnpm --dir dashboard test; fi
 
 # aplica migraciones (golang-migrate, §3.3) contra DATABASE_URL — just migrate [up|down]

@@ -16,6 +16,7 @@ import (
 	"github.com/Andres39128/codeowl/backend/internal/api"
 	"github.com/Andres39128/codeowl/backend/internal/config"
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
+	"github.com/Andres39128/codeowl/backend/internal/llm"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	vcsgh "github.com/Andres39128/codeowl/backend/internal/vcs/github"
 	"github.com/Andres39128/codeowl/backend/migrations"
@@ -59,13 +60,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Cola de jobs: el webhook encola ReviewJob; el worker (otro proceso)
-	// los consume. Sin Start acá: la api es insert-only (§3.5).
+	// Cola de jobs: el webhook encola ReviewJob y la api encola el
+	// ReconcileJob de reconexión de repos; el worker (otro proceso) los
+	// consume. Sin Start acá: la api es insert-only (§3.5).
 	jq, err := jobs.New(ctx, st.Pool)
 	if err != nil {
 		slog.Error("cola de jobs", "err", err)
 		os.Exit(1)
 	}
+
+	// Gateway LLM: la api solo lo usa para la prueba de conexión de settings
+	// (una llamada mínima por rol, §3.5).
+	gateway := llm.New(st, cfg.MasterKey, llm.Limits{
+		MaxPerReview: cfg.Stage2.LLMMaxPerReview,
+		MaxGlobal:    cfg.Stage2.LLMMaxGlobal,
+		Timeout:      cfg.Stage2.LLMTimeout,
+		MaxRetries:   cfg.Stage2.LLMMaxRetries,
+	})
 
 	// Routing y middleware (auth, logging, recover) viven en internal/api.
 	// El webhook GitHub entra como handler del adapter: sin CSRF (§3.4) —
@@ -75,7 +86,7 @@ func main() {
 		Addr: cfg.APIAddr,
 		Handler: api.New(st, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gh.HandleWebhook(r.Context(), w, r)
-		})).Routes(),
+		}), jq, gateway).Routes(),
 		ReadHeaderTimeout: shutdownGrace,
 	}
 

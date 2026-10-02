@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,8 @@ type testEnv struct {
 	pass   string // contraseña en claro del usuario de prueba
 	csrf   string // token CSRF de la última sesión logueada
 	cookie *http.Cookie
+	llm    *stubLLM   // gateway LLM falso: la prueba de conexión lee .err
+	queue  *stubQueue // cola falsa: registra los encolados
 }
 
 // newTestEnv arma api + server TLS con un usuario de prueba fresco.
@@ -67,11 +70,12 @@ func newTestEnv(t *testing.T, maxFails int) *testEnv {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	cfg := &config.Config{SessionTTL: time.Hour, LoginMaxFails: maxFails}
-	srv := New(st, cfg, nil) // webhook GitHub no ejercitado acá (tests propios en internal/vcs/github)
-	ts := httptest.NewTLSServer(srv.Routes())
-	t.Cleanup(ts.Close)
-	return &testEnv{ts: ts, st: st, user: user, pass: pass}
+	cfg := &config.Config{SessionTTL: time.Hour, LoginMaxFails: maxFails, MasterKey: make([]byte, 32)}
+	env := &testEnv{st: st, user: user, pass: pass, llm: &stubLLM{}, queue: &stubQueue{}}
+	srv := New(st, cfg, nil, env.queue, env.llm) // webhook GitHub no ejercitado acá (tests propios en internal/vcs/github)
+	env.ts = httptest.NewTLSServer(srv.Routes())
+	t.Cleanup(env.ts.Close)
+	return env
 }
 
 // do manda un request JSON y devuelve la respuesta (el caller hace Close).
@@ -321,7 +325,7 @@ func TestWebhookGitHubMontadoSinCSRF(t *testing.T) {
 	gh := vcsgh.New(st, cfg, &stubQueue{})
 	srv := httptest.NewServer(New(st, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gh.HandleWebhook(r.Context(), w, r)
-	})).Routes())
+	}), &stubQueue{}, &stubLLM{}).Routes())
 	t.Cleanup(srv.Close)
 
 	// Ping firmado: evento suscrito por el filtro de descarte — sin BD,
@@ -362,10 +366,37 @@ func TestWebhookGitHubMontadoSinCSRF(t *testing.T) {
 	}
 }
 
-// stubQueue es el mínimo jobs.JobQueue para el handler de webhook acá.
-type stubQueue struct{}
+// stubQueue es el mínimo jobs.JobQueue para los handlers: registra los
+// encolados (kind + args) para que los tests verifiquen qué se encoló.
+type stubQueue struct {
+	mu       sync.Mutex
+	kinds    []string
+	payloads []json.RawMessage
+}
 
-func (stubQueue) Enqueue(context.Context, string, json.RawMessage) error { return nil }
-func (stubQueue) Register(...jobs.Worker) error                          { return nil }
-func (stubQueue) Start(context.Context) error                            { return nil }
-func (stubQueue) Stop(context.Context) error                             { return nil }
+func (q *stubQueue) Enqueue(_ context.Context, kind string, args json.RawMessage) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.kinds = append(q.kinds, kind)
+	q.payloads = append(q.payloads, args)
+	return nil
+}
+func (q *stubQueue) Register(...jobs.Worker) error { return nil }
+func (q *stubQueue) Start(context.Context) error   { return nil }
+func (q *stubQueue) Stop(context.Context) error    { return nil }
+
+func (q *stubQueue) enqueued(t *testing.T) ([]string, []json.RawMessage) {
+	t.Helper()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]string(nil), q.kinds...), append([]json.RawMessage(nil), q.payloads...)
+}
+
+// stubLLM satisface LLMTester: TestConnection falla solo si .err != nil.
+type stubLLM struct {
+	err error
+}
+
+func (s *stubLLM) TestConnection(context.Context, string, string, string, string) error {
+	return s.err
+}

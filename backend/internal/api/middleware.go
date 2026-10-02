@@ -160,6 +160,28 @@ func (s *Server) withCSRF(next http.Handler) http.Handler {
 	})
 }
 
+// RequireAdmin limita el endpoint al rol admin (§3.4: settings es solo del
+// admin; el member opera el triage y consulta la cola). Va siempre montado
+// DESPUÉS de withAuth: sin sesión en el contexto → 403 (defensa en profundidad,
+// aunque el encadenado garantiza auth).
+func (s *Server) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := sessionOf(r)
+		if auth == nil || auth.Row.Role != "admin" {
+			writeError(w, http.StatusForbidden, "solo el admin puede hacer esto")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// admin encadena la pila completa de un endpoint de settings (§3.4):
+// logging → recover → auth → csrf → RequireAdmin. Con CSRF montado, los GET
+// pasan de largo (solo filtra mutantes).
+func (s *Server) admin(next http.HandlerFunc) http.Handler {
+	return s.withLogging(s.withRecover(s.withAuth(s.withCSRF(s.RequireAdmin(next)))))
+}
+
 // decodeJSON decodifica y valida el cuerpo JSON del request en v. Cuerpos
 // acotados: el login es la frontera de confianza del dashboard.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {

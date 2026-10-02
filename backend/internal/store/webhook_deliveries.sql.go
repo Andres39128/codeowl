@@ -39,6 +39,21 @@ func (q *Queries) CreateWebhookDelivery(ctx context.Context, arg CreateWebhookDe
 	return i, err
 }
 
+const deleteWebhookDeliveriesOlderThan = `-- name: DeleteWebhookDeliveriesOlderThan :execrows
+DELETE FROM webhook_deliveries
+WHERE created_at < $1
+`
+
+// Retención del CleanupJob (guía §9.11): borra entregas más viejas que el
+// corte y devuelve la cantidad eliminada.
+func (q *Queries) DeleteWebhookDeliveriesOlderThan(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWebhookDeliveriesOlderThan, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const webhookDeliveryExists = `-- name: WebhookDeliveryExists :one
 SELECT EXISTS (
     SELECT 1 FROM webhook_deliveries
@@ -56,20 +71,4 @@ func (q *Queries) WebhookDeliveryExists(ctx context.Context, arg WebhookDelivery
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const deleteWebhookDeliveriesOlderThan = `-- name: DeleteWebhookDeliveriesOlderThan :execrows
-
--- Retención del CleanupJob (guía §9.11): borra entregas más viejas que el
--- corte y devuelve la cantidad eliminada.
-DELETE FROM webhook_deliveries
-WHERE created_at < $1
-`
-
-func (q *Queries) DeleteWebhookDeliveriesOlderThan(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteWebhookDeliveriesOlderThan, createdAt)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

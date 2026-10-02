@@ -42,7 +42,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
 - [x] T5 — feat: internal/review pipeline + agentes (ruta: delegado) — commit 69cd3ff61407; 13 contract tests con stubs; cache sha+merge-base+prompt+config; publicación 2 fases; dedup drift ±3; prompts embed
   - Run(ctx, ReviewInput) (ReviewResult, error); Reviewer sobre hunks con contexto; Summarizer; dedup por huella; publicación en dos fases; prompts versionados en backend/prompts/
   - Verificación: contract tests con stub del gateway
-- [ ] T6 — feat: jobs workers (ReviewJob, CleanupJob, RotationJob, ReconcileJob) (ruta: delegado)
+- [x] T6 — feat: jobs workers ReviewJob/CleanupJob/RotationJob/ReconcileJob (ruta: delegado) — commit c1d3efc9ee29; unicidad §3.6.1.4 exacta; periodic 24h; workdir lifecycle con cleanup; 10 tests
   - Worker River con workers registrados; ReviewJob con unicidad ByArgs por PR + ByState sin completed; CleanupJob retención; RotationJob re-cifrado; ReconcileJob ListOpenPRs
   - Verificación: integration test con webhook simulado
 - [ ] T7 — feat: API endpoints settings/repos/users/queue (ruta: delegado)
