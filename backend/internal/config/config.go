@@ -39,6 +39,7 @@ const (
 	DefaultLLMMaxRetries         = 3                 // §9.7: reintentos por proveedor ante 429/5xx
 	DefaultEmbedBatchSize        = 64                // §9.6: textos máximos por llamada /v1/embeddings
 	DefaultIndexMaxSymbolsPerRun = 2000              // §9.6: tope de símbolos embebidos por IndexJob (resume §9.6)
+	DefaultRetrievalTopK         = 8                 // §9.6: K del top-K coseno del retrieval del Reviewer (F4, §6)
 	DefaultWebhookMaxBytes       = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
 	DefaultVCSTimeout            = 30 * time.Second  // timeout por llamada HTTP al VCS
 	// GitLab (§9.3/§3.5/§3.6.1.1): frescura anti-replay, username del bot
@@ -106,6 +107,7 @@ type Stage2Config struct {
 	// Indexación simbólica RAG (F4, §6/§9.6): la consume internal/index (T6
 	// threadea ReviewDefaultProfile como DefaultProfile del índice).
 	IndexMaxSymbolsPerRun int // tope de símbolos embebidos por IndexJob; agotado → parcial con resume
+	RetrievalTopK         int // K del top-K coseno del retrieval del Reviewer (§6 F4, decisión 6)
 	// Webhook + VCS (§9.3/§4.5): los consumen internal/vcs.
 	WebhookMaxBytes int64
 	VCSTimeout      time.Duration
@@ -333,6 +335,14 @@ func Load() (*Config, error) {
 		errs = append(errs, "INDEX_MAX_SYMBOLS_PER_RUN debe ser mayor o igual a 1")
 	}
 	s2.IndexMaxSymbolsPerRun = idxMax
+
+	topK, err := loadInt("RETRIEVAL_TOP_K", DefaultRetrievalTopK)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if topK < 1 {
+		errs = append(errs, "RETRIEVAL_TOP_K debe ser mayor o igual a 1")
+	}
+	s2.RetrievalTopK = topK
 
 	whBytes, err := loadDiskSize("WEBHOOK_MAX_BYTES", DefaultWebhookMaxBytes)
 	if err != nil {

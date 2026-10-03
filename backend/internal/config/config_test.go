@@ -152,6 +152,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Stage2.IndexMaxSymbolsPerRun != 2000 {
 		t.Errorf("INDEX_MAX_SYMBOLS_PER_RUN default: got %d want 2000 (§9.6)", cfg.Stage2.IndexMaxSymbolsPerRun)
 	}
+	if cfg.Stage2.RetrievalTopK != 8 {
+		t.Errorf("RETRIEVAL_TOP_K default: got %d want 8 (§9.6)", cfg.Stage2.RetrievalTopK)
+	}
 }
 
 func TestLoadMasterKeyInvalida(t *testing.T) {
