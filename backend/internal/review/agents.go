@@ -27,6 +27,7 @@ var (
 	promptSummarizer = prompts.Summarizer()
 	promptTestgen    = prompts.Testgen()
 	promptVerifier   = prompts.Verifier()
+	promptPremerge   = prompts.Premerge()
 )
 
 // roleReview es el rol del gateway para Reviewer y Summarizer (mapa:
@@ -101,6 +102,7 @@ const (
 	summarizerMarker   = "Resumí el siguiente pull request."
 	testgenUserMarker  = "Hallazgo de la revisión:"
 	verifierUserMarker = "Verificá los siguientes hallazgos."
+	premergeMarker     = "Evaluá el veredicto pre-merge del siguiente pull request."
 )
 
 // SummaryResult es la salida del Summarizer (contrato §9.8).
@@ -300,6 +302,129 @@ func runSummarizer(ctx context.Context, gw Gateway, cfg Config, language, stats 
 		slog.Warn("review: salida malformada del summarizer", "intento", attempt+1, "error", perr)
 	}
 	return nil, fmt.Errorf("salida malformada tras %d reintentos: %w", cfg.AgentRetries, lastErr)
+}
+
+// PreMergeStats es el input del agente Pre-merge (§6 F5): métricas ya
+// computadas por el pipeline — el agente no recalcula nada, solo las
+// interpreta en un veredicto advisory.
+type PreMergeStats struct {
+	RiskScore    int
+	Counts       map[string]int // recuento por severidad del conjunto publicado
+	Categories   []string       // categorías presentes en el conjunto publicado
+	Coverage     []string       // declaraciones de cobertura (vacío = completa)
+	Status       string         // estado que llevará la corrida (success|partial)
+	Files        int            // archivos del diff
+	ChangedLines int            // líneas cambiadas del diff
+	TestFiles    int            // archivos de prueba dentro del diff
+}
+
+// PreMergeCheck es un ítem de la checklist del veredicto (§6 F5).
+type PreMergeCheck struct {
+	Item string
+	OK   bool
+}
+
+// PreMergeResult es la salida validada del agente Pre-merge (§6 F5): texto
+// advisory para la sección del resumen — jamás una acción del VCS (§1.1).
+type PreMergeResult struct {
+	Verdict   string
+	Checklist []PreMergeCheck
+	Resumen   string
+}
+
+// validPreMergeVerdict es el conjunto cerrado del veredicto (§6 F5): valores
+// fijos en español, machine-parsed — el prompt los fija y acá se valida.
+var validPreMergeVerdict = map[string]bool{
+	"apto": true, "apto_con_observaciones": true, "no_apto": true,
+}
+
+// rawPreMerge es la salida cruda del Pre-merge antes de validar (§9.8).
+type rawPreMerge struct {
+	Verdict   string `json:"verdict"`
+	Checklist []struct {
+		Item string `json:"item"`
+		OK   bool   `json:"ok"`
+	} `json:"checklist"`
+	Resumen string `json:"resumen"`
+}
+
+// runPreMerge genera el veredicto advisory pre-merge (§6 F5, rol review):
+// UNA llamada con las métricas de la corrida, reintentos por salida
+// malformada (§9.8). El fallo del gateway (failover agotado) no se reintenta
+// acá — el gateway ya agotó los suyos (§9.7).
+func runPreMerge(ctx context.Context, gw Gateway, cfg Config, rc repoconfig.RepoConfig, stats PreMergeStats) (*PreMergeResult, error) {
+	system := fillLanguage(promptPremerge, rc.Language)
+	var lastErr error
+	for attempt := 0; attempt <= cfg.AgentRetries; attempt++ {
+		content, err := gw.Complete(ctx, roleReview, system, premergeUser(stats))
+		if err != nil {
+			return nil, fmt.Errorf("failover agotado: %w", err)
+		}
+		pm, perr := parsePreMerge(content)
+		if perr == nil {
+			return pm, nil
+		}
+		lastErr = perr
+		slog.Warn("review: salida malformada del pre-merge", "intento", attempt+1, "error", perr)
+	}
+	return nil, fmt.Errorf("salida malformada tras %d reintentos: %w", cfg.AgentRetries, lastErr)
+}
+
+// premergeUser arma el prompt de usuario del Pre-merge: estado de la
+// corrida, risk score, recuentos del conjunto publicado, categorías,
+// estadísticas del diff y la declaración de cobertura — todo dato ya
+// computado por el pipeline (§6 F5).
+func premergeUser(stats PreMergeStats) string {
+	var b strings.Builder
+	b.WriteString(premergeMarker + "\n\n")
+	fmt.Fprintf(&b, "Estado de la corrida: %s.\n", stats.Status)
+	fmt.Fprintf(&b, "Risk score computado: %d/100.\n", stats.RiskScore)
+	fmt.Fprintf(&b, "Hallazgos publicados: %d alta, %d media, %d baja.\n",
+		stats.Counts["high"], stats.Counts["medium"], stats.Counts["low"])
+	cats := "ninguna"
+	if len(stats.Categories) > 0 {
+		cats = strings.Join(stats.Categories, ", ")
+	}
+	fmt.Fprintf(&b, "Categorías de los hallazgos: %s.\n", cats)
+	fmt.Fprintf(&b, "Diff: %d líneas cambiadas en %d archivos (%d de pruebas).\n",
+		stats.ChangedLines, stats.Files, stats.TestFiles)
+	if len(stats.Coverage) > 0 {
+		b.WriteString("Cobertura parcial declarada:\n")
+		for _, c := range stats.Coverage {
+			b.WriteString("- " + c + "\n")
+		}
+	} else {
+		b.WriteString("Cobertura completa: SAST + LLM sobre todo el diff.\n")
+	}
+	return b.String()
+}
+
+// parsePreMerge valida la salida JSON del Pre-merge (§9.8): veredicto en el
+// conjunto cerrado, resumen obligatorio y checklist de 0 a 8 ítems con texto
+// no vacío. El prompt pide 3-6; el validador tolera el borde para no quemar
+// reintentos por una checklist corta pero honesta.
+func parsePreMerge(content string) (*PreMergeResult, error) {
+	var raw rawPreMerge
+	if err := json.Unmarshal([]byte(stripFences(content)), &raw); err != nil {
+		return nil, fmt.Errorf("JSON inválido: %w", err)
+	}
+	if !validPreMergeVerdict[raw.Verdict] {
+		return nil, fmt.Errorf("verdict %q fuera del conjunto cerrado", raw.Verdict)
+	}
+	if strings.TrimSpace(raw.Resumen) == "" {
+		return nil, fmt.Errorf("resumen vacío")
+	}
+	if len(raw.Checklist) > 8 {
+		return nil, fmt.Errorf("checklist con %d ítems, tope 8", len(raw.Checklist))
+	}
+	out := &PreMergeResult{Verdict: raw.Verdict, Resumen: raw.Resumen}
+	for i, c := range raw.Checklist {
+		if strings.TrimSpace(c.Item) == "" {
+			return nil, fmt.Errorf("checklist %d: item vacío", i)
+		}
+		out.Checklist = append(out.Checklist, PreMergeCheck{Item: c.Item, OK: c.OK})
+	}
+	return out, nil
 }
 
 // runTestGenerator genera UNA prueba unitaria que documenta el hallazgo

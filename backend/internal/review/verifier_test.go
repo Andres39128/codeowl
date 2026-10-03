@@ -115,8 +115,8 @@ func TestRunVerifierNoCheap(t *testing.T) {
 	if _, ok, _ := verifiedOf(t, d, "x"); ok {
 		t.Error("sin verifier el finding debe persistir con verified null (§3.3)")
 	}
-	if d.gw.calls != 2 {
-		t.Errorf("gateway llamado %d veces, querés 2 (reviewer + summarizer; cero cheap)", d.gw.calls)
+	if d.gw.calls != 3 {
+		t.Errorf("gateway llamado %d veces, querés 3 (reviewer + summarizer + pre-merge; cero cheap)", d.gw.calls)
 	}
 	final := d.vcs.summaryBods[len(d.vcs.summaryBods)-1]
 	if !strings.Contains(final, "Verificación de hallazgos omitida (sin proveedor del rol cheap)") {

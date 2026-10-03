@@ -282,6 +282,12 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// best-effort de calidad, no de cobertura (§9.6/§6 F3).
 	var verifierNote string
 
+	// pm es el veredicto advisory pre-merge (§6 F5). Se declara acá para que
+	// la re-edición de fallo de fase 2 lo pase a finalSummary: si la corrida
+	// falla ANTES de la zona del veredicto (fase 2 inline), pm sigue nil y la
+	// sección no sale — honesto: no hay veredicto computado que mostrar.
+	var pm *PreMergeResult
+
 	// (d) SAST sobre el clon (§9.4). Un fallo del sandbox es un gap de
 	// cobertura declarado — jamás ausencia silenciosa de hallazgos.
 	var sast []Finding
@@ -541,7 +547,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 			// solo lo que falta: lo ya publicado deduplica por huella.
 			return failRun(ctx, st, rev.ID, res, fmt.Errorf("publicando el comentario inline de %s: %w", f.File, err),
 				func() {
-					body := finalSummary(sum, counts, append(outOfDiff, f), coverage, err.Error(), verifierNote)
+					body := finalSummary(sum, counts, append(outOfDiff, f), coverage, err.Error(), verifierNote, pm)
 					if sumErr := pub.publishSummary(ctx, body); sumErr != nil {
 						slog.Warn("review: re-edición del resumen en fallo también falló", "error", sumErr)
 					}
@@ -577,14 +583,45 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		slog.Warn("review: persistiendo el risk score falló (la corrida sigue)", "error", err, "review", rev.ID)
 	}
 
-	// (j)(k) Estado final y re-edición del resumen (§3.6.2): el de la fase 1
-	// es provisional por diseño — este incluye el recuento por severidad, los
-	// hallazgos fuera del diff y la declaración de cobertura (§9.6).
+	// Veredicto advisory pre-merge (§6 F5, T4): UNA llamada más con las
+	// métricas ya computadas; la salida es una SECCIÓN del resumen edit in
+	// place (§3.6) — jamás una review action del VCS (§1.1). Acá ya pasaron
+	// ambas salidas stale (§3.6.1.3), así que una corrida stale jamás llega
+	// a gastar esta llamada. Fallo del agente o salida malformada tras los
+	// reintentos → descarte registrado y resumen sin la sección (§9.8): el
+	// veredicto jamás degrada ni frena la corrida.
 	status := StatusSuccess
 	if len(coverage) > 0 {
 		status = StatusPartial
 	}
-	body := finalSummary(sum, counts, outOfDiff, coverage, "", verifierNote)
+	cats := make([]string, 0, len(toPublish))
+	seenCats := map[string]bool{}
+	for _, f := range toPublish {
+		if !seenCats[f.Category] {
+			seenCats[f.Category] = true
+			cats = append(cats, f.Category)
+		}
+	}
+	sortStrings(cats)
+	if pm, err = runPreMerge(ctx, gw, cfg, rc, PreMergeStats{
+		RiskScore:    score,
+		Counts:       counts,
+		Categories:   cats,
+		Coverage:     coverage,
+		Status:       status,
+		Files:        len(fileHunks),
+		ChangedLines: total,
+		TestFiles:    testFiles,
+	}); err != nil {
+		slog.Warn("review: veredicto pre-merge omitido, el resumen sale sin la sección (§9.8)", "error", err, "review", rev.ID)
+		pm = nil
+	}
+
+	// (j)(k) Estado final y re-edición del resumen (§3.6.2): el de la fase 1
+	// es provisional por diseño — este incluye el recuento por severidad, los
+	// hallazgos fuera del diff, la declaración de cobertura y el veredicto
+	// pre-merge si corrió (§9.6/§6 F5).
+	body := finalSummary(sum, counts, outOfDiff, coverage, "", verifierNote, pm)
 	if err := pub.publishSummary(ctx, body); err != nil {
 		// El resumen de fase 1 ya está publicado: la re-edición fallida no
 		// invalida la corrida — queda el provisional sin el recuento final.

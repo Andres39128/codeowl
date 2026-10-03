@@ -193,14 +193,14 @@ func provisionalSummary(s *SummaryResult) string {
 
 // finalSummary arma el cuerpo de la re-edición final (§3.6.2): recuento por
 // severidad, hallazgos fuera del diff, declaración de cobertura (§9.6),
-// declaración del Verifier si no corrió (§9.6/§6 F3) y, en fallo, el estado
-// final (§9.7). La cobertura siempre se declara — completa o parcial, nunca
-// se calla.
-func finalSummary(s *SummaryResult, counts map[string]int, outOfDiff []Finding, coverage []string, failure, verifierNote string) string {
+// declaración del Verifier si no corrió (§9.6/§6 F3), veredicto advisory
+// pre-merge si corrió (§6 F5) y, en fallo, el estado final (§9.7). La
+// cobertura siempre se declara — completa o parcial, nunca se calla.
+func finalSummary(s *SummaryResult, counts map[string]int, outOfDiff []Finding, coverage []string, failure, verifierNote string, pm *PreMergeResult) string {
 	if coverage == nil {
 		coverage = []string{}
 	}
-	return summaryParts(s, outOfDiff, coverage, failure, verifierNote) + countsSection(counts)
+	return summaryParts(s, outOfDiff, coverage, failure, verifierNote) + premergeSection(pm) + countsSection(counts)
 }
 
 // summaryParts arma el cuerpo común: encabezado, resumen, walkthrough y
@@ -251,4 +251,30 @@ func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, fail
 func countsSection(counts map[string]int) string {
 	return fmt.Sprintf("\n\n### Hallazgos: %d alta · %d media · %d baja",
 		counts["high"], counts["medium"], counts["low"])
+}
+
+// premergeSection es el veredicto advisory pre-merge como sección del
+// resumen (§6 F5/§3.6: comments_sent no gana tipo — es texto de la
+// re-edición, nunca una review action del VCS). pm nil (sin proveedor, salida
+// malformada o corrida que falló antes de llegarlo a computar) → sin sección.
+func premergeSection(pm *PreMergeResult) string {
+	if pm == nil {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\n### Veredicto pre-merge: %s\n", pm.Verdict)
+	for _, c := range pm.Checklist {
+		mark := "❌"
+		if c.OK {
+			mark = "✅"
+		}
+		b.WriteString("\n- " + mark + " " + c.Item)
+	}
+	if pm.Resumen != "" {
+		b.WriteString("\n\n" + pm.Resumen)
+	}
+	// §1.1/§6 F5: el veredicto es informativo — queda dicho en el cuerpo,
+	// no solo en el prompt.
+	b.WriteString("\n\n> ℹ️ Veredicto advisory: no bloquea el merge.")
+	return b.String()
 }

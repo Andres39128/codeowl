@@ -257,6 +257,8 @@ type stubGateway struct {
 	testgenSeen  []string // prompts de usuario de testgen recibidos
 	verifier     []string // respuestas encoladas para el verifier (rol cheap)
 	verifierSeen []string // prompts de usuario del verifier recibidos
+	premerge     []string // respuestas encoladas para el pre-merge (§6 F5)
+	premergeSeen []string // prompts de usuario del pre-merge recibidos
 }
 
 func newStubGateway() *stubGateway {
@@ -301,6 +303,15 @@ func (g *stubGateway) Complete(_ context.Context, _, system, user string) (strin
 		}
 		r := g.verifier[0]
 		g.verifier = g.verifier[1:]
+		return r, nil
+	}
+	if strings.HasPrefix(user, premergeMarker) {
+		g.premergeSeen = append(g.premergeSeen, user)
+		if len(g.premerge) == 0 {
+			return "", fmt.Errorf("sin respuesta de premerge encolada (llamada %d)", g.calls)
+		}
+		r := g.premerge[0]
+		g.premerge = g.premerge[1:]
 		return r, nil
 	}
 	first := strings.SplitN(user, "\n", 2)[0]
@@ -668,8 +679,8 @@ func TestRunDiffOverCap(t *testing.T) {
 	if res.FindingsCount != 1 {
 		t.Errorf("FindingsCount = %d, querés 1 (solo SAST)", res.FindingsCount)
 	}
-	if d.gw.calls != 1 {
-		t.Errorf("gateway llamado %d veces, querés 1 (solo summarizer)", d.gw.calls)
+	if d.gw.calls != 2 {
+		t.Errorf("gateway llamado %d veces, querés 2 (summarizer + intento de veredicto pre-merge)", d.gw.calls)
 	}
 	if len(d.vcs.inlineReqs) != 0 {
 		t.Errorf("hubo inline con diff sobre el tope — §9.6 dice solo resumen")
@@ -700,8 +711,8 @@ func TestRunMalformedOutput(t *testing.T) {
 		if res.Status != StatusSuccess {
 			t.Errorf("status = %q, querés success (el reintento recuperó)", res.Status)
 		}
-		if d.gw.calls != 3 { // 2 del reviewer + 1 del summarizer
-			t.Errorf("gateway llamado %d veces, querés 3", d.gw.calls)
+		if d.gw.calls != 4 { // 2 del reviewer + 1 del summarizer + 1 del pre-merge
+			t.Errorf("gateway llamado %d veces, querés 4", d.gw.calls)
 		}
 		if len(d.vcs.inlineReqs) != 1 {
 			t.Errorf("inline publicados = %d, querés 1", len(d.vcs.inlineReqs))
@@ -793,8 +804,11 @@ func TestRunCacheHit(t *testing.T) {
 	if res.Status != StatusSuccess {
 		t.Errorf("status = %q, querés success", res.Status)
 	}
-	if d.gw.calls != firstCalls {
-		t.Errorf("el gateway fue llamado %d veces en el cache hit (antes: %d)", d.gw.calls, firstCalls)
+	// El cache hit no re-llama reviewer ni summarizer (§9.6); el veredicto
+	// pre-merge sí corre fresco: sus métricas (dedup, cobertura) cambian por
+	// corrida aunque el diff sea idéntico.
+	if d.gw.calls != firstCalls+1 {
+		t.Errorf("el gateway fue llamado %d veces en el cache hit (antes: %d, esperado +1 del pre-merge)", d.gw.calls, firstCalls)
 	}
 	if res.FindingsCount != 0 {
 		t.Errorf("FindingsCount = %d, querés 0 (todo deduplica contra la corrida 1)", res.FindingsCount)
@@ -1126,10 +1140,11 @@ func TestRunPathFilters(t *testing.T) {
 	})
 
 	// Si main.go hubiera llegado al reviewer, el stub habría fallado por no
-	// tener respuesta encolada → descarte → partial. Success + 2 llamadas
-	// (reviewer de util.go + summarizer) prueba que main.go jamás se envió.
-	if d.gw.calls != 2 {
-		t.Errorf("gateway llamado %d veces, querés 2 (solo util.go + summarizer)", d.gw.calls)
+	// tener respuesta encolada → descarte → partial. Success + 3 llamadas
+	// (reviewer de util.go + summarizer + pre-merge) prueba que main.go
+	// jamás se envió.
+	if d.gw.calls != 3 {
+		t.Errorf("gateway llamado %d veces, querés 3 (solo util.go + summarizer + pre-merge)", d.gw.calls)
 	}
 	if res.Status != StatusSuccess {
 		t.Errorf("status = %q, querés success", res.Status)
@@ -1157,8 +1172,8 @@ func TestRunPathFiltersAllFiltered(t *testing.T) {
 		}
 	})
 
-	if d.gw.calls != 1 {
-		t.Errorf("gateway llamado %d veces, querés 1 (solo summarizer)", d.gw.calls)
+	if d.gw.calls != 2 {
+		t.Errorf("gateway llamado %d veces, querés 2 (solo summarizer + pre-merge)", d.gw.calls)
 	}
 	if res.Status != StatusSuccess {
 		t.Errorf("status = %q, querés success", res.Status)
