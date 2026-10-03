@@ -72,7 +72,7 @@ func newTestEnv(t *testing.T, maxFails int) *testEnv {
 
 	cfg := &config.Config{SessionTTL: time.Hour, LoginMaxFails: maxFails, MasterKey: make([]byte, 32)}
 	env := &testEnv{st: st, user: user, pass: pass, llm: &stubLLM{}, queue: &stubQueue{}}
-	srv := New(st, cfg, nil, env.queue, env.llm) // webhook GitHub no ejercitado acá (tests propios en internal/vcs/github)
+	srv := New(st, cfg, nil, nil, env.queue, env.llm) // webhooks no ejercitados acá (tests propios en internal/vcs/*)
 	env.ts = httptest.NewTLSServer(srv.Routes())
 	t.Cleanup(env.ts.Close)
 	return env
@@ -325,7 +325,7 @@ func TestWebhookGitHubMontadoSinCSRF(t *testing.T) {
 	gh := vcsgh.New(st, cfg, &stubQueue{})
 	srv := httptest.NewServer(New(st, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gh.HandleWebhook(r.Context(), w, r)
-	}), &stubQueue{}, &stubLLM{}).Routes())
+	}), nil, &stubQueue{}, &stubLLM{}).Routes())
 	t.Cleanup(srv.Close)
 
 	// Ping firmado: evento suscrito por el filtro de descarte — sin BD,

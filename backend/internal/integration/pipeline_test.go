@@ -412,7 +412,7 @@ func TestGitHubWebhookToReview(t *testing.T) {
 	githubWebhook := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ghAdapter.HandleWebhook(r.Context(), w, r)
 	})
-	apiSrv := httptest.NewServer(api.New(st, cfg, githubWebhook, q, nil).Routes())
+	apiSrv := httptest.NewServer(api.New(st, cfg, githubWebhook, nil, q, nil).Routes())
 	t.Cleanup(apiSrv.Close)
 
 	var deliveries []string

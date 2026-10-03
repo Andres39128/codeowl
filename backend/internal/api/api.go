@@ -21,6 +21,7 @@ type Server struct {
 	cfg     *config.Config
 	limiter *limiter      // backoff de login por usuario (§3.4), en memoria
 	github  http.Handler  // webhook de GitHub (firma HMAC, sin cookie ni CSRF)
+	gitlab  http.Handler  // webhook de GitLab (Standard Webhooks, sin cookie ni CSRF)
 	queue   jobs.JobQueue // encola ReconcileJob en la reconexión de repos (§3.5); nunca procesa
 	llm     LLMTester     // solo la prueba de conexión de settings (§3.5)
 }
@@ -36,9 +37,10 @@ func (nopQueue) Stop(context.Context) error                             { return
 
 // New arma el Server. El limiter de login vive en el Server (memoria del
 // proceso — §9.6: filosofía single-worker, suficiente para 1-5 usuarios).
-// githubWebhook es el handler de POST /webhooks/github (adapter VCS); queue
-// y llm son opcionales (nil → no-op / 503 en la prueba de conexión).
-func New(st *store.Store, cfg *config.Config, githubWebhook http.Handler, queue jobs.JobQueue, llm LLMTester) *Server {
+// githubWebhook y gitlabWebhook son los handlers de POST /webhooks/{github,
+// gitlab} (adapters VCS); queue y llm son opcionales (nil → no-op / 503 en
+// la prueba de conexión).
+func New(st *store.Store, cfg *config.Config, githubWebhook, gitlabWebhook http.Handler, queue jobs.JobQueue, llm LLMTester) *Server {
 	if queue == nil {
 		queue = nopQueue{}
 	}
@@ -47,6 +49,7 @@ func New(st *store.Store, cfg *config.Config, githubWebhook http.Handler, queue 
 		cfg:     cfg,
 		limiter: newLimiter(cfg.LoginMaxFails),
 		github:  githubWebhook,
+		gitlab:  gitlabWebhook,
 		queue:   queue,
 		llm:     llm,
 	}
@@ -60,11 +63,14 @@ func (s *Server) Routes() *http.ServeMux {
 
 	mux.Handle("GET /healthz", s.withLogging(s.withRecover(http.HandlerFunc(s.handleHealthz))))
 
-	// Webhook de GitHub: autenticado por firma HMAC, sin cookie — fuera del
+	// Webhooks VCS: autenticados por firma (§9.3), sin cookie — fuera del
 	// CSRF (§3.4). El handler valida, filtra y encola: jamás toca el gateway
 	// LLM (§3.5).
 	if s.github != nil {
 		mux.Handle("POST /webhooks/github", s.withLogging(s.withRecover(s.github)))
+	}
+	if s.gitlab != nil {
+		mux.Handle("POST /webhooks/gitlab", s.withLogging(s.withRecover(s.gitlab)))
 	}
 
 	// Login es mutante pero no autenticado por cookie: el CSRF de §3.4 no

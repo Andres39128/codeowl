@@ -19,6 +19,7 @@ import (
 	"github.com/Andres39128/codeowl/backend/internal/llm"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	vcsgh "github.com/Andres39128/codeowl/backend/internal/vcs/github"
+	vcsgl "github.com/Andres39128/codeowl/backend/internal/vcs/gitlab"
 	"github.com/Andres39128/codeowl/backend/migrations"
 )
 
@@ -79,14 +80,19 @@ func main() {
 	})
 
 	// Routing y middleware (auth, logging, recover) viven en internal/api.
-	// El webhook GitHub entra como handler del adapter: sin CSRF (§3.4) —
-	// su autenticación es la firma HMAC del payload (§9.3).
+	// Los webhooks VCS entran como handlers de sus adapters: sin CSRF (§3.4) —
+	// su autenticación es la firma del payload (§9.3).
 	gh := vcsgh.New(st, cfg, jq)
+	gl := vcsgl.New(st, cfg, jq)
 	srv := &http.Server{
 		Addr: cfg.APIAddr,
-		Handler: api.New(st, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gh.HandleWebhook(r.Context(), w, r)
-		}), jq, gateway).Routes(),
+		Handler: api.New(st, cfg,
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gh.HandleWebhook(r.Context(), w, r)
+			}),
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gl.HandleWebhook(r.Context(), w, r)
+			}), jq, gateway).Routes(),
 		ReadHeaderTimeout: shutdownGrace,
 	}
 

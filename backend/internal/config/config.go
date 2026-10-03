@@ -38,14 +38,19 @@ const (
 	DefaultLLMMaxRetries         = 3                 // §9.7: reintentos por proveedor ante 429/5xx
 	DefaultWebhookMaxBytes       = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
 	DefaultVCSTimeout            = 30 * time.Second  // timeout por llamada HTTP al VCS
-	DefaultAnalyzerImage         = "localhost/codeowl-analyzer:latest"
-	DefaultAnalyzerMemory        = "1g"              // §9.4: tope de RAM del sandbox
-	DefaultAnalyzerPidsLimit     = 256               // §9.4: tope de procesos del sandbox
-	DefaultAnalyzerTimeout       = 120 * time.Second // timeout duro del sandbox (§9.4)
-	DefaultAnalyzerTmpfsSize     = "512m"            // §9.4: tmpfs de /tmp para caches de linters
-	DefaultReviewConcurrency     = 2                 // §9.6: ReviewJobs concurrentes en el worker
-	DefaultChatConcurrency       = 2                 // §9.6: slots propios del ChatJob (F2)
-	DefaultCleanupRetentionDays  = 30                // §9.11: retención de webhook_deliveries
+	// GitLab (§9.3/§3.5/§3.6.1.1): frescura anti-replay, username del bot
+	// (anti-bucle) y TTL de la cache del tip de la rama base.
+	DefaultWebhookTimestampTolerance = 5 * time.Minute // default del SDK Standard Webhooks
+	DefaultGitLabBotUsername         = "codeowl"
+	DefaultBranchTipCacheTTL         = 30 * time.Second
+	DefaultAnalyzerImage             = "localhost/codeowl-analyzer:latest"
+	DefaultAnalyzerMemory            = "1g"              // §9.4: tope de RAM del sandbox
+	DefaultAnalyzerPidsLimit         = 256               // §9.4: tope de procesos del sandbox
+	DefaultAnalyzerTimeout           = 120 * time.Second // timeout duro del sandbox (§9.4)
+	DefaultAnalyzerTmpfsSize         = "512m"            // §9.4: tmpfs de /tmp para caches de linters
+	DefaultReviewConcurrency         = 2                 // §9.6: ReviewJobs concurrentes en el worker
+	DefaultChatConcurrency           = 2                 // §9.6: slots propios del ChatJob (F2)
+	DefaultCleanupRetentionDays      = 30                // §9.11: retención de webhook_deliveries
 )
 
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
@@ -86,6 +91,10 @@ type Stage2Config struct {
 	// Webhook + VCS (§9.3/§4.5): los consumen internal/vcs.
 	WebhookMaxBytes int64
 	VCSTimeout      time.Duration
+	// GitLab (§9.3/§3.5/§3.6.1.1): los consume internal/vcs/gitlab.
+	WebhookTimestampTolerance time.Duration // frescura del timestamp Standard Webhooks (replay)
+	GitLabBotUsername         string        // anti-bucle del chat (GitLab no expone flag de bot)
+	BranchTipCacheTTL         time.Duration // cache del tip de la rama base (§3.6.1.1)
 	// Sandbox analyzer (§9.4): los consumen internal/analyze.
 	AnalyzerImage     string
 	AnalyzerMemory    string
@@ -289,6 +298,20 @@ func Load() (*Config, error) {
 		errs = append(errs, err.Error())
 	}
 	s2.VCSTimeout = vcsTimeout
+
+	tolerance, err := loadDuration("WEBHOOK_TIMESTAMP_TOLERANCE", DefaultWebhookTimestampTolerance)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.WebhookTimestampTolerance = tolerance
+
+	s2.GitLabBotUsername = envOr("GITLAB_BOT_USERNAME", DefaultGitLabBotUsername)
+
+	branchTTL, err := loadDuration("BRANCH_TIP_CACHE_TTL", DefaultBranchTipCacheTTL)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.BranchTipCacheTTL = branchTTL
 
 	s2.AnalyzerImage = envOr("ANALYZER_IMAGE", DefaultAnalyzerImage)
 
