@@ -2,9 +2,10 @@
 // F1: registra los workers del dominio — ReviewJob (pipeline de revisión),
 // CleanupJob (retención diaria, §9.11), RotationJob (re-cifrado de master
 // key, §9.2) y ReconcileJob (reconciliación de PRs, §3.5). F2 suma el
-// ChatJob (respuestas a menciones @bot, §3.5/§6). SIGTERM drena ordenado:
-// deja de tomar jobs y termina el en curso (§9.12; la ventana de gracia la
-// fija TimeoutStopSec de la unidad).
+// ChatJob (respuestas a menciones @bot, §3.5/§6) y F4 el IndexJob (índice
+// RAG de la rama default, §6 F4). SIGTERM drena ordenado: deja de tomar
+// jobs y termina el en curso (§9.12; la ventana de gracia la fija
+// TimeoutStopSec de la unidad).
 package main
 
 import (
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
 	"github.com/Andres39128/codeowl/backend/internal/config"
+	"github.com/Andres39128/codeowl/backend/internal/index"
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/llm"
 	"github.com/Andres39128/codeowl/backend/internal/review"
@@ -86,7 +88,7 @@ func main() {
 
 	if err := q.Register(
 		&jobs.ReviewJobWorker{
-			Store: st, Gateway: gateway, Analyzer: analyzer, Provider: provider, Config: reviewCfg,
+			Store: st, Gateway: gateway, Analyzer: analyzer, Provider: provider, Queue: q, Config: reviewCfg,
 		},
 		&jobs.ChatJobWorker{
 			Store: st, Gateway: gateway, Provider: provider, Queue: q,
@@ -103,6 +105,13 @@ func main() {
 		},
 		&jobs.ReconcileJobWorker{
 			Store: st, Provider: provider,
+		},
+		&jobs.IndexJobWorker{
+			Store: st, Gateway: gateway, Extractor: analyzer, Provider: provider,
+			Config: index.Config{
+				MaxSymbolsPerRun: cfg.Stage2.IndexMaxSymbolsPerRun,
+				DefaultProfile:   cfg.Stage2.ReviewDefaultProfile,
+			},
 		},
 	); err != nil {
 		slog.Error("registrando workers", "err", err)

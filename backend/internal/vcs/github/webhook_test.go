@@ -292,9 +292,30 @@ func TestWebhookPRSynchronizeNuevaCabeza(t *testing.T) {
 	}
 }
 
-func TestWebhookPRClosedSinJob(t *testing.T) {
+// crearEmbeddingProvider inserta un proveedor embedding enabled efímero:
+// la guarda del IndexJob es de EXISTENCIA (§9.6) y el estado heredado de la
+// BD compartida no es determinista.
+func crearEmbeddingProvider(t *testing.T, st *store.Store) {
+	t.Helper()
+	clave := bytes.Repeat([]byte{0xC5}, 32)
+	apiKey, err := store.Encrypt(clave, []byte("sk-embed-test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateLlmProvider(context.Background(), store.CreateLlmProviderParams{
+		BaseUrl: "https://embed.test/v1", Model: fmt.Sprintf("embed-%d", time.Now().UnixNano()),
+		ApiKey: apiKey, Role: "embedding", Priority: 1, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.DeleteLlmProvider(context.Background(), p.ID) })
+}
+
+func TestWebhookPRCloseSinJobYMergeEncolaIndice(t *testing.T) {
 	e := newWebhookEnv(t)
 	repo := e.newRepo(t, true)
+	crearEmbeddingProvider(t, e.st) // con rol embedding, el merge encola el índice (§6 F4)
 
 	serve(t, e, createSignedPayload(t, "pull_request",
 		prPayload(repo.ExternalID, 5, "opened", "h1", "b1", "main")), http.StatusOK)
@@ -302,7 +323,25 @@ func TestWebhookPRClosedSinJob(t *testing.T) {
 		t.Fatalf("opened debe encolar: jobs=%d", e.q.count())
 	}
 
-	// Cierre como merge: state closed + merged_at (§3.5), sin job nuevo.
+	// Cierre simple (sin merge): solo estado, sin job (§3.5).
+	closed := prPayload(repo.ExternalID, 5, "closed", "h1", "b1", "main", func(p map[string]any) {
+		pr := p["pull_request"].(map[string]any)
+		pr["state"] = "closed"
+	})
+	serve(t, e, createSignedPayload(t, "pull_request", closed), http.StatusOK)
+	if e.q.count() != 1 {
+		t.Errorf("close simple no debe encolar (MetricsJob es F5): jobs=%d", e.q.count())
+	}
+	pr, err := e.getPR(t, repo.ID, 5)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
+	if pr.State != "closed" || pr.MergedAt.Valid {
+		t.Errorf("close simple debe dejar closed y sin merged_at: %+v", pr)
+	}
+
+	// Cierre como merge: state closed + merged_at (§3.5) + IndexJob del repo
+	// (§6 F4 — la rama default avanzó).
 	merged := prPayload(repo.ExternalID, 5, "closed", "h1", "b1", "main", func(p map[string]any) {
 		pr := p["pull_request"].(map[string]any)
 		pr["state"] = "closed"
@@ -311,15 +350,23 @@ func TestWebhookPRClosedSinJob(t *testing.T) {
 	})
 	serve(t, e, createSignedPayload(t, "pull_request", merged), http.StatusOK)
 
-	if e.q.count() != 1 {
-		t.Errorf("closed no debe encolar (MetricsJob es F5): jobs=%d", e.q.count())
+	if e.q.count() != 2 {
+		t.Fatalf("el merge debe encolar el IndexJob: jobs=%d", e.q.count())
 	}
-	pr, err := e.getPR(t, repo.ID, 5)
+	kind, args := e.q.last()
+	if kind != jobs.KindIndex {
+		t.Errorf("kind: got %q want %q", kind, jobs.KindIndex)
+	}
+	var indexArgs jobs.IndexJobArgs
+	if err := json.Unmarshal(args, &indexArgs); err != nil {
+		t.Fatalf("args del IndexJob: %v", err)
+	}
+	if indexArgs.RepositoryID != repo.ID {
+		t.Errorf("el IndexJob debe apuntar al repo %d: %+v", repo.ID, indexArgs)
+	}
+	pr, err = e.getPR(t, repo.ID, 5)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
-	}
-	if pr.State != "closed" {
-		t.Errorf("state: got %q want closed", pr.State)
 	}
 	if !pr.MergedAt.Valid || pr.MergedAt.Time.UTC().Hour() != 4 {
 		t.Errorf("merged_at debe registrarse en el merge: %+v", pr.MergedAt)

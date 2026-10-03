@@ -1,9 +1,10 @@
 // Workers River del dominio (mapa: backend.jobs, F1): ReviewJob ejecuta el
 // pipeline de revisión (§3.6), CleanupJob la retención (§9.11), RotationJob
-// el re-cifrado al rotar la master key (§9.2) y ReconcileJob la
-// reconciliación de PRs al reconectar un repo (§3.5, sin LLM). Ninguno
-// consume el gateway LLM directo: el único que habla con proveedores es el
-// pipeline de review (internal/review).
+// el re-cifrado al rotar la master key (§9.2), ReconcileJob la
+// reconciliación de PRs al reconectar un repo (§3.5, sin LLM) y IndexJob la
+// indexación RAG de la rama default (§6 F4). El IndexJob consume el gateway
+// por el rol embedding (index.Gateway) — el resto de workers solo habla con
+// proveedores vía el pipeline de review.
 package jobs
 
 import (
@@ -20,6 +21,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
+	"github.com/Andres39128/codeowl/backend/internal/index"
 	"github.com/Andres39128/codeowl/backend/internal/llm"
 	"github.com/Andres39128/codeowl/backend/internal/review"
 	"github.com/Andres39128/codeowl/backend/internal/store"
@@ -62,6 +64,7 @@ type ReviewJobWorker struct {
 	Gateway  review.Gateway  // *llm.Gateway la satisface
 	Analyzer review.Analyzer // *analyze.Runner la satisface
 	Provider vcs.VCSProvider
+	Queue    JobQueue // encola el IndexJob tras la corrida (§6 F4)
 	Config   review.Config
 
 	WorkdirRoot string // default /var/tmp (los tests usan un tmp propio)
@@ -108,6 +111,16 @@ func (w *ReviewJobWorker) Work(ctx context.Context, job *river.Job[ReviewJobArgs
 	}
 	slog.Info("review job completado", "job", job.ID, "pr", pr.Number, "review", res.Status,
 		"findings", res.FindingsCount)
+	// §6 F4: una review success/partial implica cambios en la base del PR —
+	// re-encola el índice del repo (la guarda de proveedor embedding vive en
+	// EnqueueIndexJob). Best-effort: un fallo de cola no invalida la review
+	// ya publicada; el próximo trigger re-encola.
+	if res.Status == review.StatusSuccess || res.Status == review.StatusPartial {
+		if err := EnqueueIndexJob(ctx, w.Store, w.Queue, repoID); err != nil {
+			slog.Warn("review job: no se pudo encolar el IndexJob",
+				"repo", repoID, "pr", pr.Number, "err", err)
+		}
+	}
 	return nil
 }
 
@@ -456,6 +469,67 @@ func (w *ReconcileJobWorker) Work(ctx context.Context, job *river.Job[ReconcileJ
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// IndexJobWorker — índice RAG del repo (§6 F4)
+// ---------------------------------------------------------------------------
+
+// IndexJobWorker indexa la rama default del repo: clona por
+// FetchDefaultBranch al workdir del job y delega en index.Index (symbols →
+// embeddings del rol embedding → repo_index, con resume por hash §9.6). Un
+// error de infraestructura reintenta con el backoff de River — el resume
+// hace el reintento barato. Sin proveedor embedding NO quema reintentos:
+// queda latente (§9.6) y el próximo trigger re-encola.
+type IndexJobWorker struct {
+	river.WorkerDefaults[IndexJobArgs]
+
+	Store       *store.Store
+	Gateway     index.Gateway   // *llm.Gateway la satisface (rol embedding)
+	Extractor   index.Extractor // *analyze.Runner la satisface
+	Provider    vcs.VCSProvider // FetchDefaultBranch clona la rama default
+	Config      index.Config
+	WorkdirRoot string // default /var/tmp (los tests usan un tmp propio)
+}
+
+func (w *IndexJobWorker) register(b *river.Workers) error { return river.AddWorkerSafely(b, w) }
+
+// Work ejecuta la corrida de índice. Repo deshabilitado: skip con log — el
+// job pendiente de un repo desconectado no corre (§3.5: solo repos
+// conectados generan trabajo).
+func (w *IndexJobWorker) Work(ctx context.Context, job *river.Job[IndexJobArgs]) error {
+	repo, err := w.Store.GetRepository(ctx, job.Args.RepositoryID)
+	if err != nil {
+		return fmt.Errorf("cargando el repo %d: %w", job.Args.RepositoryID, err)
+	}
+	if !repo.Enabled {
+		slog.Info("index job: repo deshabilitado, omitido", "repo", repo.ID)
+		return nil
+	}
+	workdir, err := os.MkdirTemp(workdirRoot(w.WorkdirRoot), fmt.Sprintf("%s%d-", workdirPrefix, job.ID))
+	if err != nil {
+		return fmt.Errorf("creando el workdir del job %d: %w", job.ID, err)
+	}
+	defer os.RemoveAll(workdir)
+
+	if err := w.Provider.FetchDefaultBranch(ctx, &repo, workdir); err != nil {
+		return fmt.Errorf("clonando la rama default del repo %d: %w", repo.ID, err)
+	}
+	res, err := index.Index(ctx, w.Store, w.Gateway, w.Extractor, repo, workdir, w.Config)
+	if err != nil {
+		if errors.Is(err, index.ErrNoEmbeddingProvider) {
+			// §9.6: sin proveedor embedding la corrida queda latente —
+			// devolver error solo quemaría los 5 intentos con el mismo
+			// desenlace; el próximo trigger re-encola cuando el rol exista.
+			slog.Info("index job: sin proveedor embedding, queda latente (§9.6)", "repo", repo.ID)
+			return nil
+		}
+		return err
+	}
+	slog.Info("index job completado", "job", job.ID, "repo", repo.ID,
+		"files", res.FilesIndexed, "symbols", res.SymbolsIndexed,
+		"skipped", res.FilesSkipped, "truncated", res.Truncated)
+	return nil
+}
+
 // Satisfacción de interfaces en tiempo de compilación: el worker consume
 // exactamente el contrato que declara.
 var (
@@ -464,11 +538,15 @@ var (
 	_ river.Worker[CleanupJobArgs]   = (*CleanupJobWorker)(nil)
 	_ river.Worker[RotationJobArgs]  = (*RotationJobWorker)(nil)
 	_ river.Worker[ReconcileJobArgs] = (*ReconcileJobWorker)(nil)
+	_ river.Worker[IndexJobArgs]     = (*IndexJobWorker)(nil)
 	_ Worker                         = (*ReviewJobWorker)(nil)
 	_ Worker                         = (*ChatJobWorker)(nil)
 	_ Worker                         = (*CleanupJobWorker)(nil)
 	_ Worker                         = (*RotationJobWorker)(nil)
 	_ Worker                         = (*ReconcileJobWorker)(nil)
+	_ Worker                         = (*IndexJobWorker)(nil)
 	_ review.Gateway                 = (*llm.Gateway)(nil)
 	_ review.Analyzer                = (*analyze.Runner)(nil)
+	_ index.Gateway                  = (*llm.Gateway)(nil)
+	_ index.Extractor                = (*analyze.Runner)(nil)
 )

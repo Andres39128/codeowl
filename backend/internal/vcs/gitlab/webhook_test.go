@@ -501,9 +501,30 @@ func TestWebhookMRDraftTransicion(t *testing.T) {
 	}
 }
 
-func TestWebhookMRCloseYMergeSinJob(t *testing.T) {
+// crearEmbeddingProvider inserta un proveedor embedding enabled efímero:
+// la guarda del IndexJob es de EXISTENCIA (§9.6) y el estado heredado de la
+// BD compartida no es determinista.
+func crearEmbeddingProvider(t *testing.T, st *store.Store) {
+	t.Helper()
+	clave := bytes.Repeat([]byte{0xC5}, 32)
+	apiKey, err := store.Encrypt(clave, []byte("sk-embed-test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateLlmProvider(context.Background(), store.CreateLlmProviderParams{
+		BaseUrl: "https://embed.test/v1", Model: fmt.Sprintf("embed-%d", time.Now().UnixNano()),
+		ApiKey: apiKey, Role: "embedding", Priority: 1, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.DeleteLlmProvider(context.Background(), p.ID) })
+}
+
+func TestWebhookMRCloseSinJobYMergeEncolaIndice(t *testing.T) {
 	e := newWebhookEnv(t)
 	repo := e.newRepo(t, true)
+	crearEmbeddingProvider(t, e.st) // con rol embedding, el merge encola el índice (§6 F4)
 
 	serve(t, e, createSignedPayload(t, mrPayload(repo.ExternalID, 8, "open", "h1", "main")), http.StatusOK)
 	if e.q.count() != 1 {
@@ -522,10 +543,22 @@ func TestWebhookMRCloseYMergeSinJob(t *testing.T) {
 		t.Errorf("close simple no debe registrar merged_at: %+v", pr.MergedAt)
 	}
 
-	// Merge: close con merged_at (el updated_at del evento, §3.5).
+	// Merge: close con merged_at (el updated_at del evento, §3.5) + IndexJob
+	// del repo (§6 F4 — la rama default avanzó).
 	serve(t, e, createSignedPayload(t, mrPayload(repo.ExternalID, 8, "merge", "h1", "main")), http.StatusOK)
-	if e.q.count() != 1 {
-		t.Errorf("merge no debe encolar: jobs=%d", e.q.count())
+	if e.q.count() != 2 {
+		t.Fatalf("el merge debe encolar el IndexJob: jobs=%d", e.q.count())
+	}
+	kind, args := e.q.last()
+	if kind != jobs.KindIndex {
+		t.Errorf("kind: got %q want %q", kind, jobs.KindIndex)
+	}
+	var indexArgs jobs.IndexJobArgs
+	if err := json.Unmarshal(args, &indexArgs); err != nil {
+		t.Fatalf("args del IndexJob: %v", err)
+	}
+	if indexArgs.RepositoryID != repo.ID {
+		t.Errorf("el IndexJob debe apuntar al repo %d: %+v", repo.ID, indexArgs)
 	}
 	pr, err = e.getPR(t, repo.ID, 8)
 	if err != nil {

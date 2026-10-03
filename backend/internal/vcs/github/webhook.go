@@ -226,9 +226,10 @@ func filterEvent(event string, p *webhookPayload) bool {
 }
 
 // handlePullRequest upserta el PR (idempotente por repo+number) y encola el
-// ReviewJob para las acciones de review. El cierre actualiza estado y NO
-// encola: el MetricsJob llega en F5 (§3.5). converted_to_draft y el resto
-// de acciones nunca llegan acá: las corta filterEvent.
+// ReviewJob para las acciones de review. El cierre actualiza estado (el
+// merge además re-encola el IndexJob, §6 F4); el MetricsJob llega en F5
+// (§3.5). converted_to_draft y el resto de acciones nunca llegan acá: las
+// corta filterEvent.
 func (a *Adapter) handlePullRequest(ctx context.Context, repo store.Repository, p *webhookPayload) error {
 	pr := p.PullRequest
 	mergedAt := pgtype.Timestamptz{}
@@ -251,9 +252,16 @@ func (a *Adapter) handlePullRequest(ctx context.Context, repo store.Repository, 
 	}
 
 	if p.Action == "closed" {
-		// Cierre: solo estado — sin job (§3.5). El descarte de jobs
-		// pendientes del PR lo hace el worker desde su tarea de jobs.
+		// Cierre: solo estado (§3.5) — el descarte de jobs pendientes del PR
+		// lo hace el worker desde su tarea de jobs. Merge (§6 F4): la rama
+		// default avanzó — re-encola el índice del repo (la guarda de rol
+		// embedding vive en EnqueueIndexJob; sin proveedor queda latente).
 		slog.InfoContext(ctx, "webhook github: PR cerrado", "pr", pr.Number, "merged", pr.MergedAt != nil)
+		if mergedAt.Valid {
+			if err := jobs.EnqueueIndexJob(ctx, a.st, a.jq, repo.ID); err != nil {
+				return fmt.Errorf("encolando IndexJob tras merge del PR %d: %w", pr.Number, err)
+			}
+		}
 		return nil
 	}
 

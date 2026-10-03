@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -21,14 +22,15 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// Kinds de los jobs del dominio (mapa: backend.jobs). El que aún no tiene
-// worker es ChatJob (F2) — su cola ya está dimensionada por CHAT_CONCURRENCY.
+// Kinds de los jobs del dominio (mapa: backend.jobs). El IndexJob (F4) es
+// la indexación RAG del repo.
 const (
 	KindReview    = "review"
 	KindChat      = "chat" // F2
 	KindCleanup   = "cleanup"
 	KindRotation  = "rotation"
 	KindReconcile = "reconcile"
+	KindIndex     = "index" // F4
 )
 
 // Colas River (§9.6): review y chat corren con slots propios — el SLO de
@@ -41,12 +43,18 @@ const (
 	QueueOps    = "ops"
 )
 
-// reviewMaxAttempts es el tope de intentos del ReviewJob y del ChatJob
-// (§9.7: máximo de intentos con el backoff exponencial de River — 5 intentos
-// ≈ 16 min de ventana). Al agotarlos, River deja el job discarded y el
-// worker marca la corrida failed.
+// reviewMaxAttempts es el tope de intentos del ReviewJob, del ChatJob y del
+// IndexJob (§9.7: máximo de intentos con el backoff exponencial de River —
+// 5 intentos ≈ 16 min de ventana). Al agotarlos, River deja el job discarded
+// y el worker marca la corrida failed. El IndexJob comparte la cola y el
+// tope del review (§9.6): el resume por hash hace barato el reintento.
 // ponytail: constante, no config — subirla a Stage2 si ops pide afinarla.
 const reviewMaxAttempts = 5
+
+// roleEmbedding es el rol que habilita el encolado del IndexJob (§6 F4).
+// Espejo del roleEmbedding de index: un valor literal — importar el paquete
+// index solo por la constante acoplaría jobs a todo el core del índice.
+const roleEmbedding = "embedding"
 
 // ReviewJobArgs son los argumentos del ReviewJob. (HeadSha, BaseSha) es la
 // identidad de la corrida (§3.6.1): push y retarget la cambian y marcan
@@ -97,6 +105,15 @@ type ReconcileJobArgs struct {
 }
 
 func (ReconcileJobArgs) Kind() string { return KindReconcile }
+
+// IndexJobArgs son los argumentos del IndexJob (§6 F4): único por repo
+// mientras viva (§9.6) — merges y reconexiones consecutivos del mismo repo
+// convergen en una sola corrida de índice de la rama default.
+type IndexJobArgs struct {
+	RepositoryID int64 `json:"repository_id"`
+}
+
+func (IndexJobArgs) Kind() string { return KindIndex }
 
 // Worker es lo que Register acepta: un worker River concreto de este
 // paquete. Un método de interfaz no puede ser genérico, así que cada worker
@@ -189,14 +206,15 @@ func (a rawJobArgs) MarshalJSON() ([]byte, error) {
 	return a.args, nil
 }
 
-// reviewUniqueStates fija la unicidad del ReviewJob (§3.6.1.4): único por
-// args (identidad del PR y de la corrida) mientras viva en cualquier estado
-// activo. completed queda FUERA a propósito — completado no bloquea la
-// siguiente corrida (el re-encolo transaccional de §3.6.1.5 vive en el
-// pipeline). Al customizar ByState, River exige incluir pending, scheduled,
-// available y running; retryable se mantiene: un reintento en curso también
-// bloquea duplicados.
-func reviewUniqueStates() []rivertype.JobState {
+// uniqueWhileAliveStates es el conjunto "único mientras viva" compartido por
+// ReviewJob e IndexJob: único por args (identidad del PR / repo) en
+// cualquier estado activo. completed queda FUERA a propósito — completado no
+// bloquea la siguiente corrida (el re-encolo transaccional de §3.6.1.5 vive
+// en el pipeline; el IndexJob se re-encola en el próximo trigger §6 F4). Al
+// customizar ByState, River exige incluir pending, scheduled, available y
+// running; retryable se mantiene: un reintento en curso también bloquea
+// duplicados.
+func uniqueWhileAliveStates() []rivertype.JobState {
 	return []rivertype.JobState{
 		rivertype.JobStateAvailable,
 		rivertype.JobStatePending,
@@ -206,16 +224,17 @@ func reviewUniqueStates() []rivertype.JobState {
 	}
 }
 
-// insertOpts resuelve la cola y las opciones por kind: review y chat llevan
-// el tope de intentos (§9.7; review además unicidad §3.6.1.4); el resto va a
-// ops.
+// insertOpts resuelve la cola y las opciones por kind: review e index
+// comparten la cola review y el tope de intentos (§9.6/§9.7; review además
+// unicidad §3.6.1.4, index unicidad por repo §9.6); chat lleva su cola con
+// tope de intentos; el resto va a ops.
 func insertOpts(kind string) *river.InsertOpts {
 	opts := &river.InsertOpts{Queue: QueueOps}
 	switch kind {
-	case KindReview:
+	case KindReview, KindIndex:
 		opts.Queue = QueueReview
 		opts.MaxAttempts = reviewMaxAttempts
-		opts.UniqueOpts = river.UniqueOpts{ByArgs: true, ByState: reviewUniqueStates()}
+		opts.UniqueOpts = river.UniqueOpts{ByArgs: true, ByState: uniqueWhileAliveStates()}
 	case KindChat:
 		opts.Queue = QueueChat
 		opts.MaxAttempts = reviewMaxAttempts
@@ -236,6 +255,33 @@ func (q *RiverQueue) Enqueue(ctx context.Context, kind string, args json.RawMess
 	}
 	if _, err := q.client.Insert(ctx, rawJobArgs{kind: kind, args: args}, insertOpts(kind)); err != nil {
 		return fmt.Errorf("encolando job %q: %w", kind, err)
+	}
+	return nil
+}
+
+// EnqueueIndexJob encola el IndexJob del repo (§6 F4) si hay al menos un
+// proveedor LLM enabled en el rol embedding (§9.6: sin proveedor, el job no
+// se encola — log estructurado; la indexación queda latente hasta configurar
+// el rol y el próximo trigger la re-encola). La unicidad por repo la aplica
+// la cola (insertOpts): N triggers del mismo repo, una sola corrida viva.
+// La consumen la api (conectar/reconectar), el worker (review success/
+// partial) y los webhooks (merge) — todos ya tienen store y cola a mano.
+func EnqueueIndexJob(ctx context.Context, st *store.Store, jq JobQueue, repoID int64) error {
+	providers, err := st.ListEnabledLlmProvidersByRole(ctx, roleEmbedding)
+	if err != nil {
+		return fmt.Errorf("consultando proveedores embedding para el IndexJob: %w", err)
+	}
+	if len(providers) == 0 {
+		slog.Info("index job no encolado: sin proveedor embedding enabled (la indexación queda latente, §9.6)",
+			"repo_id", repoID)
+		return nil
+	}
+	args, err := json.Marshal(IndexJobArgs{RepositoryID: repoID})
+	if err != nil {
+		return fmt.Errorf("serializando args del IndexJob: %w", err)
+	}
+	if err := jq.Enqueue(ctx, KindIndex, args); err != nil {
+		return fmt.Errorf("encolando IndexJob: %w", err)
 	}
 	return nil
 }

@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
+	"github.com/Andres39128/codeowl/backend/internal/index"
 	"github.com/Andres39128/codeowl/backend/internal/review"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
@@ -112,12 +115,15 @@ func wPR(t *testing.T, st *store.Store, repoID, number int64) store.PullRequest 
 
 // wProvider sirve el diff fijo, graba el workdir del FetchPR y lista los PRs
 // abiertos que le carguen. Lo que el worker no usa devuelve error: si se
-// llama, el test lo tiene que ver.
+// llama, el test lo tiene que ver. Con fetchDefault, FetchDefaultBranch arma
+// un clon de juguete y graba el workdir (el IndexJob lo consume).
 type wProvider struct {
-	fetchWorkdir string
-	diff         string
-	diffErr      error
-	openPRs      []vcs.OpenPR
+	fetchWorkdir    string
+	fetchDefault    bool
+	defaultWorkdir  string
+	diff            string
+	diffErr         error
+	openPRs         []vcs.OpenPR
 }
 
 func (p *wProvider) HandleWebhook(context.Context, http.ResponseWriter, *http.Request) {
@@ -126,8 +132,12 @@ func (p *wProvider) FetchPR(_ context.Context, _ *store.Repository, _ *store.Pul
 	p.fetchWorkdir = workdir
 	return nil
 }
-func (p *wProvider) FetchDefaultBranch(context.Context, *store.Repository, string) error {
-	return errors.New("wProvider: FetchDefaultBranch no esperado")
+func (p *wProvider) FetchDefaultBranch(_ context.Context, _ *store.Repository, workdir string) error {
+	if !p.fetchDefault {
+		return errors.New("wProvider: FetchDefaultBranch no esperado")
+	}
+	p.defaultWorkdir = workdir
+	return wGitInit(workdir)
 }
 func (p *wProvider) FetchPRTimeline(context.Context, *store.Repository, *store.PullRequest) (*vcs.PRTimeline, error) {
 	return &vcs.PRTimeline{}, nil
@@ -185,22 +195,128 @@ func wJob[T river.JobArgs](args T, attempt, maxAttempts int) *river.Job[T] {
 	}
 }
 
+// wGitInit arma un clon de juguete en el workdir (git init + commit de un
+// main.go): index.Index resuelve el HEAD real del clon para el review.yaml
+// (§6 F4), así que el stub de FetchDefaultBranch deja un repo válido.
+func wGitInit(dir string) error {
+	run := func(args ...string) error {
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git %v: %v: %s", args, err, out)
+		}
+		return nil
+	}
+	if err := run("init", "-q"); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc Main() {}\n"), 0o644); err != nil {
+		return err
+	}
+	for _, args := range [][]string{
+		{"config", "user.email", "test@codeowl.local"},
+		{"config", "user.name", "codeowl-test"},
+		{"add", "."},
+		{"commit", "-qm", "fixture"},
+	} {
+		if err := run(args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// wQueue es el stub de JobQueue para los workers que encolan (ReviewJob →
+// IndexJob §6 F4): registra los kinds encolados.
+type wQueue struct {
+	mu    sync.Mutex
+	kinds []string
+}
+
+func (q *wQueue) Enqueue(_ context.Context, kind string, _ json.RawMessage) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.kinds = append(q.kinds, kind)
+	return nil
+}
+func (q *wQueue) Register(...Worker) error { return nil }
+func (q *wQueue) Start(context.Context) error {
+	return nil
+}
+func (q *wQueue) Stop(context.Context) error { return nil }
+
+// encolados devuelve los kinds grabados (copia segura).
+func (q *wQueue) encolados() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]string(nil), q.kinds...)
+}
+
+// wEmbedGateway graba los textos embebidos y sirve vectores de 1536 dims
+// (stub del rol embedding, §4.5).
+type wEmbedGateway struct {
+	mu    sync.Mutex
+	calls [][]string
+}
+
+func (g *wEmbedGateway) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, texts)
+	vecs := make([][]float32, len(texts))
+	for i := range vecs {
+		v := make([]float32, 1536)
+		v[0] = 0.5
+		vecs[i] = v
+	}
+	return vecs, nil
+}
+
+// wExtractor devuelve el fixture fijo de símbolos (stub del sandbox).
+type wExtractor struct{ syms []analyze.Symbol }
+
+func (e *wExtractor) ExtractSymbols(context.Context, string) ([]analyze.Symbol, error) {
+	return e.syms, nil
+}
+
+// wEmbeddingProvider crea un proveedor embedding enabled efímero en la BD:
+// el core del índice re-valida el rol al correr (§9.6) — la BD compartida
+// no garantiza que exista uno.
+func wEmbeddingProvider(t *testing.T, st *store.Store) {
+	t.Helper()
+	clave := bytes.Repeat([]byte{0xC4}, 32)
+	apiKey, err := store.Encrypt(clave, []byte("sk-embed-test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov, err := st.CreateLlmProvider(context.Background(), store.CreateLlmProviderParams{
+		BaseUrl: "https://embed.test/v1", Model: fmt.Sprintf("embed-%d", wNano()),
+		ApiKey: apiKey, Role: roleEmbedding, Priority: 1, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.DeleteLlmProvider(context.Background(), prov.ID) })
+}
+
 // ---------------------------------------------------------------------------
 // ReviewJobWorker
 // ---------------------------------------------------------------------------
 
 // Work corre la corrida completa con stubs: crea la review (success), pasa
-// el workdir al FetchPR y lo borra al salir.
+// el workdir al FetchPR, lo borra al salir y re-encola el IndexJob del repo
+// (§6 F4 — con proveedor embedding efímero en la BD).
 func TestReviewJobWorkerCorridaYWorkdir(t *testing.T) {
 	st := wStore(t)
 	ctx := context.Background()
 	repo := wRepo(t, st)
 	defer wDropRepo(t, st, repo.ID)
 	pr := wPR(t, st, repo.ID, 101)
+	wEmbeddingProvider(t, st)
 
 	prov := &wProvider{diff: ""} // diff vacío: sin reviewer LLM, solo resumen
+	cola := &wQueue{}
 	w := &ReviewJobWorker{
-		Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{}, Provider: prov,
+		Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{}, Provider: prov, Queue: cola,
 		Config: review.DefaultConfig(), WorkdirRoot: t.TempDir(),
 	}
 
@@ -221,6 +337,11 @@ func TestReviewJobWorkerCorridaYWorkdir(t *testing.T) {
 		t.Errorf("la corrida debe quedar success con resumen: got %+v", rev)
 	}
 
+	// §6 F4: success → re-encola el índice del repo.
+	if kinds := cola.encolados(); len(kinds) != 1 || kinds[0] != KindIndex {
+		t.Errorf("la review success debe encolar el IndexJob: %v", kinds)
+	}
+
 	// El workdir se creó para el clon y se borró al salir del job.
 	if prov.fetchWorkdir == "" {
 		t.Fatal("FetchPR no recibió workdir")
@@ -232,7 +353,8 @@ func TestReviewJobWorkerCorridaYWorkdir(t *testing.T) {
 
 // Al agotar intentos, el worker deja la corrida failed (§9.7): jamás una
 // fila running huérfana. Antes del último intento, la running espera el
-// reintento.
+// reintento. Una corrida fallida NO encola el IndexJob (§6 F4: stale y
+// failed no).
 func TestReviewJobWorkerAgotaIntentos(t *testing.T) {
 	st := wStore(t)
 	ctx := context.Background()
@@ -241,8 +363,9 @@ func TestReviewJobWorkerAgotaIntentos(t *testing.T) {
 	pr := wPR(t, st, repo.ID, 102)
 
 	prov := &wProvider{diffErr: errors.New("VCS caído")}
+	cola := &wQueue{}
 	w := &ReviewJobWorker{
-		Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{}, Provider: prov,
+		Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{}, Provider: prov, Queue: cola,
 		Config: review.DefaultConfig(), WorkdirRoot: t.TempDir(),
 	}
 	args := ReviewJobArgs{
@@ -273,6 +396,9 @@ func TestReviewJobWorkerAgotaIntentos(t *testing.T) {
 	}
 	if rev.Status != review.StatusFailed {
 		t.Errorf("al agotar intentos la corrida queda failed (§9.7): got %q", rev.Status)
+	}
+	if kinds := cola.encolados(); len(kinds) != 0 {
+		t.Errorf("una corrida que falla no encola IndexJob (§6 F4): %v", kinds)
 	}
 }
 
@@ -509,6 +635,105 @@ func TestReconcileJobWorkerCierraPRs(t *testing.T) {
 	defer st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id = $1", gl.ID)
 	if err := w.Work(ctx, wJob(ReconcileJobArgs{RepositoryID: gl.ID}, 1, 1)); err == nil {
 		t.Error("la reconciliación de un VCS sin adapter debe fallar en F1")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IndexJobWorker — índice RAG (§6 F4)
+// ---------------------------------------------------------------------------
+
+// Work indexa la rama default con stubs: el clon de juguete va por
+// FetchDefaultBranch, la corrida embebe con el formato compartido, persiste
+// en repo_index y el workdir se borra al salir.
+func TestIndexJobWorkerCorridaYWorkdir(t *testing.T) {
+	st := wStore(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	defer wDropRepo(t, st, repo.ID)
+	// repo_index referencia al repo: la limpieza corre ANTES del drop (LIFO).
+	defer st.Pool.Exec(ctx, "DELETE FROM repo_index WHERE repository_id = $1", repo.ID)
+	wEmbeddingProvider(t, st) // el core re-valida el rol embedding al correr
+
+	prov := &wProvider{fetchDefault: true}
+	gw := &wEmbedGateway{}
+	w := &IndexJobWorker{
+		Store: st, Gateway: gw,
+		Extractor: &wExtractor{syms: []analyze.Symbol{
+			{File: "main.go", Symbol: "Main", Kind: "function", StartLine: 3, EndLine: 3},
+		}},
+		Provider: prov, Config: index.DefaultConfig(), WorkdirRoot: t.TempDir(),
+	}
+
+	if err := w.Work(ctx, wJob(IndexJobArgs{RepositoryID: repo.ID}, 1, reviewMaxAttempts)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	// El clon fue el workdir del job y se limpió al salir.
+	if prov.defaultWorkdir == "" {
+		t.Fatal("FetchDefaultBranch no recibió workdir")
+	}
+	if _, err := os.Stat(prov.defaultWorkdir); !os.IsNotExist(err) {
+		t.Errorf("el workdir del job debe limpiarse al salir: %s (%v)", prov.defaultWorkdir, err)
+	}
+	// El texto embebido usa el formato compartido con Retrieve (T5).
+	if len(gw.calls) != 1 || len(gw.calls[0]) != 1 || gw.calls[0][0] != "main.go\nfunction Main" {
+		t.Errorf("Embed debió recibir el formato compartido: %v", gw.calls)
+	}
+	// La fila del símbolo quedó en repo_index.
+	var n int
+	if err := st.Pool.QueryRow(ctx,
+		"SELECT COUNT(1) FROM repo_index WHERE repository_id = $1", repo.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("repo_index debe tener la fila del símbolo: n=%d", n)
+	}
+}
+
+// El job de un repo deshabilitado no corre: skip con log, sin clon ni LLM
+// (§3.5: solo repos conectados generan trabajo).
+func TestIndexJobWorkerRepoDeshabilitado(t *testing.T) {
+	st := wStore(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	defer wDropRepo(t, st, repo.ID)
+	if _, err := st.SetRepositoryEnabled(ctx, store.SetRepositoryEnabledParams{ID: repo.ID, Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &wProvider{} // fetchDefault=false: si el guard falla, el error del stub lo delata
+	w := &IndexJobWorker{
+		Store: st, Gateway: &wEmbedGateway{}, Extractor: &wExtractor{},
+		Provider: prov, Config: index.DefaultConfig(), WorkdirRoot: t.TempDir(),
+	}
+	if err := w.Work(ctx, wJob(IndexJobArgs{RepositoryID: repo.ID}, 1, reviewMaxAttempts)); err != nil {
+		t.Fatalf("el job de un repo deshabilitado debe omitirse sin error: %v", err)
+	}
+	if prov.defaultWorkdir != "" {
+		t.Error("un repo deshabilitado no debe clonarse")
+	}
+}
+
+// Sin proveedor embedding la corrida NO quema reintentos: nil + log (§9.6,
+// queda latente — el próximo trigger re-encola cuando el rol exista).
+func TestIndexJobWorkerSinProveedorQuedaLatente(t *testing.T) {
+	st := wStore(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	defer wDropRepo(t, st, repo.ID)
+	restaurar := wSuspenderEmbedding(t, st)
+	defer restaurar()
+
+	prov := &wProvider{fetchDefault: true}
+	w := &IndexJobWorker{
+		Store: st, Gateway: &wEmbedGateway{},
+		Extractor: &wExtractor{syms: []analyze.Symbol{
+			{File: "main.go", Symbol: "Main", Kind: "function"},
+		}},
+		Provider: prov, Config: index.DefaultConfig(), WorkdirRoot: t.TempDir(),
+	}
+	if err := w.Work(ctx, wJob(IndexJobArgs{RepositoryID: repo.ID}, 1, reviewMaxAttempts)); err != nil {
+		t.Fatalf("sin proveedor embedding el job queda latente, no falla: %v", err)
 	}
 }
 

@@ -139,6 +139,7 @@ func (s *Server) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "error interno")
 		return
 	}
+	s.enqueueIndex(r, repo.ID) // §6 F4: el repo conectado arranca con su índice (si hay rol embedding)
 	writeJSON(w, http.StatusCreated, repoViewOf(repo))
 }
 
@@ -253,6 +254,7 @@ func (s *Server) handleUpdateRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	if enabled && !current.Enabled {
 		s.enqueueReconcile(r, id)
+		s.enqueueIndex(r, id)
 	}
 	writeJSON(w, http.StatusOK, repoViewOf(repo))
 }
@@ -270,6 +272,17 @@ func (s *Server) enqueueReconcile(r *http.Request, repoID int64) {
 	if err != nil {
 		slog.Error("encolando ReconcileJob tras reconexión",
 			"repo_id", repoID, "err", err, "req_id", r.Context().Value(requestIDKey))
+	}
+}
+
+// enqueueIndex encola el IndexJob del repo (§6 F4) tras conectar o
+// reconectar — la guarda de proveedor embedding vive en jobs.EnqueueIndexJob
+// (§9.6: sin proveedor queda latente, no es error). Best-effort igual que
+// enqueueReconcile: un fallo de cola se registra y no bloquea la conexión.
+func (s *Server) enqueueIndex(r *http.Request, repoID int64) {
+	if err := jobs.EnqueueIndexJob(r.Context(), s.store, s.queue, repoID); err != nil {
+		slog.Error("encolando IndexJob", "repo_id", repoID, "err", err,
+			"req_id", r.Context().Value(requestIDKey))
 	}
 }
 

@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -191,7 +192,124 @@ func TestInsertOptsPorKind(t *testing.T) {
 		}
 	}
 
+	// IndexJob (§9.6): comparte la cola review, el tope de intentos y la
+	// unicidad "único mientras viva" del review — N triggers del mismo repo,
+	// una sola corrida.
+	if opts := insertOpts(KindIndex); opts.Queue != QueueReview || opts.MaxAttempts != reviewMaxAttempts {
+		t.Errorf("IndexJob: cola e intentos de §9.6/§9.7: got %+v", opts)
+	} else if !opts.UniqueOpts.ByArgs || len(opts.UniqueOpts.ByState) != 5 {
+		t.Errorf("IndexJob: unicidad ByArgs con 5 estados activos: got %+v", opts.UniqueOpts)
+	}
+
 	if opts := insertOpts("kind_sin_routing"); opts.Queue != QueueOps {
 		t.Errorf("un kind sin routing va a ops: got %q", opts.Queue)
+	}
+}
+
+// wSuspenderEmbedding apaga los proveedores embedding enabled de la BD
+// compartida y devuelve la función que los restaura: la guarda del IndexJob
+// es de EXISTENCIA (§9.6) — los heredados de otros tests deben salir del
+// medio para poder probar el caso "sin proveedor".
+func wSuspenderEmbedding(t *testing.T, st *store.Store) func() {
+	t.Helper()
+	ctx := context.Background()
+	rows, err := st.Pool.Query(ctx,
+		"SELECT id FROM llm_providers WHERE role = 'embedding' AND enabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previos []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		previos = append(previos, id)
+	}
+	rows.Close()
+	if _, err := st.Pool.Exec(ctx,
+		"UPDATE llm_providers SET enabled = false WHERE role = 'embedding' AND enabled"); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if len(previos) > 0 {
+			_, _ = st.Pool.Exec(ctx,
+				"UPDATE llm_providers SET enabled = true WHERE id = ANY($1)", previos)
+		}
+	}
+}
+
+// IndexJob (§6 F4/§9.6): la guarda de proveedor embedding decide el encolado
+// — sin proveedor no hay fila NI error (la indexación queda latente) — y la
+// unicidad por repo converge N triggers en una sola corrida viva, en la cola
+// review con el tope de intentos.
+func TestEnqueueIndexJobGuardYUnicidad(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+	restaurar := wSuspenderEmbedding(t, st)
+	defer restaurar()
+
+	repoA, repoB := wNano(), wNano()
+	countFilas := func(repoID int64) int {
+		t.Helper()
+		var n int
+		if err := st.Pool.QueryRow(ctx,
+			"SELECT COUNT(1) FROM river_job WHERE kind = $1 AND args = $2",
+			KindIndex, fmt.Sprintf(`{"repository_id": %d}`, repoID)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	// Sin proveedor embedding: sin fila, sin error (§9.6).
+	if err := EnqueueIndexJob(ctx, st, q, repoA); err != nil {
+		t.Fatalf("la guarda sin proveedor no debe fallar: %v", err)
+	}
+	if n := countFilas(repoA); n != 0 {
+		t.Errorf("sin proveedor embedding no debe encolar: n=%d", n)
+	}
+
+	// Con proveedor: una fila; el duplicado vivo se deduplica; otro repo
+	// inserta su propia corrida.
+	clave := bytes.Repeat([]byte{0xC3}, 32)
+	apiKey, err := store.Encrypt(clave, []byte("sk-embed-test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov, err := st.CreateLlmProvider(ctx, store.CreateLlmProviderParams{
+		BaseUrl: "https://embed.test/v1", Model: fmt.Sprintf("embed-%d", wNano()),
+		ApiKey: apiKey, Role: roleEmbedding, Priority: 1, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.DeleteLlmProvider(ctx, prov.ID)
+
+	for i := 0; i < 2; i++ {
+		if err := EnqueueIndexJob(ctx, st, q, repoA); err != nil {
+			t.Fatalf("EnqueueIndexJob %d: %v", i, err)
+		}
+	}
+	if n := countFilas(repoA); n != 1 {
+		t.Errorf("el IndexJob vivo debe ser único por repo (§9.6): n=%d", n)
+	}
+	if err := EnqueueIndexJob(ctx, st, q, repoB); err != nil {
+		t.Fatalf("EnqueueIndexJob de otro repo: %v", err)
+	}
+	if n := countFilas(repoB); n != 1 {
+		t.Errorf("otro repo inserta su propia corrida: n=%d", n)
+	}
+
+	// La fila vive en la cola review con el tope de intentos (§9.6/§9.7).
+	var cola string
+	var intentos int
+	if err := st.Pool.QueryRow(ctx,
+		"SELECT queue, max_attempts FROM river_job WHERE kind = $1 AND args = $2 LIMIT 1",
+		KindIndex, fmt.Sprintf(`{"repository_id": %d}`, repoB)).Scan(&cola, &intentos); err != nil {
+		t.Fatal(err)
+	}
+	if cola != QueueReview || intentos != reviewMaxAttempts {
+		t.Errorf("el IndexJob comparte la cola review con %d intentos: cola=%q intentos=%d",
+			reviewMaxAttempts, cola, intentos)
 	}
 }

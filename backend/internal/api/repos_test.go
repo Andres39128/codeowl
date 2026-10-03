@@ -29,7 +29,8 @@ func cleanupRepos(t *testing.T, e *testEnv, ids ...int64) {
 func TestReposCRUDYReconcile(t *testing.T) {
 	e := newTestEnv(t, 5)
 	a := e.admin(t)
-	e.createProvider(t, "review", true) // guarda de rol satisfecha (§9.6)
+	e.createProvider(t, "review", true)    // guarda de rol satisfecha (§9.6)
+	e.createProvider(t, "embedding", true) // §6 F4: conectar/reconectar encola IndexJob
 
 	// Create: 201, la vista no filtra secretos.
 	resp := e.do(t, http.MethodPost, "/api/repos", a.cookie, a.csrf, repoRequest{
@@ -86,27 +87,37 @@ func TestReposCRUDYReconcile(t *testing.T) {
 		t.Error("disable debe dejar enabled=false")
 	}
 
-	// Re-enable: la guarda vuelve a pasar (proveedor enabled sigue ahí) y la
-	// reconexión encola el ReconcileJob del repo (§3.5).
+	// Re-enable: la guarda vuelve a pasar (proveedor enabled sigue ahí), la
+	// reconexión encola el ReconcileJob (§3.5) y el IndexJob del repo
+	// (§6 F4).
 	si = true
 	resp = e.do(t, http.MethodPut, fmt.Sprintf("/api/repos/%d", repo.ID), a.cookie, a.csrf, repoUpdateRequest{Enabled: &si})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("re-enable debe ser 200, fue %d", resp.StatusCode)
 	}
 	kinds, payloads := e.queue.enqueued(t)
-	if len(kinds) != len(kindsAntes)+1 {
-		t.Fatalf("la reconexión debe encolar exactamente un job, hubo %d", len(kinds)-len(kindsAntes))
+	if len(kinds) != len(kindsAntes)+2 {
+		t.Fatalf("la reconexión debe encolar ReconcileJob + IndexJob (§6 F4), hubo %d", len(kinds)-len(kindsAntes))
 	}
-	last := len(kinds) - 1
-	if kinds[last] != jobs.KindReconcile {
-		t.Errorf("el job encolado debe ser %q, fue %q", jobs.KindReconcile, kinds[last])
+	if kinds[len(kinds)-2] != jobs.KindReconcile {
+		t.Errorf("el penúltimo job debe ser %q, fue %q", jobs.KindReconcile, kinds[len(kinds)-2])
 	}
 	var args jobs.ReconcileJobArgs
-	if err := json.Unmarshal(payloads[last], &args); err != nil {
+	if err := json.Unmarshal(payloads[len(kinds)-2], &args); err != nil {
 		t.Fatal(err)
 	}
 	if args.RepositoryID != repo.ID {
 		t.Errorf("el ReconcileJob debe apuntar al repo %d, apunta a %d", repo.ID, args.RepositoryID)
+	}
+	if kinds[len(kinds)-1] != jobs.KindIndex {
+		t.Errorf("el último job debe ser %q, fue %q", jobs.KindIndex, kinds[len(kinds)-1])
+	}
+	var idxArgs jobs.IndexJobArgs
+	if err := json.Unmarshal(payloads[len(kinds)-1], &idxArgs); err != nil {
+		t.Fatal(err)
+	}
+	if idxArgs.RepositoryID != repo.ID {
+		t.Errorf("el IndexJob debe apuntar al repo %d, apunta a %d", repo.ID, idxArgs.RepositoryID)
 	}
 
 	// List: el repo aparece con su estado.

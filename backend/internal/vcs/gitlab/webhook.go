@@ -285,8 +285,9 @@ func (a *Adapter) dispatch(ctx context.Context, repo store.Repository, p *webhoo
 // handleMergeRequest procesa merge_request (§3.5): open/reopen y el update
 // que pasó el filtro upsertan el PR y encolan el ReviewJob — resolviendo el
 // tip de la rama base por API, porque el payload no trae SHA de la base
-// (§3.6.1.1). close/merge actualizan estado y NO encolan (MetricsJob es F5);
-// el descarte de jobs pendientes del PR lo hace el worker.
+// (§3.6.1.1). close/merge actualizan estado (el merge además re-encola el
+// IndexJob, §6 F4; MetricsJob es F5); el descarte de jobs pendientes del PR
+// lo hace el worker.
 func (a *Adapter) handleMergeRequest(ctx context.Context, repo store.Repository, p *webhookPayload) error {
 	var attrs glMRAttrs
 	if err := json.Unmarshal(p.ObjectAttributes, &attrs); err != nil {
@@ -315,6 +316,14 @@ func (a *Adapter) handleMergeRequest(ctx context.Context, repo store.Repository,
 			ID: pr.ID, State: "closed", MergedAt: mergedAt,
 		}); err != nil {
 			return fmt.Errorf("cerrando el MR %d: %w", attrs.IID, err)
+		}
+		// §6 F4: solo el merge cambia la rama default — re-encola el índice
+		// del repo (la guarda de rol embedding vive en EnqueueIndexJob; sin
+		// proveedor queda latente). El MetricsJob sigue siendo F5 (§3.5).
+		if attrs.Action == "merge" {
+			if err := jobs.EnqueueIndexJob(ctx, a.st, a.jq, repo.ID); err != nil {
+				return fmt.Errorf("encolando IndexJob tras merge del MR %d: %w", attrs.IID, err)
+			}
 		}
 		slog.InfoContext(ctx, "webhook gitlab: MR cerrado", "mr", attrs.IID, "merged", attrs.Action == "merge")
 		return nil
