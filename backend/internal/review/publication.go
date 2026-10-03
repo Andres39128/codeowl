@@ -121,6 +121,21 @@ var severityLabel = map[string]string{
 	"high": "Alta", "medium": "Media", "low": "Baja",
 }
 
+// isPublishable aplica el filtro de publicación del perfil (§6 F3):
+//   - chill: solo high|medium y fuera category=style.
+//   - assertive (y perfil vacío/inválido, el default): publica todo.
+//   - strict: publica todo — pide nits al reviewer (§6 F3) y esos llegan como
+//     findings low/style normales, que pasan igual.
+//
+// El perfil regula cuánto comenta el bot, nunca qué se persiste ni el
+// estado de la corrida (§1.1).
+func isPublishable(profile string, f Finding) bool {
+	if profile == "chill" {
+		return (f.Severity == "high" || f.Severity == "medium") && f.Category != "style"
+	}
+	return true
+}
+
 // inlineBody arma el cuerpo del comentario inline: severidad + categoría +
 // cuerpo y, si hay sugerencia, el bloque aplicable con un clic (publicado
 // vía PostSuggestion). El bloque ```suggestion``` contiene SOLO el código

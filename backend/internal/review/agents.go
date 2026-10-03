@@ -43,6 +43,39 @@ func fillLanguage(prompt, language string) string {
 	return strings.ReplaceAll(prompt, languagePlaceholder, language)
 }
 
+// instructionsPlaceholder es el hueco de las reglas de revisión del repo
+// (§9.5): fillInstructions lo llena con el bloque del mantenedor o lo vacía.
+const instructionsPlaceholder = "{{INSTRUCTIONS}}"
+
+// nitsPlaceholder es el hueco del modo estricto (§6 F3): fillNits agrega la
+// regla de nits solo con perfil strict.
+const nitsPlaceholder = "{{NITS}}"
+
+// fillInstructions llena el hueco de reglas del repo con la guía del
+// mantenedor (input confiable: review.yaml leído del merge-base, §9.5 — el
+// PR no puede escribir sus propias reglas). Vacío → sin bloque y sin
+// residuo del placeholder. El bloque va enmarcado como reglas de revisión
+// del repo: autoridad de mantenedor sobre QUÉ mirar, no órdenes del diff.
+func fillInstructions(prompt, instructions string) string {
+	block := ""
+	if strings.TrimSpace(instructions) != "" {
+		block = "\n## Reglas de revisión de este repositorio\n\nEl mantenedor pidió prestar atención especial a lo siguiente al revisar:\n\n" + instructions + "\n"
+	}
+	return strings.ReplaceAll(prompt, instructionsPlaceholder, block)
+}
+
+// fillNits agrega la regla de nits al prompt solo con perfil strict (§6 F3):
+// pide reportar también lo menor/trivial sin tocar el conjunto cerrado de
+// severidades — los nits llegan como findings low. Otro perfil → hueco
+// vacío, sin residuo.
+func fillNits(prompt, profile string) string {
+	block := ""
+	if profile == "strict" {
+		block = "- Además de los problemas reales, reportá también nits: detalles menores o triviales que valga la pena pulir (nombrado, claridad, estilo). Marcalos con severity \"low\"."
+	}
+	return strings.ReplaceAll(prompt, nitsPlaceholder, block)
+}
+
 // Marcadores del prompt de usuario: enrutan la respuesta del gateway (los
 // stubs de test los usan para saber a qué agente responden).
 const (
@@ -80,14 +113,15 @@ var (
 // runReviewer analiza cada archivo del diff con el agente Reviewer (una
 // llamada LLM por archivo, en paralelo con tope de concurrencia — los slots
 // por review los fija el gateway, §9.6). El system prompt viaja con el
-// idioma efectivo ya lleno. Un archivo cuya salida no parsea tras
-// cfg.AgentRetries reintentos se descarta con registro (§9.8: nunca
-// crashea el job) y queda declarado como cobertura parcial. Devuelve error
-// solo si el contexto se cancela (el job está muriendo).
-func runReviewer(ctx context.Context, gw Gateway, cfg Config, language string, files map[string]string) ([]Finding, []string, error) {
+// idioma efectivo, las reglas del repo y el modo del perfil ya llenos
+// (§9.5/§6 F3). Un archivo cuya salida no parsea tras cfg.AgentRetries
+// reintentos se descarta con registro (§9.8: nunca crashea el job) y queda
+// declarado como cobertura parcial. Devuelve error solo si el contexto se
+// cancela (el job está muriendo).
+func runReviewer(ctx context.Context, gw Gateway, cfg Config, rc RepoConfig, files map[string]string) ([]Finding, []string, error) {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(cfg.Concurrency)
-	system := fillLanguage(promptReviewer, language)
+	system := fillNits(fillInstructions(fillLanguage(promptReviewer, rc.Language), rc.Instructions), rc.Profile)
 
 	var (
 		mu        sync.Mutex

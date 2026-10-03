@@ -257,6 +257,29 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	mb := mergeBase(ctx, input.Workdir, input.BaseSHA, input.HeadSHA)
 	rc := loadRepoConfig(ctx, input.Workdir, mb, repo, cfg.DefaultProfile)
 
+	// path_filters (§9.5): delimitan qué examina la corrida. Los archivos
+	// fuera de los filtros no llegan al LLM (ahorro de costo) ni generan
+	// hallazgos de SAST — el analyzer corre UNA vez sobre el clon completo y
+	// el filtro opera en este mismo punto de selección. Filtrar todo no es
+	// error: la corrida sigue y completa con cero hallazgos.
+	dropped := 0
+	for file := range fileHunks {
+		if !matchPath(rc.PathFilters, file) {
+			delete(fileHunks, file)
+			dropped++
+		}
+	}
+	kept := sast[:0]
+	for _, f := range sast {
+		if matchPath(rc.PathFilters, f.File) {
+			kept = append(kept, f)
+		}
+	}
+	sast = kept
+	if dropped > 0 {
+		slog.Info("review: archivos excluidos por path_filters", "cantidad", dropped, "review", rev.ID)
+	}
+
 	// (e)(f) Reviewer LLM por archivo, con cache de resultados (§9.6).
 	var llmFindings []Finding
 	var sum *SummaryResult
@@ -266,7 +289,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		slog.Info("review: cache hit", "review", rev.ID)
 	} else if !overCap && len(fileHunks) > 0 {
 		var discarded []string
-		llmFindings, discarded, err = runReviewer(ctx, gw, cfg, rc.Language, fileHunks)
+		llmFindings, discarded, err = runReviewer(ctx, gw, cfg, rc, fileHunks)
 		if err != nil {
 			return nil, err // cancelación del contexto: el job reintenta
 		}
@@ -288,6 +311,18 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	}
 	publishable := dedup(existing, append(llmFindings, sast...), cfg.DriftLines)
 
+	// Filtro de publicación del perfil (§6 F3): el perfil regula CUÁNTO
+	// comenta el bot, no qué se registra — todo hallazgo persiste (auditoría)
+	// y solo el conjunto publicado alimenta los inline, el recuento del
+	// resumen y FindingsCount. Jamás produce veredicto bloqueante ni cambia
+	// el estado de la corrida (§1.1).
+	var toPublish []Finding
+	for _, f := range publishable {
+		if isPublishable(rc.Profile, f) {
+			toPublish = append(toPublish, f)
+		}
+	}
+
 	// Persistencia de los hallazgos de esta corrida (verified null hasta el
 	// Verifier de F3, §3.3).
 	for _, f := range publishable {
@@ -305,8 +340,9 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		}
 	}
 
-	// (g) Summarizer: estadísticas del diff + recuento de hallazgos.
-	counts := countBySeverity(publishable)
+	// (g) Summarizer: estadísticas del diff + recuento de hallazgos
+	// publicados (el resumen refleja lo que el bot comenta, §6 F3).
+	counts := countBySeverity(toPublish)
 	if sum == nil {
 		if sum, err = runSummarizer(ctx, gw, cfg, rc.Language, diffStats(total, changed), counts); err != nil {
 			// Failover agotado en el summarizer: la corrida queda partial y
@@ -338,9 +374,10 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	}
 
 	// (i) Fase 2: comentarios inline. La línea fuera del diff visible baja
-	// al resumen (§3.6.5); con diff sobre el tope todo baja al resumen.
+	// al resumen (§3.6.5); con diff sobre el tope todo baja al resumen. Solo
+	// publica el conjunto del perfil (§6 F3).
 	var outOfDiff []Finding
-	for _, f := range publishable {
+	for _, f := range toPublish {
 		if overCap {
 			outOfDiff = append(outOfDiff, f)
 			continue
@@ -363,7 +400,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 				})
 		}
 	}
-	res.FindingsCount = len(publishable)
+	res.FindingsCount = len(toPublish)
 
 	// (j)(k) Estado final y re-edición del resumen (§3.6.2): el de la fase 1
 	// es provisional por diseño — este incluye el recuento por severidad, los

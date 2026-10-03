@@ -241,3 +241,50 @@ func TestFillLanguage(t *testing.T) {
 		}
 	}
 }
+
+// fillInstructions llena el hueco de reglas del repo con el bloque
+// delimitado, o lo vacía sin dejar bloque ni residuo (§9.5).
+func TestFillInstructions(t *testing.T) {
+	p := prompts.Reviewer()
+	if !strings.Contains(p, instructionsPlaceholder) {
+		t.Fatalf("el prompt del reviewer debería traer el hueco %s", instructionsPlaceholder)
+	}
+
+	empty := fillInstructions(p, "   \n")
+	if strings.Contains(empty, instructionsPlaceholder) ||
+		strings.Contains(empty, "Reglas de revisión de este repositorio") {
+		t.Errorf("instructions vacío no debe dejar bloque ni residuo:\n%s", empty)
+	}
+
+	filled := fillInstructions(p, "Cuidá los panics silenciosos.")
+	if !strings.Contains(filled, "## Reglas de revisión de este repositorio") ||
+		!strings.Contains(filled, "Cuidá los panics silenciosos.") {
+		t.Errorf("el bloque de reglas del repo no quedó delimitado con el texto:\n%s", filled)
+	}
+	if strings.Contains(filled, instructionsPlaceholder) {
+		t.Errorf("residuo de %s tras llenar", instructionsPlaceholder)
+	}
+}
+
+// fillNits agrega la regla de nits solo con perfil strict (§6 F3): con otro
+// perfil, ni regla ni residuo.
+func TestFillNits(t *testing.T) {
+	p := prompts.Reviewer()
+	if !strings.Contains(p, nitsPlaceholder) {
+		t.Fatalf("el prompt del reviewer debería traer el hueco %s", nitsPlaceholder)
+	}
+
+	got := fillNits(p, "strict")
+	if !strings.Contains(got, "reportá también nits") {
+		t.Errorf("con strict el prompt debe pedir nits")
+	}
+	if strings.Contains(got, nitsPlaceholder) {
+		t.Errorf("residuo de %s tras llenar", nitsPlaceholder)
+	}
+	for _, perfil := range []string{"chill", "assertive", ""} {
+		got := fillNits(p, perfil)
+		if strings.Contains(got, "reportá también nits") || strings.Contains(got, nitsPlaceholder) {
+			t.Errorf("con perfil %q no debe haber regla de nits ni residuo", perfil)
+		}
+	}
+}

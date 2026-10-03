@@ -217,10 +217,12 @@ func (s *stubStore) UpdateCommentSentCommentID(_ context.Context, arg store.Upda
 }
 
 // stubGateway responde de colas por agente: reviewer por archivo,
-// summarizer, chat y testgen por marcador. Cuenta las llamadas.
+// summarizer, chat y testgen por marcador. Cuenta las llamadas y graba los
+// system prompts recibidos (para afirmar qué le llegó a cada agente).
 type stubGateway struct {
 	mu          sync.Mutex
 	calls       int
+	systemSeen  []string
 	reviewer    map[string][]string
 	summarizer  []string
 	chat        []string
@@ -237,6 +239,7 @@ func (g *stubGateway) Complete(_ context.Context, _, system, user string) (strin
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls++
+	g.systemSeen = append(g.systemSeen, system)
 	if strings.HasPrefix(user, summarizerMarker) {
 		if len(g.summarizer) == 0 {
 			return "", fmt.Errorf("sin respuesta de summarizer encolada (llamada %d)", g.calls)
@@ -781,6 +784,235 @@ func TestMermaidValidation(t *testing.T) {
 	}
 	if validMermaid("") || validMermaid("hola mundo") {
 		t.Error("texto sin encabezado de diagrama no debería validar")
+	}
+}
+
+// Config efectiva en la corrida (§9.5/§6 F3): los tests de acá abajo corren
+// contra un repo git real (el review.yaml se lee del merge-base) usando el
+// helper gitRepo de repoconfig_test.go.
+
+// runConConfig arma un repo temporal cuyo commit base trae review.yaml y
+// corre el pipeline contra él (merge-base = base: historia lineal).
+func runConConfig(t *testing.T, cfgYAML string, setup func(d *deps)) (*ReviewResult, *deps) {
+	t.Helper()
+	baseFiles := map[string]string{}
+	if cfgYAML != "" {
+		baseFiles["review.yaml"] = cfgYAML
+	}
+	wd, base, head := gitRepo(t, baseFiles, map[string]string{"y.go": "package y"})
+	d := newDeps()
+	d.st.pr.HeadSha, d.st.pr.BaseSha = head, base
+	input := testInput()
+	input.HeadSHA, input.BaseSHA, input.Workdir = head, base, wd
+	if setup != nil {
+		setup(d)
+	}
+	res, err := Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return res, d
+}
+
+// twoFileDiff es un diff de dos archivos: main.go (fuera de los filtros de
+// los tests de path_filters) y src/util.go (dentro).
+const twoFileDiff = `diff --git a/main.go b/main.go
+index 1111111..2222222 100644
+--- a/main.go
++++ b/main.go
+@@ -1,3 +1,4 @@
+ package main
+ 
++import "fmt"
++
+diff --git a/src/util.go b/src/util.go
+index 3333333..4444444 100644
+--- a/src/util.go
++++ b/src/util.go
+@@ -1,3 +1,4 @@
+ package util
+ 
++func Sum(a, b int) int { return a + b }
++
+`
+
+// path_filters (§9.5): los archivos fuera de los filtros no llegan al LLM ni
+// generan hallazgos de SAST — el analyzer corre una vez y el filtro opera en
+// el mismo punto de selección.
+func TestRunPathFilters(t *testing.T) {
+	res, d := runConConfig(t, "path_filters:\n  - src/**\n", func(d *deps) {
+		d.vcs.diff = twoFileDiff
+		d.gw.reviewer["src/util.go"] = []string{reviewerFindings(3, "high", "security", "inyección", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		d.az.result.Findings = []analyze.Finding{
+			{File: "main.go", Line: 2, Severity: "medium", Category: "logic", Body: "fuera de filtros", Source: "sast"},
+			{File: "src/util.go", Line: 4, Severity: "low", Category: "style", Body: "estilo", Source: "sast"},
+		}
+	})
+
+	// Si main.go hubiera llegado al reviewer, el stub habría fallado por no
+	// tener respuesta encolada → descarte → partial. Success + 2 llamadas
+	// (reviewer de util.go + summarizer) prueba que main.go jamás se envió.
+	if d.gw.calls != 2 {
+		t.Errorf("gateway llamado %d veces, querés 2 (solo util.go + summarizer)", d.gw.calls)
+	}
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés success", res.Status)
+	}
+	if res.FindingsCount != 2 {
+		t.Errorf("FindingsCount = %d, querés 2 (LLM + SAST de util.go)", res.FindingsCount)
+	}
+	if len(d.st.findings) != 2 {
+		t.Fatalf("findings persistidos = %d, querés 2", len(d.st.findings))
+	}
+	for _, f := range d.st.findings {
+		if f.File == "main.go" {
+			t.Errorf("el hallazgo de un archivo filtrado no debe persistirse: %+v", f)
+		}
+	}
+}
+
+// Todos los archivos fuera de los filtros: la corrida completa normal con
+// cero hallazgos — filtrar todo no es error.
+func TestRunPathFiltersAllFiltered(t *testing.T) {
+	res, d := runConConfig(t, "path_filters:\n  - \"!**\"\n", func(d *deps) {
+		d.gw.summarizer = []string{summarizerJSON}
+		d.az.result.Findings = []analyze.Finding{
+			{File: "main.go", Line: 2, Severity: "high", Category: "security", Body: "x", Source: "sast"},
+		}
+	})
+
+	if d.gw.calls != 1 {
+		t.Errorf("gateway llamado %d veces, querés 1 (solo summarizer)", d.gw.calls)
+	}
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés success", res.Status)
+	}
+	if res.FindingsCount != 0 || len(d.st.findings) != 0 {
+		t.Errorf("hallazgos = %d (res) / %d (persistidos), querés 0/0", res.FindingsCount, len(d.st.findings))
+	}
+	if len(d.vcs.inlineReqs)+len(d.vcs.suggestReqs) != 0 {
+		t.Error("no debería haber comentarios inline con todo filtrado")
+	}
+}
+
+// Perfil chill (§6 F3): publica solo high|medium sin style — todo hallazgo
+// persiste (auditoría), pero los filtrados no salen ni inline ni en el
+// resumen, y el recuento final refleja solo lo publicado. El perfil jamás
+// cambia el estado de la corrida (§1.1).
+func TestRunChillProfile(t *testing.T) {
+	res, d := runConConfig(t, "profile: chill\n", func(d *deps) {
+		d.gw.reviewer["main.go"] = []string{
+			"[" + strings.Trim(reviewerFindings(3, "high", "security", "inyección SQL", "db.Query(q, arg)"), "[]") + "," +
+				strings.Trim(reviewerFindings(5, "low", "style", "espaciado", ""), "[]") + "]",
+		}
+		d.gw.summarizer = []string{summarizerJSON}
+		// Fuera del diff visible: con el filtro caería del resumen también.
+		d.az.result.Findings = []analyze.Finding{
+			{File: "main.go", Line: 999, Severity: "low", Category: "style", Body: "nombre corto", Source: "sast", Linter: "revive", Rule: "naming"},
+		}
+	})
+
+	if res.FindingsCount != 1 {
+		t.Errorf("FindingsCount = %d, querés 1 (solo el high/security se publica)", res.FindingsCount)
+	}
+	// Auditoría: TODO se persiste, incluido lo no publicado.
+	if len(d.st.findings) != 3 {
+		t.Fatalf("findings persistidos = %d, querés 3", len(d.st.findings))
+	}
+	// Solo el high/security sale inline (con sugerencia → PostSuggestion).
+	if len(d.vcs.suggestReqs) != 1 || len(d.vcs.inlineReqs) != 0 {
+		t.Fatalf("publicación inline = %d sugerencias + %d planos, querés 1+0",
+			len(d.vcs.suggestReqs), len(d.vcs.inlineReqs))
+	}
+	final := d.vcs.summaryBods[len(d.vcs.summaryBods)-1]
+	if !strings.Contains(final, "### Hallazgos: 1 alta · 0 media · 0 baja") {
+		t.Errorf("el recuento debe reflejar lo publicado:\n%s", final)
+	}
+	for _, filtrado := range []string{"espaciado", "nombre corto"} {
+		if strings.Contains(final, filtrado) {
+			t.Errorf("lo filtrado por el perfil no debería aparecer en el resumen: %q", filtrado)
+		}
+	}
+	if rev := d.st.reviews[1]; rev.Status != StatusSuccess {
+		t.Errorf("status = %q, querés success (el perfil jamás bloquea, §1.1)", rev.Status)
+	}
+}
+
+// Perfil strict + instructions (§9.5/§6 F3): el system prompt del reviewer
+// llega con la regla de nits y el bloque de reglas del repo llenos, sin
+// residuo de placeholders; con el default (sin review.yaml) no trae ninguno
+// de los dos.
+func TestRunReviewerPromptProfileAndInstructions(t *testing.T) {
+	_, d := runConConfig(t, "profile: strict\ninstructions: \"Cuidá los panics silenciosos.\"\n", func(d *deps) {
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+	})
+
+	var system string
+	for _, s := range d.gw.systemSeen {
+		if strings.Contains(s, "nits") || strings.Contains(s, "panics") {
+			system = s
+			break
+		}
+	}
+	if system == "" {
+		t.Fatal("ningún system prompt traía la config del perfil: el reviewer no recibió strict/instructions")
+	}
+	if !strings.Contains(system, "reportá también nits") {
+		t.Errorf("con strict el prompt debe pedir nits:\n%s", system)
+	}
+	if !strings.Contains(system, "Reglas de revisión de este repositorio") ||
+		!strings.Contains(system, "Cuidá los panics silenciosos.") {
+		t.Errorf("el bloque de instrucciones del repo no llegó delimitado:\n%s", system)
+	}
+	if strings.Contains(system, nitsPlaceholder) || strings.Contains(system, instructionsPlaceholder) {
+		t.Errorf("residuo de placeholder en el prompt:\n%s", system)
+	}
+
+	// Default sin review.yaml: ni nits ni bloque ni residuo.
+	d2 := newDeps()
+	d2.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
+	d2.gw.summarizer = []string{summarizerJSON}
+	if _, err := d2.run(t); err != nil {
+		t.Fatalf("Run default: %v", err)
+	}
+	def := d2.gw.systemSeen[0] // la primera llamada es la del reviewer
+	if strings.Contains(def, "nits") || strings.Contains(def, "Reglas de revisión") ||
+		strings.Contains(def, nitsPlaceholder) || strings.Contains(def, instructionsPlaceholder) {
+		t.Errorf("el prompt default no debe traer nits ni reglas del repo:\n%s", def)
+	}
+}
+
+// Tabla del filtro de publicación por perfil (§6 F3): chill publica solo
+// high|medium excluyendo style; assertive y strict pasan todo — los nits de
+// strict llegan como findings low/style normales.
+func TestIsPublishable(t *testing.T) {
+	cases := []struct {
+		profile  string
+		severity string
+		category string
+		want     bool
+	}{
+		{"chill", "high", "style", false},
+		{"chill", "high", "logic", true},
+		{"chill", "medium", "style", false},
+		{"chill", "medium", "logic", true},
+		{"chill", "low", "style", false},
+		{"chill", "low", "logic", false},
+		{"assertive", "high", "security", true},
+		{"assertive", "low", "style", true},
+		{"strict", "low", "style", true},
+		{"strict", "medium", "other", true},
+		{"", "low", "style", true},           // vacío → default assertive
+		{"aggressive", "low", "style", true}, // inválido → default assertive
+	}
+	for _, c := range cases {
+		f := Finding{Severity: c.severity, Category: c.category}
+		if got := isPublishable(c.profile, f); got != c.want {
+			t.Errorf("isPublishable(%q, %s/%s) = %v, querés %v",
+				c.profile, c.severity, c.category, got, c.want)
+		}
 	}
 }
 
