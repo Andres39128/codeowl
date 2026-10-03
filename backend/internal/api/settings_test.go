@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,131 @@ func TestProviderCreateValidaciones(t *testing.T) {
 		if got := e.do(t, http.MethodPost, "/api/providers", a.cookie, a.csrf, tc.req).StatusCode; got != http.StatusBadRequest {
 			t.Errorf("%s: debe ser 400, fue %d", tc.nombre, got)
 		}
+	}
+}
+
+// embedReq es el cuerpo de proveedor embedding para el guard de dims: la
+// dims real del catálogo es 1536 (vector(1536) del DDL, §3.3).
+func embedReq(enabled bool) providerRequest {
+	return providerRequest{
+		BaseURL: "https://embed.example.com/v1",
+		Model:   "embed-model",
+		APIKey:  "sk-embed-123",
+		Role:    "embedding",
+		Enabled: enabled,
+	}
+}
+
+// decodeAPIError decodifica el cuerpo {"error": "..."} de writeError.
+func decodeAPIError(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decodificando error de la api: %v", err)
+	}
+	return out.Error
+}
+
+// Guard de dims del rol embedding (§3.3/§6 F4): crear o habilitar por PUT un
+// proveedor embedding exige que su probe de embeddings devuelva las dims del
+// vector del índice (catálogo: SIEMPRE 1536). Disabled y roles review/cheap
+// jamás sondan.
+func TestProviderEmbeddingDimsGuard(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+
+	// 1. Dims que matchean el catálogo → 201 con exactamente UN probe.
+	e.llm.embedDims = 1536
+	resp := e.do(t, http.MethodPost, "/api/providers", a.cookie, a.csrf, embedReq(true))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("embedding con dims 1536 debe ser 201, fue %d", resp.StatusCode)
+	}
+	var p providerView
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = e.st.DeleteLlmProvider(context.Background(), p.ID) })
+	if got := e.llm.probeCount(); got != 1 {
+		t.Errorf("create embedding habilitado debe sondar UNA vez, sondó %d", got)
+	}
+
+	// 2. Dims distintas → 422 con mensaje claro y el proveedor NO se crea.
+	e.llm.embedDims = 3072
+	resp = e.do(t, http.MethodPost, "/api/providers", a.cookie, a.csrf, embedReq(true))
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("embedding con dims 3072 debe ser 422, fue %d", resp.StatusCode)
+	}
+	if msg := decodeAPIError(t, resp); !strings.Contains(msg, "3072") ||
+		!strings.Contains(msg, "1536") || !strings.Contains(msg, "migración") {
+		t.Errorf("el 422 debe explicar dims proveedor vs índice y la migración: %q", msg)
+	}
+	list, err := e.st.ListLlmProviders(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range list {
+		if got.ID != p.ID && got.Model == "embed-model" && got.Enabled {
+			t.Errorf("el 422 no debe crear el proveedor: %+v", got)
+		}
+	}
+
+	// 3. Probe sin respuesta → 422: habilitar EXIGE validación exitosa.
+	e.llm.embedDims = 1536
+	e.llm.embedErr = fmt.Errorf("503 del proveedor simulado")
+	resp = e.do(t, http.MethodPost, "/api/providers", a.cookie, a.csrf, embedReq(true))
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("probe caído debe ser 422, fue %d", resp.StatusCode)
+	}
+	if msg := decodeAPIError(t, resp); !strings.Contains(msg, "prueba de embeddings exitosa") {
+		t.Errorf("el 422 del probe caído debe explicar el requisito: %q", msg)
+	}
+	e.llm.embedErr = nil
+
+	// 4. Disabled y roles review/cheap: 201 sin llamar al prober.
+	antes := e.llm.probeCount()
+	resp = e.do(t, http.MethodPost, "/api/providers", a.cookie, a.csrf, embedReq(false))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("embedding disabled debe ser 201, fue %d", resp.StatusCode)
+	}
+	var apagado providerView
+	if err := json.NewDecoder(resp.Body).Decode(&apagado); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = e.st.DeleteLlmProvider(context.Background(), apagado.ID) })
+	e.createProvider(t, "review", true)
+	e.createProvider(t, "cheap", true)
+	if got := e.llm.probeCount(); got != antes {
+		t.Errorf("disabled y review/cheap no deben sondar: %d probes de más", got-antes)
+	}
+
+	// 5. PUT update: habilitar con key vacía sondea con la key GUARDADA;
+	// habilitar con dims distintas → 422 y el proveedor sigue disabled.
+	body := providerRequest{BaseURL: p.BaseURL, Model: p.Model, Role: p.Role, Priority: p.Priority, Enabled: true}
+	e.llm.embedDims = 1536
+	if got := e.do(t, http.MethodPut, fmt.Sprintf("/api/providers/%d", p.ID), a.cookie, a.csrf, body).StatusCode; got != http.StatusOK {
+		t.Fatalf("habilitar embedding con dims válidas debe ser 200, fue %d", got)
+	}
+	if got := e.llm.probedKey(); got != "sk-embed-123" {
+		t.Errorf("el probe de update sin api_key debe usar la key guardada, usó %q", got)
+	}
+	// Disabled de nuevo: el 422 del guard no debe HABILITAR un proveedor apagado.
+	body.Enabled = false
+	if got := e.do(t, http.MethodPut, fmt.Sprintf("/api/providers/%d", p.ID), a.cookie, a.csrf, body).StatusCode; got != http.StatusOK {
+		t.Fatalf("deshabilitar embedding debe ser 200, fue %d", got)
+	}
+	body.Enabled = true
+	e.llm.embedDims = 3072
+	if got := e.do(t, http.MethodPut, fmt.Sprintf("/api/providers/%d", p.ID), a.cookie, a.csrf, body).StatusCode; got != http.StatusUnprocessableEntity {
+		t.Fatalf("habilitar embedding con dims distintas debe ser 422, fue %d", got)
+	}
+	guardado, err := e.st.GetLlmProvider(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guardado.Enabled {
+		t.Error("el 422 del guard no debe habilitar el proveedor")
 	}
 }
 

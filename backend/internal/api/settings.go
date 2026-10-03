@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -20,10 +21,18 @@ import (
 	"github.com/Andres39128/codeowl/backend/internal/store"
 )
 
-// LLMTester es lo que la api usa de internal/llm: SOLO la prueba de conexión
-// de settings (§3.5). *llm.Gateway lo satisface; los tests lo reemplazan.
+// roleEmbedding: el rol cuyo habilitado dispara el guard de dims contra el
+// índice (§3.3).
+const roleEmbedding = "embedding"
+
+// LLMTester es lo que la api usa de internal/llm: la prueba de conexión de
+// settings (§3.5) y la sonda de embeddings que alimenta el guard de dims
+// (§3.3: proveedor embedding enabled se valida contra el vector del índice
+// antes de guardarse habilitado). *llm.Gateway lo satisface; los tests lo
+// reemplazan.
 type LLMTester interface {
 	TestConnection(ctx context.Context, role, baseURL, apiKey, model string) error
+	TestEmbedConnection(ctx context.Context, baseURL, apiKey, model string) (dims int, latencyMS int64, err error)
 }
 
 // providerRequest es el cuerpo de POST/PUT /api/providers.
@@ -107,8 +116,8 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, views)
 }
 
-// handleCreateProvider: POST /api/providers. Valida y cifra la api_key antes
-// de guardar (§9.2).
+// handleCreateProvider: POST /api/providers. Valida, aplica el guard de dims
+// del rol embedding (§3.3) y cifra la api_key antes de guardar (§9.2).
 func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	var req providerRequest
 	if !decodeJSON(w, r, &req) {
@@ -117,6 +126,15 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	if msg := validateProvider(req, true); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
+	}
+	// Guard de dims (§3.3/§6 F4): habilitar un proveedor embedding exige
+	// validar sus dims contra el vector del índice ANTES de guardarlo.
+	if req.Role == roleEmbedding && req.Enabled {
+		if status, msg := s.probeEmbeddingDims(r.Context(), req.BaseURL, req.APIKey, req.Model,
+			r.Context().Value(requestIDKey)); msg != "" {
+			writeError(w, status, msg)
+			return
+		}
 	}
 	encrypted, err := store.Encrypt(s.cfg.MasterKey, []byte(req.APIKey))
 	if err != nil {
@@ -177,6 +195,25 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encrypted = enc
+	}
+	// Guard de dims (§3.3/§6 F4): el probe habla con el proveedor real, así
+	// que usa la key efectiva — la nueva o, si vino vacía, la guardada.
+	if req.Role == roleEmbedding && req.Enabled {
+		apiKey := req.APIKey
+		if apiKey == "" {
+			plain, err := store.Decrypt(s.cfg.MasterKey, current.ApiKey)
+			if err != nil {
+				slog.Error("descifrando api key", "err", err, "req_id", r.Context().Value(requestIDKey))
+				writeError(w, http.StatusInternalServerError, "error interno")
+				return
+			}
+			apiKey = string(plain)
+		}
+		if status, msg := s.probeEmbeddingDims(r.Context(), req.BaseURL, apiKey, req.Model,
+			r.Context().Value(requestIDKey)); msg != "" {
+			writeError(w, status, msg)
+			return
+		}
 	}
 	p, err := s.store.UpdateLlmProvider(r.Context(), store.UpdateLlmProviderParams{
 		ID:       id,
@@ -258,6 +295,39 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		out.Error = "el proveedor no respondió a la llamada de prueba"
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// probeEmbeddingDims es el guard de dims del rol embedding (guía §3.3:
+// "settings valida las dims del proveedor contra las del índice antes de
+// habilitarlo"): UNA llamada de embeddings al proveedor (TestEmbedConnection,
+// sin reintentos ni failover) contrastada contra el typmod del vector de
+// repo_index leído del catálogo de PG — el DDL es la autoridad (siempre
+// 1536, §3.3). Habilitar un proveedor embedding EXIGE una validación
+// exitosa: la acción "probar conexión" existe justamente para verificarlo
+// antes, así que un probe sin respuesta también rechaza con 422 (no es un
+// error de la api: es la guardia de consistencia del índice — un mismatch
+// haría fallar el INSERT de pgvector en el IndexJob). Devuelve (0, "") si
+// pasa; si no, el status HTTP y el mensaje del rechazo.
+func (s *Server) probeEmbeddingDims(ctx context.Context, baseURL, apiKey, model string, reqID any) (int, string) {
+	if s.llm == nil {
+		return http.StatusServiceUnavailable, "gateway llm no configurado"
+	}
+	dims, _, err := s.llm.TestEmbedConnection(ctx, baseURL, apiKey, model)
+	if err != nil {
+		slog.Warn("guard de dims: probe de embeddings falló", "err", err, "req_id", reqID)
+		return http.StatusUnprocessableEntity, fmt.Sprintf(
+			"no se pudieron validar las dims del proveedor (%v): habilitar un proveedor embedding exige una prueba de embeddings exitosa; usá la acción de probar conexión primero", err)
+	}
+	catalogo, err := s.store.GetRepoIndexDims(ctx)
+	if err != nil {
+		slog.Error("guard de dims: leyendo el catálogo", "err", err, "req_id", reqID)
+		return http.StatusInternalServerError, "error interno"
+	}
+	if dims != int(catalogo) {
+		return http.StatusUnprocessableEntity, fmt.Sprintf(
+			"las dims del proveedor (%d) no coinciden con las del índice (%d): cambiar las dims requiere una migración nueva", dims, catalogo)
+	}
+	return 0, ""
 }
 
 // validateProvider valida el cuerpo de create/update; devuelve "" si es

@@ -30,7 +30,7 @@ type Server struct {
 	gitlab vcs.VCSProvider // webhook + GetDiff de GitLab
 
 	queue jobs.JobQueue // encola ReconcileJob en la reconexión de repos (§3.5); nunca procesa
-	llm   LLMTester     // solo la prueba de conexión de settings (§3.5)
+	llm   LLMTester     // settings: prueba de conexión (§3.5) + guard de dims embedding (§3.3)
 }
 
 // nopQueue es el default cuando nadie inyecta cola (tests que no tocan repos):

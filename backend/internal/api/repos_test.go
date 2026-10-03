@@ -30,6 +30,7 @@ func TestReposCRUDYReconcile(t *testing.T) {
 	e := newTestEnv(t, 5)
 	a := e.admin(t)
 	e.createProvider(t, "review", true)    // guarda de rol satisfecha (§9.6)
+	e.llm.embedDims = 1536                 // el guard de dims (§3.3) exige que el probe matchee el catálogo
 	e.createProvider(t, "embedding", true) // §6 F4: conectar/reconectar encola IndexJob
 
 	// Create: 201, la vista no filtra secretos.

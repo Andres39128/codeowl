@@ -397,11 +397,43 @@ func (q *stubQueue) enqueued(t *testing.T) ([]string, []json.RawMessage) {
 	return append([]string(nil), q.kinds...), append([]json.RawMessage(nil), q.payloads...)
 }
 
-// stubLLM satisface LLMTester: TestConnection falla solo si .err != nil.
+// stubLLM satisface LLMTester: TestConnection falla solo si .err != nil;
+// TestEmbedConnection (el guard de dims del rol embedding, §3.3) devuelve
+// .embedDims salvo que .embedErr esté seteado, y registra cada probe con su
+// api_key para las aserciones del guard.
 type stubLLM struct {
-	err error
+	err       error
+	embedErr  error
+	embedDims int
+
+	mu     sync.Mutex
+	probes int
+	probed string // última api_key sondeada (vacía = sin probes)
 }
 
 func (s *stubLLM) TestConnection(context.Context, string, string, string, string) error {
 	return s.err
+}
+
+func (s *stubLLM) TestEmbedConnection(_ context.Context, _, apiKey, _ string) (int, int64, error) {
+	s.mu.Lock()
+	s.probes++
+	s.probed = apiKey
+	s.mu.Unlock()
+	if s.embedErr != nil {
+		return 0, 0, s.embedErr
+	}
+	return s.embedDims, 0, nil
+}
+
+func (s *stubLLM) probeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.probes
+}
+
+func (s *stubLLM) probedKey() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.probed
 }

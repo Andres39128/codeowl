@@ -90,7 +90,7 @@ backend:
   api:
     ruta: backend/internal/api
     proposito: routing (ServeMux stdlib), middleware (auth, logging, recover), handlers REST + webhooks
-    nota: "depende de llm solo para la acción 'probar conexión' de proveedores en settings (una llamada mínima por rol); depende de vcs para GetDiff (diff del detalle de PR, F3); los handlers de webhook jamás tocan el gateway (guía §3.5)"
+    nota: "depende de llm solo para settings: la acción 'probar conexión' (§3.5) y el guard de dims de proveedores embedding habilitados (§3.3/§6 F4); depende de vcs para GetDiff (diff del detalle de PR, F3); los handlers de webhook jamás tocan el gateway (guía §3.5)"
     expone: ["Handler http.Handler", "GET /healthz (F0)", "POST /webhooks/github", "POST /webhooks/gitlab", "REST /api/*"]
     rest_endpoints:  # superficie REST del dashboard definida en F0 — los ítems marcados (F1) aterrizan con F1
       - "POST /api/auth/login + POST /api/auth/logout + GET /api/auth/session (F0) — sesión por cookie HttpOnly, CSRF en todo mutante POST/PUT/DELETE (guía §3.4)"
@@ -170,7 +170,7 @@ backend:
   llm:
     ruta: backend/internal/llm
     proposito: gateway multi-proveedor OpenAI-compatible con routing por rol y rate limit por proveedor
-    expone: ["interface Client", "Complete(ctx, Role, Prompt) (string, error)"]
+    expone: ["interface Client", "Complete(ctx, Role, Prompt) (string, error)", "Embed(ctx, Texts) ([][]float32, error) — rol embedding (F4)"]
     depende_de: [store, config]
     pruebas: backend/internal/llm/llm_test.go (servidor stub OpenAI-compatible)
     fase: F1
@@ -231,7 +231,7 @@ backend:
 analyzer:
   cli:
     ruta: analyzer/src
-    proposito: binario Go del contenedor (cgo permitido solo aquí) — detecta lenguajes (go-enry), ejecuta linters del contenedor, emite JSON normalizado
+    proposito: binario Go del contenedor (cgo permitido solo aquí) — detecta lenguajes por extensión (decisión 2 del doc F4 — go-enry no entra, la ganancia no justifica la dependencia), extrae símbolos con gramáticas tree-sitter fijadas (pinning), ejecuta linters del contenedor, emite JSON normalizado
     expone: ["arg: ruta del repo montado (argv)", "stdout: {language, linter, file, line, severity, message}[]", "modo --symbols: {file, symbol, kind, start_line, end_line, imports}[] — insumo del chunking de internal/index (F4)"]
     depende_de: []  # sin red, sin servicios — solo binarios locales del contenedor
     pruebas: analyzer/src/test (repo fixture con errores semilla)
