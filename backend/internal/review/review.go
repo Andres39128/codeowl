@@ -64,6 +64,15 @@ const (
 	minReviewContextMaxChars     = 500
 )
 
+// defaultRiskSensitivePaths espejo de config.DefaultRiskSensitivePaths (§4.2:
+// el pipeline no importa config — el wiring llena Config desde Stage2Config):
+// auth, secretos/credenciales, migraciones, CI y deploy. Glob estilo
+// path_filters (repoconfig.MatchPath); lista vacía explícita = sin bonus.
+var defaultRiskSensitivePaths = []string{
+	"auth/**", "*secret*", "**/credentials*", "**/migrations/**",
+	".github/workflows/**", ".gitlab-ci.yml", "deploy/**",
+}
+
 // Store es el subconjunto de la store que consume el pipeline (§4.5:
 // interfaces donde se consumen). *store.Store la satisface.
 type Store interface {
@@ -79,6 +88,7 @@ type Store interface {
 	GetCommentsSentByPRAndType(ctx context.Context, arg store.GetCommentsSentByPRAndTypeParams) ([]store.CommentsSent, error)
 	CreateCommentSent(ctx context.Context, arg store.CreateCommentSentParams) (store.CommentsSent, error)
 	UpdateCommentSentCommentID(ctx context.Context, arg store.UpdateCommentSentCommentIDParams) (store.CommentsSent, error)
+	UpdatePullRequestRiskScore(ctx context.Context, arg store.UpdatePullRequestRiskScoreParams) error
 }
 
 // Gateway es lo único que el pipeline le pide al LLM (mapa: los agentes
@@ -126,6 +136,7 @@ type Config struct {
 	Concurrency           int           // análisis de archivos en paralelo (tope gateway por review, §9.6)
 	DefaultProfile        string        // perfil global para repos sin review.yaml (§9.5: chill|assertive|strict)
 	ReviewContextMaxChars int           // tope de chars del bloque "Símbolos relacionados" del prompt (§6 F4)
+	RiskSensitivePaths    []string      // patrones de archivos sensibles del risk score (§6 F5): nil → defaults, vacío → sin bonus
 }
 
 // DefaultConfig devuelve la config por defecto (espejo de los defaults de
@@ -140,6 +151,7 @@ func DefaultConfig() Config {
 		CacheMaxEntries:       defaultCacheMaxEntries,
 		Concurrency:           defaultConcurrency,
 		ReviewContextMaxChars: defaultReviewContextMaxChars,
+		RiskSensitivePaths:    defaultRiskSensitivePaths,
 	}
 }
 
@@ -173,6 +185,11 @@ func (c Config) normalized() Config {
 	}
 	if !repoconfig.IsValidProfile(c.DefaultProfile) {
 		c.DefaultProfile = defaultReviewProfile // inválida o cero-value → default del pipeline
+	}
+	// nil = no seteada → defaults; lista vacía NO-nil = sin bonus a propósito
+	// (RISK_SENSITIVE_PATHS="" es una decisión del operador, no un olvido).
+	if c.RiskSensitivePaths == nil {
+		c.RiskSensitivePaths = defaultRiskSensitivePaths
 	}
 	return c
 }
@@ -532,6 +549,33 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		}
 	}
 	res.FindingsCount = len(toPublish)
+
+	// Risk scoring (§6 F5, T3): proxy computable 0-100 que ordena el triage
+	// del dashboard (guía §1.1: NO es veredicto bloqueante). Acá ya pasaron
+	// ambas salidas stale: el score refleja el diff vigente del PR y persiste
+	// también en partial (estado honesto). Un fallo de la persistencia jamás
+	// degrada la corrida (§9.6: best-effort de métrica).
+	files := make([]string, 0, len(fileHunks))
+	testFiles := 0
+	for f := range fileHunks {
+		files = append(files, f)
+		if IsTestFile(f) {
+			testFiles++
+		}
+	}
+	score := ComputeRisk(RiskInput{
+		ChangedLines:  total,
+		Files:         files,
+		TestFiles:     testFiles,
+		SensitiveHits: SensitiveHits(files, cfg.RiskSensitivePaths),
+		Counts:        counts,
+	})
+	if err := st.UpdatePullRequestRiskScore(ctx, store.UpdatePullRequestRiskScoreParams{
+		ID:        input.PullRequestID,
+		RiskScore: pgtype.Int4{Int32: int32(score), Valid: true},
+	}); err != nil {
+		slog.Warn("review: persistiendo el risk score falló (la corrida sigue)", "error", err, "review", rev.ID)
+	}
 
 	// (j)(k) Estado final y re-edición del resumen (§3.6.2): el de la fase 1
 	// es provisional por diseño — este incluye el recuento por severidad, los

@@ -27,12 +27,17 @@ const (
 	DefaultLoginMaxFails         = 5       // §3.4: backoff de login tras N fallos por usuario
 	DefaultWorkdirDiskBudget     = 2 << 30 // 2 GiB
 	DefaultDiffMaxLines          = 4000
-	DefaultDiffFileMaxLines      = 1000              // §9.6: tope análogo por archivo (solo SAST)
-	DefaultReviewAgentRetries    = 2                 // §9.8: reintentos por salida malformada del agente
-	DefaultReviewDriftLines      = 3                 // §3.6.3: tolerancia de drift del ancla de dedup
-	DefaultReviewProfile         = "assertive"       // §9.5: perfil global para repos sin review.yaml
-	DefaultReviewCacheTTL        = time.Hour         // §9.6: TTL de la cache de resultados
-	DefaultReviewCacheMaxEntries = 100               // §9.6: tope de entradas de la cache
+	DefaultDiffFileMaxLines      = 1000        // §9.6: tope análogo por archivo (solo SAST)
+	DefaultReviewAgentRetries    = 2           // §9.8: reintentos por salida malformada del agente
+	DefaultReviewDriftLines      = 3           // §3.6.3: tolerancia de drift del ancla de dedup
+	DefaultReviewProfile         = "assertive" // §9.5: perfil global para repos sin review.yaml
+	DefaultReviewCacheTTL        = time.Hour   // §9.6: TTL de la cache de resultados
+	DefaultReviewCacheMaxEntries = 100         // §9.6: tope de entradas de la cache
+	// RISK_SENSITIVE_PATHS (F5 §6): patrones glob de archivos sensibles que
+	// suman al risk score del tail de Run (auth, secretos/credenciales,
+	// migraciones, CI y deploy). Variable NO seteada cae acá; seteada VACÍA
+	// = lista vacía = sin bonus de sensibles.
+	DefaultRiskSensitivePaths    = "auth/**,*secret*,**/credentials*,**/migrations/**,.github/workflows/**,.gitlab-ci.yml,deploy/**"
 	DefaultLLMMaxPerReview       = 4                 // §9.6: llamadas LLM simultáneas por review
 	DefaultLLMMaxGlobal          = 8                 // §9.6: llamadas LLM simultáneas del gateway
 	DefaultLLMTimeout            = 120 * time.Second // §9.7: timeout por llamada LLM
@@ -99,6 +104,8 @@ type Stage2Config struct {
 	ReviewCacheTTL        time.Duration // TTL de la cache de resultados
 	ReviewCacheMaxEntries int           // tope de entradas de la cache
 	MasterKeyPrevious     []byte        // rotación de master key (§9.2), opcional
+	// Risk scoring (F5 §6): lo consume internal/review al final de Run.
+	RiskSensitivePaths []string // patrones glob de archivos sensibles; no seteada → defaults, vacía → sin bonus
 	// Topes del gateway LLM (§9.6/§9.7): los consumen internal/llm.
 	LLMMaxPerReview int
 	LLMMaxGlobal    int
@@ -291,6 +298,14 @@ func Load() (*Config, error) {
 		errs = append(errs, "REVIEW_CACHE_MAX_ENTRIES debe ser mayor o igual a 1")
 	}
 	s2.ReviewCacheMaxEntries = cacheMax
+
+	// RISK_SENSITIVE_PATHS (F5 §6): no seteada → defaults; seteada vacía →
+	// lista vacía explícita (sin bonus de sensibles en el risk score).
+	if raw, ok := os.LookupEnv("RISK_SENSITIVE_PATHS"); ok {
+		s2.RiskSensitivePaths = splitCSV(raw)
+	} else {
+		s2.RiskSensitivePaths = splitCSV(DefaultRiskSensitivePaths)
+	}
 
 	maxPerReview, err := loadInt("LLM_MAX_PER_REVIEW", DefaultLLMMaxPerReview)
 	if err != nil {
@@ -560,4 +575,18 @@ func envOr(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitCSV parte una lista separada por comas recortando espacios y
+// descartando vacíos. Devuelve slice NO-nil aunque raw sea "": el vacío
+// explícito es señal ("sin bonus", F5 §6) y el consumidor distingue nil de
+// vacío.
+func splitCSV(raw string) []string {
+	out := []string{}
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

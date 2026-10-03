@@ -91,7 +91,9 @@ type stubStore struct {
 	findings       []store.CreateFindingParams
 	comments       map[string][]store.CommentsSent // indexadas por type
 	nextCmt        int64
-	cheapProviders []store.LlmProvider // cola del rol cheap (verifier)
+	cheapProviders []store.LlmProvider                      // cola del rol cheap (verifier)
+	riskScores     []store.UpdatePullRequestRiskScoreParams // captura del score (F5 §6)
+	failRisk       bool                                     // fuerza el error de persistencia del score
 }
 
 func newStubStore() *stubStore {
@@ -227,6 +229,16 @@ func (s *stubStore) UpdateCommentSentCommentID(_ context.Context, arg store.Upda
 		}
 	}
 	return store.CommentsSent{}, fmt.Errorf("comment_sent %d no existe", arg.ID)
+}
+
+func (s *stubStore) UpdatePullRequestRiskScore(_ context.Context, arg store.UpdatePullRequestRiskScoreParams) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failRisk {
+		return fmt.Errorf("BD caída (stub)")
+	}
+	s.riskScores = append(s.riskScores, arg)
+	return nil
 }
 
 // stubGateway responde de colas por agente: reviewer por archivo,
@@ -527,6 +539,75 @@ func TestRunStale(t *testing.T) {
 	}
 	if rev := d.st.reviews[1]; rev.Status != StatusStale {
 		t.Errorf("review status = %q, querés stale", rev.Status)
+	}
+}
+
+// Risk score (§6 F5, T3): la corrida exitosa persiste el score del PR. El
+// fixture cambia 4 líneas en main.go (no test, no sensible) con 1 hallazgo
+// alto publicado → 5 (banda chico) + 12 (high) = 17.
+func TestRunRiskScorePersistido(t *testing.T) {
+	d := newDeps()
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección", "")}
+	d.gw.summarizer = []string{summarizerJSON}
+
+	res, err := d.run(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != StatusSuccess {
+		t.Fatalf("status = %q, querés success", res.Status)
+	}
+	if len(d.st.riskScores) != 1 {
+		t.Fatalf("UpdatePullRequestRiskScore llamado %d veces, querés 1", len(d.st.riskScores))
+	}
+	call := d.st.riskScores[0]
+	if call.ID != testPRID {
+		t.Errorf("ID = %d, querés %d", call.ID, testPRID)
+	}
+	want := ComputeRisk(RiskInput{
+		ChangedLines: 4,
+		Files:        []string{"main.go"},
+		Counts:       map[string]int{"high": 1, "medium": 0, "low": 0},
+	})
+	if !call.RiskScore.Valid || int(call.RiskScore.Int32) != want {
+		t.Errorf("risk_score = %+v, querés %d válido", call.RiskScore, want)
+	}
+}
+
+// Stale (§3.6.1.3): el score NO se persiste — el diff de una corrida stale
+// no es el estado actual del PR.
+func TestRunStaleNoPersisteRiskScore(t *testing.T) {
+	d := newDeps()
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
+	d.gw.summarizer = []string{summarizerJSON}
+	d.st.pr.HeadSha = "headnuevo" // push entre encolado e inicio
+
+	res, err := d.run(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != StatusStale {
+		t.Fatalf("status = %q, querés stale", res.Status)
+	}
+	if len(d.st.riskScores) != 0 {
+		t.Errorf("se persistió risk score en corrida stale: %+v", d.st.riskScores)
+	}
+}
+
+// Fallo de la persistencia del score: se loguea y la corrida sigue (§9.6:
+// best-effort de métrica — jamás degrada la revisión).
+func TestRunRiskScoreFalloNoDegrada(t *testing.T) {
+	d := newDeps()
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
+	d.gw.summarizer = []string{summarizerJSON}
+	d.st.failRisk = true
+
+	res, err := d.run(t)
+	if err != nil {
+		t.Fatalf("un fallo del risk score no debe fallar la corrida: %v", err)
+	}
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés success", res.Status)
 	}
 }
 

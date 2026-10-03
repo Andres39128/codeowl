@@ -76,14 +76,15 @@ func main() {
 		TmpfsSize: cfg.Stage2.AnalyzerTmpfsSize,
 	})
 	reviewCfg := review.Config{
-		DiffMaxLines:     cfg.Stage2.DiffMaxLines,
-		DiffFileMaxLines: cfg.Stage2.DiffFileMaxLines,
-		AgentRetries:     cfg.Stage2.ReviewAgentRetries,
-		DriftLines:       cfg.Stage2.ReviewDriftLines,
-		DefaultProfile:   cfg.Stage2.ReviewDefaultProfile,
-		CacheTTL:         cfg.Stage2.ReviewCacheTTL,
-		CacheMaxEntries:  cfg.Stage2.ReviewCacheMaxEntries,
-		Concurrency:      cfg.Stage2.LLMMaxPerReview,
+		DiffMaxLines:       cfg.Stage2.DiffMaxLines,
+		DiffFileMaxLines:   cfg.Stage2.DiffFileMaxLines,
+		AgentRetries:       cfg.Stage2.ReviewAgentRetries,
+		DriftLines:         cfg.Stage2.ReviewDriftLines,
+		DefaultProfile:     cfg.Stage2.ReviewDefaultProfile,
+		CacheTTL:           cfg.Stage2.ReviewCacheTTL,
+		CacheMaxEntries:    cfg.Stage2.ReviewCacheMaxEntries,
+		Concurrency:        cfg.Stage2.LLMMaxPerReview,
+		RiskSensitivePaths: cfg.Stage2.RiskSensitivePaths,
 	}
 
 	if err := q.Register(

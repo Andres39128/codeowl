@@ -176,6 +176,46 @@ func TestLoadReviewContextMaxCharsInvalido(t *testing.T) {
 	}
 }
 
+// RISK_SENSITIVE_PATHS (F5 §6): no seteada → defaults documentados; seteada
+// vacía → lista vacía (sin bonus de sensibles); seteada con valores →
+// parseada CSV recortando espacios.
+func TestLoadRiskSensitivePaths(t *testing.T) {
+	setStage1(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Split(DefaultRiskSensitivePaths, ",")
+	if got := cfg.Stage2.RiskSensitivePaths; len(got) != len(want) {
+		t.Fatalf("defaults: got %v want %v", got, want)
+	}
+	for i := range want {
+		if cfg.Stage2.RiskSensitivePaths[i] != want[i] {
+			t.Fatalf("defaults: got %v want %v", cfg.Stage2.RiskSensitivePaths, want)
+		}
+	}
+
+	setStage1(t)
+	t.Setenv("RISK_SENSITIVE_PATHS", "")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Stage2.RiskSensitivePaths) != 0 {
+		t.Errorf("seteada vacía debe ser lista vacía (sin bonus): %v", cfg.Stage2.RiskSensitivePaths)
+	}
+
+	setStage1(t)
+	t.Setenv("RISK_SENSITIVE_PATHS", " ops/** , !ops/tmp/** ")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Stage2.RiskSensitivePaths; len(got) != 2 || got[0] != "ops/**" || got[1] != "!ops/tmp/**" {
+		t.Errorf("parseo CSV con espacios: %v", got)
+	}
+}
+
 func TestLoadMasterKeyInvalida(t *testing.T) {
 	setStage1(t)
 	t.Setenv("MASTER_KEY", "REEMPLAZAR:openssl-rand-base64-32")
