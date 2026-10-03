@@ -371,7 +371,7 @@ func runVerifier(ctx context.Context, gw Gateway, cfg Config, fileHunks map[stri
 			}
 			for i, f := range fs {
 				if verified, ok := v[i]; ok {
-					verdicts[Fingerprint(f.File, f.Category, f.Line)] = verified
+					verdicts[Fingerprint(f.File, f.Category, f.Anchor)] = verified
 				}
 			}
 			return nil

@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -87,8 +86,10 @@ func (p *publisher) publishSummary(ctx context.Context, body string) error {
 
 // publishInline publica el comentario inline del finding en su posición del
 // diff y registra la fila inline con su huella (dedup de corridas futuras,
-// §3.6.3). Con sugerencia va por PostSuggestion (aplicable con un clic);
-// sin ella, PostInlineComment (comentario plano).
+// §3.6.3). El ancla es la resuelta del hallazgo — símbolo contenedor o línea
+// (§6 F4) — la misma base de la huella. Con sugerencia va por
+// PostSuggestion (aplicable con un clic); sin ella, PostInlineComment
+// (comentario plano).
 func (p *publisher) publishInline(ctx context.Context, f Finding, pos vcs.CommentPosition) error {
 	body := maskSecrets(inlineBody(f))
 	var (
@@ -110,7 +111,7 @@ func (p *publisher) publishInline(ctx context.Context, f Finding, pos vcs.Commen
 		Type:          "inline",
 		File:          pgtype.Text{String: f.File, Valid: true},
 		Category:      pgtype.Text{String: f.Category, Valid: true},
-		Anchor:        pgtype.Text{String: strconv.FormatInt(int64(f.Line), 10), Valid: true},
+		Anchor:        pgText(f.Anchor),
 	})
 	return err
 }

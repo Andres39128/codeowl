@@ -206,6 +206,7 @@ type Finding struct {
 	Body       string
 	Suggestion string // opcional, bloque ```suggestion``` en el comentario
 	Source     string // llm | sast
+	Anchor     string // ancla de dedup resuelta (§6 F4): símbolo contenedor o línea; se llena pre-dedup y viaja hasta comments_sent
 }
 
 // Run ejecuta el pipeline completo para una corrida (§3.6): diff → SAST →
@@ -352,7 +353,33 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	if err != nil {
 		return nil, fmt.Errorf("cargando comments_sent del PR: %w", err)
 	}
-	publishable := dedup(existing, append(llmFindings, sast...), cfg.DriftLines)
+
+	// Anclas de dedup por símbolo contenedor (§6 F4): segunda invocación del
+	// analyzer con --symbols SI sabe extraer símbolos — el Runner real la
+	// implementa, los stubs no. Fallo o ausencia → conjunto vacío y anclas
+	// por línea (fallback legacy): la extracción JAMÁS frena la revisión.
+	// Copia propia de los hallazgos: la cache comparte llmFindings y mutar
+	// su backing array corrompería entradas futuras (§9.6).
+	findings := make([]Finding, 0, len(llmFindings)+len(sast))
+	findings = append(findings, llmFindings...)
+	findings = append(findings, sast...)
+	if len(findings) > 0 {
+		var symbols []analyze.Symbol
+		if ex, ok := analyzer.(SymbolExtractor); ok {
+			syms, err := ex.ExtractSymbols(ctx, input.Workdir)
+			if err != nil {
+				slog.Warn("review: extracción de símbolos falló, anclas por línea (§6 F4)", "error", err, "review", rev.ID)
+			} else {
+				symbols = syms
+			}
+		} else {
+			slog.Debug("review: analyzer sin ExtractSymbols, anclas por línea", "review", rev.ID)
+		}
+		for i := range findings {
+			findings[i].Anchor, _ = anchorFor(findings[i], symbols)
+		}
+	}
+	publishable := dedup(existing, findings, cfg.DriftLines)
 
 	// Filtro de publicación del perfil (§6 F3): el perfil regula CUÁNTO
 	// comenta el bot, no qué se registra — todo hallazgo persiste (auditoría)
@@ -412,7 +439,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 			// Falsos positivos confirmados: fuera del conjunto publicado (§6 F3).
 			kept := toPublish[:0]
 			for _, f := range toPublish {
-				if v, ok := verdicts[Fingerprint(f.File, f.Category, f.Line)]; ok && !v {
+				if v, ok := verdicts[Fingerprint(f.File, f.Category, f.Anchor)]; ok && !v {
 					continue
 				}
 				kept = append(kept, f)
@@ -426,7 +453,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// por el perfil y lo que el verifier no pudo verificar.
 	for _, f := range publishable {
 		verified := pgtype.Bool{} // null (§3.3)
-		if v, ok := verdicts[Fingerprint(f.File, f.Category, f.Line)]; ok {
+		if v, ok := verdicts[Fingerprint(f.File, f.Category, f.Anchor)]; ok {
 			verified = pgtype.Bool{Bool: v, Valid: true}
 		}
 		if _, err := st.CreateFinding(ctx, store.CreateFindingParams{
@@ -617,14 +644,15 @@ func fromSAST(fs []analyze.Finding) []Finding {
 }
 
 // dedup filtra hallazgos: duplicados exactos dentro de la corrida (por
-// huella) y hallazgos ya comentados en runs anteriores (misma huella con
-// drift de líneas, §3.6.3). Devuelve en orden estable.
+// huella con el ancla resuelta, §6 F4) y hallazgos ya comentados en runs
+// anteriores (modo dual: símbolo exacto o drift de líneas, §3.6.3). Devuelve
+// en orden estable.
 func dedup(existing []store.CommentsSent, findings []Finding, drift int) []Finding {
 	seen := make(map[string]bool, len(findings))
 	out := make([]Finding, 0, len(findings))
 	for _, f := range findings {
-		fp := Fingerprint(f.File, f.Category, f.Line)
-		if seen[fp] || IsDuplicate(existing, f, drift) {
+		fp := Fingerprint(f.File, f.Category, f.Anchor)
+		if seen[fp] || IsDuplicate(existing, f, f.Anchor, drift) {
 			continue
 		}
 		seen[fp] = true

@@ -767,7 +767,7 @@ func TestRunPublishFailsMarksFailed(t *testing.T) {
 
 // Unitarias de dedup y prompts.
 func TestFingerprintFormat(t *testing.T) {
-	got := Fingerprint("main.go", "security", 42)
+	got := Fingerprint("main.go", "security", "42")
 	if got != "main.go|security|42" {
 		t.Errorf("Fingerprint = %q", got)
 	}
@@ -796,7 +796,8 @@ func TestIsDuplicateDriftBoundaries(t *testing.T) {
 		{11, 0, false},
 	}
 	for _, c := range cases {
-		if got := IsDuplicate(existing, f(c.line), c.drift); got != c.want {
+		// ancla vacía = modo legacy numérico (§6 F4: fallback sin símbolo).
+		if got := IsDuplicate(existing, f(c.line), "", c.drift); got != c.want {
 			t.Errorf("IsDuplicate(line=%d, drift=%d) = %v, querés %v", c.line, c.drift, got, c.want)
 		}
 	}
