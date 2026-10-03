@@ -14,6 +14,9 @@ interface TableProps<Row> {
 	rows: Row[];
 	getRowKey?: (row: Row) => string;
 	caption?: string;
+	/** Click en la fila (listados que navegan al detalle). El affordance
+	 * accesible por teclado sigue siendo el link dentro de la celda. */
+	onRowClick?: (row: Row) => void;
 }
 
 export function Table<Row>({
@@ -21,6 +24,7 @@ export function Table<Row>({
 	rows,
 	getRowKey,
 	caption,
+	onRowClick,
 }: TableProps<Row>) {
 	return (
 		<div class="overflow-x-auto rounded-lg border border-border-subtle bg-bg-surface">
@@ -49,7 +53,12 @@ export function Table<Row>({
 					{rows.map((row, index) => (
 						<tr
 							key={getRowKey ? getRowKey(row) : String(index)}
-							class="border-b border-border-subtle last:border-b-0"
+							class={`border-b border-border-subtle last:border-b-0 ${
+								onRowClick !== undefined ? "cursor-pointer" : ""
+							}`}
+							onClick={
+								onRowClick !== undefined ? () => onRowClick(row) : undefined
+							}
 						>
 							{columns.map((column) => (
 								<td key={column.key} class="px-3 py-2">

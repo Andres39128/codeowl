@@ -1,15 +1,18 @@
 /** App F1: sesión → login o shell con routing hash. #/ aterriza según rol
  * (admin → proveedores, member → cola); settings es exclusivo del admin y un
- * member que navega a #/settings/* es redirigido a la cola (§3.4). */
+ * member que navega a #/settings/* es redirigido a la cola (§3.4). La lista
+ * de PRs es visible a member y admin; #/prs/<id> renderiza el detalle (F3). */
 
 import { useEffect } from "preact/hooks";
 import { Layout } from "./components/Layout";
 import { Login } from "./features/auth/Login";
+import { PrDetail } from "./features/prs/PrDetail";
+import { Prs } from "./features/prs/Prs";
 import { Queue } from "./features/queue/Queue";
 import { Providers } from "./features/settings/Providers";
 import { Repos } from "./features/settings/Repos";
 import { Users } from "./features/settings/Users";
-import { resolveRoute } from "./lib/router";
+import { prIdFromHash, resolveRoute } from "./lib/router";
 import { useHashRoute } from "./lib/useHashRoute";
 import { useSession } from "./lib/useSession";
 
@@ -17,6 +20,7 @@ import { useSession } from "./lib/useSession";
 // permite migrar a path routing cuando haga falta.
 const PAGES = {
 	queue: Queue,
+	prs: Prs,
 	providers: Providers,
 	repos: Repos,
 	users: Users,
@@ -51,6 +55,9 @@ export function App() {
 
 	const route = resolveRoute(hash, isAdmin).route;
 	const Page = PAGES[route];
+	// El detalle de PR comparte la ruta prs con el id en el hash (#/prs/<id>);
+	// un id inválido ya viene redirigido a la lista por resolveRoute.
+	const prId = prIdFromHash(hash);
 
 	return (
 		<Layout
@@ -59,7 +66,7 @@ export function App() {
 			onLogout={() => session.logout.mutate()}
 			logoutPending={session.logout.isPending}
 		>
-			<Page />
+			{route === "prs" && prId !== null ? <PrDetail prId={prId} /> : <Page />}
 		</Layout>
 	);
 }

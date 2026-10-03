@@ -41,3 +41,83 @@ export interface JobRow {
 	count: number;
 	latest_created_at: string;
 }
+
+/** Estados de una corrida de revisión (conjunto cerrado del schema §3.3). */
+export type ReviewStatus =
+	| "running"
+	| "success"
+	| "partial"
+	| "stale"
+	| "failed";
+
+/** Repo embebido de un PR (internal/api/prs.go): lo mínimo para el origen. */
+export interface PrRepoView {
+	id: number;
+	owner: string;
+	name: string;
+	vcs: string;
+}
+
+/** Hallazgos de la última corrida por severidad (high/medium/low, §3.3). */
+export interface ReviewCounts {
+	high: number;
+	medium: number;
+	low: number;
+}
+
+/** Corrida más reciente del PR, versión lista (GET /api/prs). */
+export interface LatestReviewView {
+	id: number;
+	status: ReviewStatus;
+	created_at: string;
+	counts: ReviewCounts;
+}
+
+/** PR en el listado y bloque "pr" del detalle (internal/api/prs.go: prView). */
+export interface PrView {
+	id: number;
+	number: number;
+	author: string;
+	state: "open" | "closed";
+	repo: PrRepoView;
+	head_sha: string;
+	base_ref: string;
+	updated_at: string;
+	latest_review: LatestReviewView | null;
+}
+
+/** Corrida completa del detalle: textos que completó la corrida (§3.3). */
+export interface ReviewView {
+	id: number;
+	status: ReviewStatus;
+	summary: string;
+	walkthrough: string;
+	mermaid: string;
+	created_at: string;
+}
+
+/** Hallazgo del detalle: suggestion y verified opcionales por diseño (§3.3,
+ * F3 — verified queda null hasta que corre el Verifier; los SAST no aplican). */
+export interface FindingView {
+	id: number;
+	file: string;
+	line: number;
+	severity: "high" | "medium" | "low";
+	category: string;
+	body: string;
+	suggestion: string | null;
+	source: "llm" | "sast";
+	verified: boolean | null;
+}
+
+/** Cuerpo de GET /api/prs/{id}: PR + última corrida + hallazgos. */
+export interface PrDetailView {
+	pr: PrView;
+	review: ReviewView | null;
+	findings: FindingView[];
+}
+
+/** Cuerpo de GET /api/prs/{id}/diff (proxy al adapter vía GetDiff, F3). */
+export interface PrDiffView {
+	diff: string;
+}

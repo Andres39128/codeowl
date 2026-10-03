@@ -1,7 +1,8 @@
-/** resolveRoute: aterrizaje por rol y guarda de settings (mapa: dashboard.lib). */
+/** resolveRoute: aterrizaje por rol, guarda de settings y detalle de PR
+ * (mapa: dashboard.lib). */
 
 import { describe, expect, it } from "vitest";
-import { defaultRoute, resolveRoute } from "./router";
+import { defaultRoute, prIdFromHash, resolveRoute } from "./router";
 
 describe("resolveRoute", () => {
 	it("hash vacío o desconocido aterriza según rol", () => {
@@ -52,5 +53,31 @@ describe("resolveRoute", () => {
 	it("defaultRoute: admin → proveedores, member → cola", () => {
 		expect(defaultRoute(true)).toBe("providers");
 		expect(defaultRoute(false)).toBe("queue");
+	});
+
+	it("prs es visible a member y admin sin redirect (§3.4)", () => {
+		expect(resolveRoute("#/prs", false)).toEqual({
+			route: "prs",
+			redirect: null,
+		});
+		expect(resolveRoute("#/prs", true)).toEqual({
+			route: "prs",
+			redirect: null,
+		});
+	});
+
+	it("detalle #/prs/<id> comparte la ruta prs; id inválido vuelve a la lista", () => {
+		expect(prIdFromHash("#/prs/7")).toBe(7);
+		expect(prIdFromHash("#/prs")).toBeNull();
+		expect(prIdFromHash("#/prs/abc")).toBeNull();
+		expect(prIdFromHash("#/prs/7/extra")).toBeNull();
+		expect(resolveRoute("#/prs/42", false)).toEqual({
+			route: "prs",
+			redirect: null,
+		});
+		expect(resolveRoute("#/prs/abc", true)).toEqual({
+			route: "prs",
+			redirect: "#/prs",
+		});
 	});
 });
