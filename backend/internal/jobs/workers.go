@@ -20,8 +20,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
 	"github.com/Andres39128/codeowl/backend/internal/index"
@@ -115,6 +117,13 @@ func (w *ReviewJobWorker) Work(ctx context.Context, job *river.Job[ReviewJobArgs
 	}
 	slog.Info("review job completado", "job", job.ID, "pr", pr.Number, "review", res.Status,
 		"findings", res.FindingsCount)
+
+	// §3.6.1.5: la finalización del job va dentro de su tx, con el
+	// re-chequeo de identidad y el re-encolo del estado actual atómicos.
+	if err := w.completeTx(ctx, job, repoID, pr.Number); err != nil {
+		return err
+	}
+
 	// §6 F4: una review success/partial implica cambios en la base del PR —
 	// re-encola el índice del repo (la guarda de proveedor embedding vive en
 	// EnqueueIndexJob). Best-effort: un fallo de cola no invalida la review
@@ -124,6 +133,78 @@ func (w *ReviewJobWorker) Work(ctx context.Context, job *river.Job[ReviewJobArgs
 			slog.Warn("review job: no se pudo encolar el IndexJob",
 				"repo", repoID, "pr", pr.Number, "err", err)
 		}
+	}
+	return nil
+}
+
+// completeTx cierra el job dentro de la tx que lo completa (§3.6.1.5):
+// transiciona running→completed EN la tx, re-chequea la identidad del PR
+// (re-lectura en la misma tx) y, si cambió con el PR abierto, encola la
+// corrida del estado actual en la misma tx — atómico con la finalización
+// (§3.6.1.6: no existe interleaving que pierda una review). El orden importa:
+// completado primero — dentro de la tx el job ya no está en los estados vivos
+// de la unicidad, así que el insert pasa. Un insert duplicado (el webhook ya
+// encoló esta identidad) dedupe en silencio: el unique index de River hace
+// ON CONFLICT y devuelve el job existente, jamás duplica. Fuera de un worker
+// River real (tests que llaman Work directo) no hay cliente en el ctx: se
+// omite y River completa el job por su camino de siempre.
+func (w *ReviewJobWorker) completeTx(ctx context.Context, job *river.Job[ReviewJobArgs], repoID int64, prNumber int64) error {
+	client, err := river.ClientFromContextSafely[pgx.Tx](ctx)
+	if err != nil {
+		return nil // llamada directa (tests/herramientas): el job no corre en River
+	}
+
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("abriendo la tx de finalización del job %d: %w", job.ID, err)
+	}
+	defer tx.Rollback(ctx) // no-op tras el Commit
+
+	// La transición a completed va PRIMERO (§3.6.1.5): el job completado ya
+	// no bloquea la unicidad y el insert del re-encolo pasa.
+	if _, err := river.JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job); err != nil {
+		return fmt.Errorf("completando el job %d en la tx: %w", job.ID, err)
+	}
+
+	// Re-lectura del PR EN la tx: la identidad que decidió este job puede
+	// haber cambiado mientras la corrida estaba en vuelo. El chequeo de la
+	// review row es cosa de Run (§3.6.1.3, independiente); este es el que
+	// decide el re-encolo.
+	stx := store.New(tx)
+	pr, err := stx.GetPullRequest(ctx, job.Args.PullRequestID)
+	if err != nil {
+		return fmt.Errorf("releyendo el PR %d en la tx de finalización: %w", job.Args.PullRequestID, err)
+	}
+
+	// Identidad cambió con PR abierto → el push/retarget durante la corrida
+	// no se pierde: la corrida del estado actual nace acá. PR no abierto →
+	// sin re-encolo (§3.6.1.3: cerrado no revisa — re-encolar sería quemar
+	// LLM en loop; el próximo evento válido encola lo suyo).
+	if pr.HeadSha != job.Args.HeadSha || pr.BaseSha != job.Args.BaseSha {
+		if pr.State == "open" {
+			if _, err := client.InsertTx(ctx, tx, ReviewJobArgs{
+				RepositoryID:  repoID,
+				PullRequestID: pr.ID,
+				HeadSha:       pr.HeadSha,
+				BaseSha:       pr.BaseSha,
+			}, insertOpts(KindReview)); err != nil {
+				// El re-encolo no bloquea la finalización: la corrida ya
+				// corre, el job queda completed y el próximo trigger
+				// re-encola (ventana honesta, lograda con log de error).
+				slog.Error("review job: falló el re-encolo transaccional (§3.6.1.5)",
+					"job", job.ID, "pr", prNumber, "err", err)
+			} else {
+				slog.Info("review job: identidad cambió en vuelo — re-encolo transaccional (§3.6.1.5)",
+					"job", job.ID, "pr", prNumber, "head", pr.HeadSha, "base", pr.BaseSha)
+			}
+		} else {
+			slog.Info("review job: identidad cambió con PR no abierto — sin re-encolo (§3.6.1.3)",
+				"job", job.ID, "pr", prNumber, "state", pr.State)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commiteando la tx de finalización del job %d: %w", job.ID, err)
 	}
 	return nil
 }

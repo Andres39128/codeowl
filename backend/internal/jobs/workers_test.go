@@ -24,6 +24,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertest"
 	"github.com/riverqueue/river/rivertype"
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
@@ -409,6 +411,240 @@ func TestReviewJobWorkerAgotaIntentos(t *testing.T) {
 	if kinds := cola.encolados(); len(kinds) != 0 {
 		t.Errorf("una corrida que falla no encola IndexJob (§6 F4): %v", kinds)
 	}
+}
+
+// wClientInsertOnly arma un cliente River insert-only sobre el pool de la
+// store: alcanza para JobCompleteTx/InsertTx (el pilot existe en todo
+// cliente) sin procesar jobs.
+func wClientInsertOnly(t *testing.T, st *store.Store) *river.Client[pgx.Tx] {
+	t.Helper()
+	client, err := river.NewClient(riverpgxv5.New(st.Pool), &river.Config{})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return client
+}
+
+// wJobRunning inserta el job en river_job y lo deja running — el estado que
+// JobCompleteTx exige — devolviendo el Job en memoria sincronizado.
+func wJobRunning(t *testing.T, st *store.Store, client *river.Client[pgx.Tx], args ReviewJobArgs) *river.Job[ReviewJobArgs] {
+	t.Helper()
+	ctx := context.Background()
+	res, err := client.Insert(ctx, args, nil)
+	if err != nil {
+		t.Fatalf("insertando el job de prueba: %v", err)
+	}
+	if _, err := st.Pool.Exec(ctx, "UPDATE river_job SET state = 'running' WHERE id = $1", res.Job.ID); err != nil {
+		t.Fatalf("dejando el job running: %v", err)
+	}
+	res.Job.State = rivertype.JobStateRunning
+	return &river.Job[ReviewJobArgs]{JobRow: res.Job, Args: args}
+}
+
+// wJobsReviewConHead cuenta los jobs de review cuyo args traen ese head_sha
+// (river_job.args es jsonb: el filtro es por campo del payload).
+func wJobsReviewConHead(t *testing.T, st *store.Store, head string) int {
+	t.Helper()
+	var n int
+	if err := st.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(1) FROM river_job WHERE kind = $1 AND args->>'head_sha' = $2`,
+		KindReview, head).Scan(&n); err != nil {
+		t.Fatalf("contando jobs de review con head %s: %v", head, err)
+	}
+	return n
+}
+
+// El re-encolo transaccional (§3.6.1.5): la finalización del job va en una tx
+// que re-lee el PR y, si la identidad cambió con el PR abierto, encola la
+// corrida del estado actual en la misma tx. Con identidad igual o PR cerrado
+// no hay re-encolo. Unit-level: Work con el cliente River en el ctx
+// (rivertest.WorkContext) contra la fila real de river_job.
+func TestReviewJobWorkerReencoloTx(t *testing.T) {
+	// each: mutación del PR a mitad de corrida (nil = no cambia nada).
+	// Devuelve el head vigente tras la mutación. Espera: jobs de review con
+	// ese head que deben existir al cerrar el job (1 = el re-encolado, o el
+	// original cuando la identidad no cambió; 0 = cerrado no re-encola).
+	each := []struct {
+		name    string
+		mutar   func(t *testing.T, st *store.Store, prID int64) string
+		espera  int
+	}{
+		{
+			name: "identidad cambiada re-encola",
+			mutar: func(t *testing.T, st *store.Store, prID int64) string {
+				head := fmt.Sprintf("head-push-%d", wNano())
+				if _, err := st.Pool.Exec(context.Background(),
+					"UPDATE pull_requests SET head_sha = $1, base_sha = $2 WHERE id = $3",
+					head, fmt.Sprintf("base-push-%d", wNano()), prID); err != nil {
+					t.Fatalf("mutando el PR: %v", err)
+				}
+				return head
+			},
+			espera: 1,
+		},
+		{
+			name:   "identidad igual no re-encola",
+			mutar:  nil,
+			espera: 1,
+		},
+		{
+			name: "PR cerrado no re-encola",
+			mutar: func(t *testing.T, st *store.Store, prID int64) string {
+				head := fmt.Sprintf("head-push-%d", wNano())
+				if _, err := st.Pool.Exec(context.Background(),
+					"UPDATE pull_requests SET head_sha = $1, state = 'closed' WHERE id = $2",
+					head, prID); err != nil {
+					t.Fatalf("mutando el PR: %v", err)
+				}
+				return head
+			},
+			espera: 0,
+		},
+	}
+
+	for _, tt := range each {
+		t.Run(tt.name, func(t *testing.T) {
+			st := wStore(t)
+			ctx := context.Background()
+			repo := wRepo(t, st)
+			defer wDropRepo(t, st, repo.ID)
+			pr := wPR(t, st, repo.ID, 103)
+			client := wClientInsertOnly(t, st)
+
+			args := ReviewJobArgs{
+				RepositoryID: repo.ID, PullRequestID: pr.ID,
+				HeadSha: pr.HeadSha, BaseSha: pr.BaseSha,
+			}
+			job := wJobRunning(t, st, client, args)
+
+			// El push "aterriza" mientras la corrida está en vuelo: la
+			// mutación va ANTES de Work para que la re-lectura de la tx la
+			// vea (la ventana exacta no importa: la tx es la última mirada).
+			head := pr.HeadSha
+			if tt.mutar != nil {
+				head = tt.mutar(t, st, pr.ID)
+			}
+
+			w := &ReviewJobWorker{
+				Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{},
+				Provider: &wProvider{diff: ""}, Queue: &wQueue{},
+				Config: review.DefaultConfig(), WorkdirRoot: t.TempDir(),
+			}
+			if err := w.Work(rivertest.WorkContext(ctx, client), job); err != nil {
+				t.Fatalf("Work: %v", err)
+			}
+
+			// El job original quedó completed EN la tx del worker.
+			var estado string
+			if err := st.Pool.QueryRow(ctx, "SELECT state FROM river_job WHERE id = $1", job.ID).Scan(&estado); err != nil {
+				t.Fatalf("leyendo el job original: %v", err)
+			}
+			if estado != "completed" {
+				t.Errorf("el job original debe quedar completed: got %q", estado)
+			}
+
+			// El re-encolo: la corrida del estado actual existe (o no, si el
+			// PR cerró) — sin duplicados ni loops.
+			if got := wJobsReviewConHead(t, st, head); got != tt.espera {
+				t.Errorf("jobs de review con la identidad actual (%s): querés %d, got %d", head, tt.espera, got)
+			}
+		})
+	}
+}
+
+// El interleaving completo (§3.6.1.6, money shot): un push aterriza DURANTE
+// la corrida (el stub de FetchPR lo emula), el job completa stale y el job de
+// la identidad nueva nace atómico con su tx de finalización — nada se pierde
+// hasta el próximo push. Cola River real, worker real, BD real.
+func TestReviewJobWorkerReencoloTransaccionalInterleaving(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	defer wDropRepo(t, st, repo.ID)
+	pr := wPR(t, st, repo.ID, 104)
+
+	head2, base2 := fmt.Sprintf("head-push-%d", wNano()), fmt.Sprintf("base-push-%d", wNano())
+	prov := &wPushDuranteCorrida{
+		wProvider: &wProvider{diff: ""},
+		st:        st, prID: pr.ID, head: head2, base: base2,
+	}
+	w := &ReviewJobWorker{
+		Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{}, Provider: prov, Queue: q,
+		Config: review.DefaultConfig(), WorkdirRoot: t.TempDir(),
+	}
+	if err := q.Register(w); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = q.Stop(ctx) }()
+
+	args, err := json.Marshal(ReviewJobArgs{
+		RepositoryID: repo.ID, PullRequestID: pr.ID,
+		HeadSha: pr.HeadSha, BaseSha: pr.BaseSha,
+	})
+	if err != nil {
+		t.Fatalf("serializando args: %v", err)
+	}
+	if err := q.Enqueue(ctx, KindReview, args); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// El job B con la identidad que aterrizó en vuelo debe existir: nació en
+	// la tx que completó al A (§3.6.1.5).
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if wJobsReviewConHead(t, st, head2) >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("el re-encolo transaccional no apareció: la review del push se pierde (§3.6.1.6)")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// El job A quedó completed y su corrida stale (Run la marcó al ver la
+	// identidad nueva). Se busca por identidad, no "latest": el job B ya
+	// puede estar corriendo y crear su propia fila.
+	var estado string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT state FROM river_job WHERE kind = $1 AND args->>'head_sha' = $2`,
+		KindReview, pr.HeadSha).Scan(&estado); err != nil {
+		t.Fatalf("leyendo el job original: %v", err)
+	}
+	if estado != "completed" {
+		t.Errorf("el job original debe quedar completed: got %q", estado)
+	}
+	var status string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT status FROM reviews WHERE pull_request_id = $1 AND head_sha = $2`,
+		pr.ID, pr.HeadSha).Scan(&status); err != nil {
+		t.Fatalf("leyendo la corrida original: %v", err)
+	}
+	if status != review.StatusStale {
+		t.Errorf("la corrida de la identidad vieja debe quedar stale: got %q", status)
+	}
+}
+
+// wPushDuranteCorrida emula el webhook de push a mitad de la corrida: el
+// FetchPR actualiza la identidad del PR en la BD antes de que Run la lea.
+type wPushDuranteCorrida struct {
+	*wProvider
+	st   *store.Store
+	prID int64
+	head string
+	base string
+}
+
+func (p *wPushDuranteCorrida) FetchPR(ctx context.Context, r *store.Repository, pr *store.PullRequest, workdir string) error {
+	if err := p.wProvider.FetchPR(ctx, r, pr, workdir); err != nil {
+		return err
+	}
+	_, err := p.st.Pool.Exec(ctx,
+		"UPDATE pull_requests SET head_sha = $1, base_sha = $2 WHERE id = $3",
+		p.head, p.base, p.prID)
+	return err
 }
 
 // ---------------------------------------------------------------------------
