@@ -25,11 +25,17 @@ var (
 	promptReviewer   = prompts.Reviewer()
 	promptSummarizer = prompts.Summarizer()
 	promptTestgen    = prompts.Testgen()
+	promptVerifier   = prompts.Verifier()
 )
 
 // roleReview es el rol del gateway para Reviewer y Summarizer (mapa:
 // Reviewer/Summarizer → review).
 const roleReview = "review"
+
+// roleCheap es el rol del gateway para el Verifier (mapa: Verifier → cheap,
+// §9.6): cross-check mecánico con modelo económico. Sin proveedor del rol
+// el verifier no corre — degrada, jamás bloquea (§9.6).
+const roleCheap = "cheap"
 
 // languagePlaceholder es el hueco de idioma de los system prompts (reviewer,
 // summarizer y chat): fillLanguage lo llena con el idioma efectivo de la
@@ -79,9 +85,10 @@ func fillNits(prompt, profile string) string {
 // Marcadores del prompt de usuario: enrutan la respuesta del gateway (los
 // stubs de test los usan para saber a qué agente responden).
 const (
-	userFilePrefix    = "Archivo: "
-	summarizerMarker  = "Resumí el siguiente pull request."
-	testgenUserMarker = "Hallazgo de la revisión:"
+	userFilePrefix     = "Archivo: "
+	summarizerMarker   = "Resumí el siguiente pull request."
+	testgenUserMarker  = "Hallazgo de la revisión:"
+	verifierUserMarker = "Verificá los siguientes hallazgos."
 )
 
 // SummaryResult es la salida del Summarizer (contrato §9.8).
@@ -222,6 +229,142 @@ func testgenUser(f Finding, hunks, framework string) string {
 	}
 	fmt.Fprintf(&b, "\n\nFramework de pruebas: %s.\n\n", framework)
 	b.WriteString("Hunks del diff de " + f.File + ":\n\n```diff\n" + hunks + "```")
+	return b.String()
+}
+
+// rawVerdict es la salida cruda del Verifier para UN hallazgo (contrato
+// §9.8): un elemento por hallazgo de entrada, mismo index.
+type rawVerdict struct {
+	Index    int    `json:"index"`
+	Verified bool   `json:"verified"`
+	Reason   string `json:"reason"`
+}
+
+// runVerifier verifica los hallazgos LLM del conjunto publicado (§3.3/§6 F3,
+// rol cheap): una llamada por archivo con hallazgos a publicar, los
+// hallazgos SAST del mismo archivo como referencia y sus hunks como
+// evidencia. Devuelve el veredicto por huella — solo de los archivos
+// verificados: los descartados (§9.8) quedan sin veredicto — y la lista de
+// descartes para el registro. Error solo si el contexto se cancela.
+func runVerifier(ctx context.Context, gw Gateway, cfg Config, fileHunks map[string]string, sastByFile map[string][]Finding, findings []Finding) (map[string]bool, []string, error) {
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(cfg.Concurrency)
+
+	byFile := map[string][]Finding{}
+	for _, f := range findings {
+		byFile[f.File] = append(byFile[f.File], f)
+	}
+
+	var (
+		mu        sync.Mutex
+		verdicts  = map[string]bool{}
+		discarded []string
+	)
+	for file, fs := range byFile {
+		g.Go(func() error {
+			v, err := verifyFile(ctx, gw, cfg.AgentRetries, file, fileHunks[file], sastByFile[file], fs)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				discarded = append(discarded, fmt.Sprintf("%s (%v)", file, err))
+				return nil // el descarte no aborta la corrida (§9.8)
+			}
+			for i, f := range fs {
+				if verified, ok := v[i]; ok {
+					verdicts[Fingerprint(f.File, f.Category, f.Line)] = verified
+				}
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, nil, fmt.Errorf("esperando la verificación del verifier: %w", err)
+	}
+	sort.Strings(discarded)
+	return verdicts, discarded, nil
+}
+
+// verifyFile verifica UN archivo: llamada al rol cheap, parseo estricto y
+// reintentos por salida malformada (§9.8). El fallo del gateway (failover
+// agotado) no se reintenta acá — el gateway ya agotó los suyos (§9.7).
+func verifyFile(ctx context.Context, gw Gateway, retries int, file, hunks string, sast, fs []Finding) (map[int]bool, error) {
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		content, err := gw.Complete(ctx, roleCheap, promptVerifier, verifierUser(file, hunks, fs, sast))
+		if err != nil {
+			return nil, fmt.Errorf("failover agotado: %w", err)
+		}
+		v, perr := parseVerdicts(content, len(fs))
+		if perr == nil {
+			return v, nil
+		}
+		lastErr = perr
+		slog.Warn("review: salida malformada del verifier",
+			"archivo", file, "intento", attempt+1, "error", perr)
+	}
+	return nil, fmt.Errorf("salida malformada tras %d reintentos: %w", retries, lastErr)
+}
+
+// parseVerdicts valida la salida JSON del Verifier contra los n hallazgos de
+// entrada. Estricta como parseFindings (§9.8): exactamente un veredicto por
+// hallazgo, índices en rango y sin duplicados — cualquier desvío invalida
+// toda la salida → reintento.
+func parseVerdicts(content string, n int) (map[int]bool, error) {
+	var raw []rawVerdict
+	if err := json.Unmarshal([]byte(stripFences(content)), &raw); err != nil {
+		return nil, fmt.Errorf("JSON inválido: %w", err)
+	}
+	if len(raw) != n {
+		return nil, fmt.Errorf("esperaba %d veredictos, llegaron %d", n, len(raw))
+	}
+	out := make(map[int]bool, n)
+	for _, r := range raw {
+		switch {
+		case r.Index < 0 || r.Index >= n:
+			return nil, fmt.Errorf("veredicto %d: índice %d fuera de rango", r.Index, r.Index)
+		case strings.TrimSpace(r.Reason) == "":
+			return nil, fmt.Errorf("veredicto %d: reason vacío", r.Index)
+		}
+		if _, dup := out[r.Index]; dup {
+			return nil, fmt.Errorf("índice duplicado %d", r.Index)
+		}
+		out[r.Index] = r.Verified
+	}
+	return out, nil
+}
+
+// verifyFindingsJSON serializa el lote de un archivo para el prompt del
+// Verifier: índice explícito por hallazgo — la respuesta se mapea por él.
+func verifyFindingsJSON(fs []Finding) string {
+	var b strings.Builder
+	b.WriteString("[")
+	for i, f := range fs {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "\n  {\"index\": %d, \"severity\": %q, \"category\": %q, \"line\": %d, \"body\": %q}",
+			i, f.Severity, f.Category, f.Line, f.Body)
+	}
+	b.WriteString("\n]")
+	return b.String()
+}
+
+// verifierUser arma el prompt de usuario del Verifier: los hallazgos a
+// verificar (indexados), los SAST del mismo archivo como referencia — su
+// ausencia NO es evidencia de falso positivo (§9.4) — y los hunks del diff
+// como evidencia.
+func verifierUser(file, hunks string, fs, sast []Finding) string {
+	var b strings.Builder
+	b.WriteString(verifierUserMarker + "\n\n")
+	fmt.Fprintf(&b, "Archivo: %s\n\n", file)
+	b.WriteString("Hallazgos a verificar:\n```json\n" + verifyFindingsJSON(fs) + "\n```\n\n")
+	b.WriteString("Hallazgos SAST del mismo archivo (referencia; su ausencia NO es evidencia de falso positivo):\n```json\n")
+	if len(sast) == 0 {
+		b.WriteString("[]")
+	} else {
+		b.WriteString(verifyFindingsJSON(sast))
+	}
+	fmt.Fprintf(&b, "\n```\n\nHunks del diff de %s:\n\n```diff\n%s```", file, hunks)
 	return b.String()
 }
 

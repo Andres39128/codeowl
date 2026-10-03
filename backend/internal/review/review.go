@@ -69,6 +69,7 @@ type Store interface {
 	UpdateReviewStatus(ctx context.Context, arg store.UpdateReviewStatusParams) (store.Review, error)
 	UpdateReviewSummary(ctx context.Context, arg store.UpdateReviewSummaryParams) (store.Review, error)
 	CreateFinding(ctx context.Context, arg store.CreateFindingParams) (store.Finding, error)
+	ListEnabledLlmProvidersByRole(ctx context.Context, role string) ([]store.LlmProvider, error)
 	GetCommentsSentByPRAndType(ctx context.Context, arg store.GetCommentsSentByPRAndTypeParams) ([]store.CommentsSent, error)
 	CreateCommentSent(ctx context.Context, arg store.CreateCommentSentParams) (store.CommentsSent, error)
 	UpdateCommentSentCommentID(ctx context.Context, arg store.UpdateCommentSentCommentIDParams) (store.CommentsSent, error)
@@ -221,6 +222,11 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 
 	var coverage []string // declaraciones de cobertura para el resumen (§9.6)
 
+	// verifierNote es la declaración del Verifier para la re-edición de fase
+	// 2 (§9.6): su ausencia de cobertura no marca la corrida partial — es
+	// best-effort de calidad, no de cobertura (§9.6/§6 F3).
+	var verifierNote string
+
 	// (d) SAST sobre el clon (§9.4). Un fallo del sandbox es un gap de
 	// cobertura declarado — jamás ausencia silenciosa de hallazgos.
 	var sast []Finding
@@ -323,9 +329,69 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		}
 	}
 
-	// Persistencia de los hallazgos de esta corrida (verified null hasta el
-	// Verifier de F3, §3.3).
+	// Verifier (§3.3/§6 F3, rol cheap): cross-check mecánico de los
+	// hallazgos LLM del conjunto publicado contra el código mostrado. Solo
+	// se verifican los que se publican — lo filtrado por el perfil queda
+	// verified null (estado natural de auditoría). Best-effort: sin
+	// proveedor cheap no corre y lo declara la re-edición de fase 2 (§9.6);
+	// un lote malformado se descarta (§9.8) y sus hallazgos se publican sin
+	// verificación. Los falsos positivos CONFIRMADOS no se publican —
+	// persisten con verified=false, auditables en el dashboard (§6 F3).
+	verdicts := map[string]bool{} // huella → veredicto (solo archivos verificados)
+	var llmToVerify []Finding
+	for _, f := range toPublish {
+		if f.Source == SourceLLM {
+			llmToVerify = append(llmToVerify, f)
+		}
+	}
+	if len(llmToVerify) > 0 {
+		cheap, err := st.ListEnabledLlmProvidersByRole(ctx, roleCheap)
+		if err != nil {
+			// Listar los proveedores no es infraestructura de la corrida:
+			// fallar acá quemaría la review — el verifier degrada (§9.6).
+			slog.Warn("review: listando proveedores del rol cheap, el verifier no corre", "error", err)
+			cheap = nil
+		}
+		switch {
+		case len(cheap) == 0:
+			verifierNote = "⚠️ Verificación de hallazgos omitida (sin proveedor del rol cheap)."
+			slog.Info("review: verifier omitido, sin proveedor del rol cheap (§9.6)", "review", rev.ID)
+		default:
+			sastByFile := map[string][]Finding{}
+			for _, f := range sast {
+				sastByFile[f.File] = append(sastByFile[f.File], f)
+			}
+			var discarded []string
+			verdicts, discarded, err = runVerifier(ctx, gw, cfg, fileHunks, sastByFile, llmToVerify)
+			if err != nil {
+				return nil, err // cancelación del contexto: el job reintenta
+			}
+			for _, d := range discarded {
+				slog.Warn("review: verificación descartada tras los reintentos (§9.8)", "detalle", d)
+			}
+			if len(verdicts) == 0 {
+				verifierNote = "⚠️ Verificación de hallazgos omitida: el verifier no pudo verificar ningún archivo."
+			}
+			// Falsos positivos confirmados: fuera del conjunto publicado (§6 F3).
+			kept := toPublish[:0]
+			for _, f := range toPublish {
+				if v, ok := verdicts[Fingerprint(f.File, f.Category, f.Line)]; ok && !v {
+					continue
+				}
+				kept = append(kept, f)
+			}
+			toPublish = kept
+		}
+	}
+
+	// Persistencia de los hallazgos de esta corrida (§3.3): verified con el
+	// veredicto del Verifier para lo verificado; null para SAST, lo filtrado
+	// por el perfil y lo que el verifier no pudo verificar.
 	for _, f := range publishable {
+		verified := pgtype.Bool{} // null (§3.3)
+		if v, ok := verdicts[Fingerprint(f.File, f.Category, f.Line)]; ok {
+			verified = pgtype.Bool{Bool: v, Valid: true}
+		}
 		if _, err := st.CreateFinding(ctx, store.CreateFindingParams{
 			ReviewID:   rev.ID,
 			File:       f.File,
@@ -335,6 +401,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 			Body:       f.Body,
 			Suggestion: pgText(f.Suggestion),
 			Source:     f.Source,
+			Verified:   verified,
 		}); err != nil {
 			return nil, fmt.Errorf("persistiendo el finding de %s: %w", f.File, err)
 		}
@@ -393,7 +460,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 			// solo lo que falta: lo ya publicado deduplica por huella.
 			return failRun(ctx, st, rev.ID, res, fmt.Errorf("publicando el comentario inline de %s: %w", f.File, err),
 				func() {
-					body := finalSummary(sum, counts, append(outOfDiff, f), coverage, err.Error())
+					body := finalSummary(sum, counts, append(outOfDiff, f), coverage, err.Error(), verifierNote)
 					if sumErr := pub.publishSummary(ctx, body); sumErr != nil {
 						slog.Warn("review: re-edición del resumen en fallo también falló", "error", sumErr)
 					}
@@ -409,7 +476,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	if len(coverage) > 0 {
 		status = StatusPartial
 	}
-	body := finalSummary(sum, counts, outOfDiff, coverage, "")
+	body := finalSummary(sum, counts, outOfDiff, coverage, "", verifierNote)
 	if err := pub.publishSummary(ctx, body); err != nil {
 		// El resumen de fase 1 ya está publicado: la re-edición fallida no
 		// invalida la corrida — queda el provisional sin el recuento final.

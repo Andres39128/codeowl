@@ -76,16 +76,17 @@ const summarizerJSON = `{"summary":"Agrega un import y cambia un saludo.","walkt
 // Stubs
 // ---------------------------------------------------------------------------
 
-// stubStore es la store en memoria: las 9 operaciones que consume Run.
+// stubStore es la store en memoria: las operaciones que consume Run.
 type stubStore struct {
-	mu       sync.Mutex
-	repo     store.Repository
-	pr       store.PullRequest
-	reviews  map[int64]*store.Review
-	nextRev  int64
-	findings []store.CreateFindingParams
-	comments map[string][]store.CommentsSent // indexadas por type
-	nextCmt  int64
+	mu             sync.Mutex
+	repo           store.Repository
+	pr             store.PullRequest
+	reviews        map[int64]*store.Review
+	nextRev        int64
+	findings       []store.CreateFindingParams
+	comments       map[string][]store.CommentsSent // indexadas por type
+	nextCmt        int64
+	cheapProviders []store.LlmProvider // cola del rol cheap (verifier)
 }
 
 func newStubStore() *stubStore {
@@ -166,6 +167,13 @@ func (s *stubStore) CreateFinding(_ context.Context, arg store.CreateFindingPara
 	return store.Finding{ID: int64(len(s.findings))}, nil
 }
 
+func (s *stubStore) ListEnabledLlmProvidersByRole(_ context.Context, role string) ([]store.LlmProvider, error) {
+	if role != roleCheap {
+		return nil, nil
+	}
+	return s.cheapProviders, nil
+}
+
 func (s *stubStore) GetCommentsSentByPRAndType(_ context.Context, arg store.GetCommentsSentByPRAndTypeParams) ([]store.CommentsSent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -220,15 +228,17 @@ func (s *stubStore) UpdateCommentSentCommentID(_ context.Context, arg store.Upda
 // summarizer, chat y testgen por marcador. Cuenta las llamadas y graba los
 // system prompts recibidos (para afirmar qué le llegó a cada agente).
 type stubGateway struct {
-	mu          sync.Mutex
-	calls       int
-	systemSeen  []string
-	reviewer    map[string][]string
-	summarizer  []string
-	chat        []string
-	chatSeen    []string // prompts de usuario de chat recibidos
-	testgen     []string // respuestas encoladas para /tests
-	testgenSeen []string // prompts de usuario de testgen recibidos
+	mu           sync.Mutex
+	calls        int
+	systemSeen   []string
+	reviewer     map[string][]string
+	summarizer   []string
+	chat         []string
+	chatSeen     []string // prompts de usuario de chat recibidos
+	testgen      []string // respuestas encoladas para /tests
+	testgenSeen  []string // prompts de usuario de testgen recibidos
+	verifier     []string // respuestas encoladas para el verifier (rol cheap)
+	verifierSeen []string // prompts de usuario del verifier recibidos
 }
 
 func newStubGateway() *stubGateway {
@@ -264,6 +274,15 @@ func (g *stubGateway) Complete(_ context.Context, _, system, user string) (strin
 		}
 		r := g.testgen[0]
 		g.testgen = g.testgen[1:]
+		return r, nil
+	}
+	if strings.HasPrefix(user, verifierUserMarker) {
+		g.verifierSeen = append(g.verifierSeen, user)
+		if len(g.verifier) == 0 {
+			return "", fmt.Errorf("sin respuesta de verifier encolada (llamada %d)", g.calls)
+		}
+		r := g.verifier[0]
+		g.verifier = g.verifier[1:]
 		return r, nil
 	}
 	first := strings.SplitN(user, "\n", 2)[0]

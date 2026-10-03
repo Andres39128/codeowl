@@ -187,23 +187,24 @@ const summaryHeader = "## 🦉 Revisión automática"
 // provisionalSummary arma el cuerpo de fase 1 (§3.6.2): provisional por
 // diseño — la re-edición final suma recuento y cobertura.
 func provisionalSummary(s *SummaryResult) string {
-	return summaryParts(s, nil, nil, "")
+	return summaryParts(s, nil, nil, "", "")
 }
 
 // finalSummary arma el cuerpo de la re-edición final (§3.6.2): recuento por
-// severidad, hallazgos fuera del diff, declaración de cobertura (§9.6) y,
-// en fallo, el estado final (§9.7). La cobertura siempre se declara —
-// completa o parcial, nunca se calla.
-func finalSummary(s *SummaryResult, counts map[string]int, outOfDiff []Finding, coverage []string, failure string) string {
+// severidad, hallazgos fuera del diff, declaración de cobertura (§9.6),
+// declaración del Verifier si no corrió (§9.6/§6 F3) y, en fallo, el estado
+// final (§9.7). La cobertura siempre se declara — completa o parcial, nunca
+// se calla.
+func finalSummary(s *SummaryResult, counts map[string]int, outOfDiff []Finding, coverage []string, failure, verifierNote string) string {
 	if coverage == nil {
 		coverage = []string{}
 	}
-	return summaryParts(s, outOfDiff, coverage, failure) + countsSection(counts)
+	return summaryParts(s, outOfDiff, coverage, failure, verifierNote) + countsSection(counts)
 }
 
 // summaryParts arma el cuerpo común: encabezado, resumen, walkthrough y
 // mermaid validado; más las secciones de detalle que correspondan.
-func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, failure string) string {
+func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, failure, verifierNote string) string {
 	var b strings.Builder
 	b.WriteString(summaryHeader + "\n\n")
 	b.WriteString(s.Summary)
@@ -223,6 +224,12 @@ func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, fail
 	}
 	if failure != "" {
 		fmt.Fprintf(&b, "\n\n> ⚠️ **La revisión falló**: %s. Se reintenta automáticamente (§9.7).", failure)
+	}
+	if verifierNote != "" {
+		// §9.6: sin proveedor cheap (o verifier agotado) la re-edición de
+		// fase 2 lo declara — jamás recorte silencioso. No es cobertura
+		// parcial: es best-effort de calidad (§6 F3), no marca la corrida.
+		fmt.Fprintf(&b, "\n\n> %s", verifierNote)
 	}
 	if coverage != nil {
 		if len(coverage) > 0 {

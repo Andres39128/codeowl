@@ -13,7 +13,7 @@ import (
 
 // FS contiene los system prompts versionados.
 //
-//go:embed reviewer_system.md summarizer_system.md chat_system.md testgen_system.md
+//go:embed reviewer_system.md summarizer_system.md chat_system.md testgen_system.md verifier_system.md
 var fs embed.FS
 
 // Reviewer devuelve el system prompt del agente Reviewer (revisión por
@@ -34,8 +34,13 @@ func Chat() string { return mustRead("chat_system.md") }
 // {{FRAMEWORK}} lo llena el caller con el framework detectado por extensión.
 func Testgen() string { return mustRead("testgen_system.md") }
 
+// Verifier devuelve el system prompt del agente Verifier (rol cheap — F3):
+// cross-check mecánico de hallazgos LLM contra el código mostrado; salida
+// JSON con veredictos indexados.
+func Verifier() string { return mustRead("verifier_system.md") }
+
 // promptFiles son los archivos que componen la versión del prompt.
-var promptFiles = []string{"reviewer_system.md", "summarizer_system.md", "chat_system.md", "testgen_system.md"}
+var promptFiles = []string{"reviewer_system.md", "summarizer_system.md", "chat_system.md", "testgen_system.md", "verifier_system.md"}
 
 // Version es el hash del contenido de todos los prompts: es la "versión del
 // prompt" de la clave de cache (§9.6) — cambiar un prompt invalida la cache
