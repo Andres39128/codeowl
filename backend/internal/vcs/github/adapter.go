@@ -106,7 +106,9 @@ func (a *Adapter) repoToken(ctx context.Context, repo *store.Repository) (string
 
 // newAPIRequest arma la request REST a la API de GitHub: helper compartido
 // por el adapter y el token manager (misma autenticación y versionado).
-func newAPIRequest(ctx context.Context, method, path, token, accept string, body any) (*http.Request, error) {
+// base es la URL raíz (a.baseURL / tm.baseURL) — se une al path relativo
+// acá: http.Client exige URL absoluta y los tests apuntan baseURL al stub.
+func newAPIRequest(ctx context.Context, method, base, path, token, accept string, body any) (*http.Request, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -115,7 +117,7 @@ func newAPIRequest(ctx context.Context, method, path, token, accept string, body
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, base+path, rd)
 	if err != nil {
 		return nil, fmt.Errorf("construyendo request %s %s: %w", method, path, err)
 	}

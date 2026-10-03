@@ -143,7 +143,7 @@ func (tm *tokenManager) Token(ctx context.Context, installationID int64) (string
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	req, err := newAPIRequest(ctx, http.MethodPost,
+	req, err := newAPIRequest(ctx, http.MethodPost, tm.baseURL,
 		fmt.Sprintf("/app/installations/%d/access_tokens", installationID), jwt, mediaTypeJSON, nil)
 	if err != nil {
 		return "", err
@@ -179,7 +179,7 @@ func (tm *tokenManager) InstallationID(ctx context.Context, repo *store.Reposito
 	var out struct {
 		ID int64 `json:"id"`
 	}
-	req, err := newAPIRequest(ctx, http.MethodGet,
+	req, err := newAPIRequest(ctx, http.MethodGet, tm.baseURL,
 		fmt.Sprintf("/repos/%s/%s/installation", repo.Owner, repo.Name), jwt, mediaTypeJSON, nil)
 	if err != nil {
 		return 0, err

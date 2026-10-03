@@ -3,10 +3,12 @@ package gitlab
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
@@ -26,9 +28,27 @@ type glAPIPR struct {
 
 // glAPICommit es un commit del MR en la API de commits.
 type glAPICommit struct {
-	ID         string `json:"id"`
-	Message    string `json:"message"`
-	AuthorName string `json:"author_name"`
+	ID           string `json:"id"`
+	Message      string `json:"message"`
+	AuthorName   string `json:"author_name"`
+	AuthoredDate string `json:"authored_date"` // ISO 8601 (§6 F5: AuthoredAt)
+}
+
+// glDiscussionThread es una discusión del listado de threads del MR (§6 F5):
+// cada nota inline (position presente) y no-system es un hilo evaluable por
+// el MetricsJob.
+type glDiscussionThread struct {
+	ID    string `json:"id"`
+	Notes []struct {
+		ID     int64  `json:"id"`
+		System bool   `json:"system"`
+		// Position presente ⇔ nota anclada al diff (inline). Solo importa
+		// la presencia: el shape ya está modelado en glPosition.
+		Position *glPosition `json:"position"`
+		// Resolved nil ⇔ el proyecto no tiene resolución de hilos habilitada
+		// (GitLab solo la reporta entonces): false honesto + log debug.
+		Resolved *bool `json:"resolved"`
+	} `json:"notes"`
 }
 
 // glAPIDiff es un archivo del MR en el endpoint de diffs: GitLab no tiene
@@ -125,15 +145,19 @@ func (a *Adapter) FetchDefaultBranch(ctx context.Context, repo *store.Repository
 	return nil
 }
 
-// FetchPRTimeline trae los commits del MR (mapa: FetchPRTimeline). Para F5 se
-// sumará el estado final de las discusiones — devuelve el insumo mínimo.
+// FetchPRTimeline trae los primeros vcs.MaxTimelineCommits commits del MR
+// con fecha de autoría y patch de cada uno, más el estado final de las
+// discusiones inline (mapa: FetchPRTimeline, §6 F5). Best-effort: patch
+// ausente por commit o discusiones fallidas no fallan la timeline (log +
+// campo vacío); solo el fallo del endpoint de commits es error. Fetches
+// secuenciales: respetan el client/timeout compartido del adapter.
 func (a *Adapter) FetchPRTimeline(ctx context.Context, repo *store.Repository, pr *store.PullRequest) (*vcs.PRTimeline, error) {
 	token, err := a.repoToken(repo)
 	if err != nil {
 		return nil, fmt.Errorf("token para la timeline del MR %d: %w", pr.Number, err)
 	}
 	timeline := &vcs.PRTimeline{}
-	for pageNum := 1; ; pageNum++ {
+	for pageNum := 1; len(timeline.Commits) < vcs.MaxTimelineCommits; pageNum++ {
 		path := fmt.Sprintf("%s/api/v4/projects/%d/merge_requests/%d/commits?per_page=%d&page=%d",
 			a.apiBase(repo), repo.ExternalID, pr.Number, page, pageNum)
 		var batch []glAPICommit
@@ -145,14 +169,112 @@ func (a *Adapter) FetchPRTimeline(ctx context.Context, repo *store.Repository, p
 			return nil, fmt.Errorf("commits del MR %d: status %d", pr.Number, status)
 		}
 		for _, c := range batch {
+			if len(timeline.Commits) == vcs.MaxTimelineCommits {
+				break
+			}
+			authoredAt, err := time.Parse(time.RFC3339, c.AuthoredDate)
+			if err != nil {
+				// Fecha ausente o no-ISO: cero honesto, el commit sigue.
+				authoredAt = time.Time{}
+			}
 			timeline.Commits = append(timeline.Commits, vcs.PRCommit{
-				SHA:     c.ID,
-				Message: c.Message,
-				Author:  c.AuthorName,
+				SHA:        c.ID,
+				Message:    c.Message,
+				Author:     c.AuthorName,
+				AuthoredAt: authoredAt,
 			})
 		}
 		if len(batch) < page {
-			return timeline, nil
+			break
+		}
+	}
+	for i := range timeline.Commits {
+		patch, err := a.fetchCommitPatch(ctx, repo, token, timeline.Commits[i].SHA)
+		if err != nil {
+			slog.DebugContext(ctx, "vcs gitlab: patch del commit omitido (best-effort)",
+				"mr", pr.Number, "sha", timeline.Commits[i].SHA, "err", err)
+			continue
+		}
+		timeline.Commits[i].Patch = patch
+	}
+	threads, err := a.fetchDiscussionThreads(ctx, repo, pr, token)
+	if err != nil {
+		slog.WarnContext(ctx, "vcs gitlab: discusiones del MR omitidas (best-effort)",
+			"mr", pr.Number, "err", err)
+	} else {
+		timeline.Threads = threads
+	}
+	return timeline, nil
+}
+
+// fetchCommitPatch arma el diff crudo de un commit: GitLab no tiene endpoint
+// de diff plano — GET /repository/commits/{sha}/diff devuelve los archivos
+// paginados (solo hunks) y se ensamblan con encabezados git, igual que
+// GetDiff. Truncado a vcs.MaxPatchBytes.
+func (a *Adapter) fetchCommitPatch(ctx context.Context, repo *store.Repository, token, sha string) (string, error) {
+	var files []glAPIDiff
+	path := fmt.Sprintf("%s/api/v4/projects/%d/repository/commits/%s/diff?per_page=%d",
+		a.apiBase(repo), repo.ExternalID, url.PathEscape(sha), page)
+	status, err := a.doJSON(ctx, http.MethodGet, path, token, nil, &files)
+	if err != nil {
+		return "", fmt.Errorf("diff del commit %s: %w", sha, err)
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("diff del commit %s: status %d", sha, status)
+	}
+	var sb strings.Builder
+	for _, f := range files {
+		fmt.Fprintf(&sb, "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n", f.OldPath, f.NewPath, f.OldPath, f.NewPath)
+		sb.WriteString(f.Diff)
+		if !strings.HasSuffix(f.Diff, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+	patch := sb.String()
+	if len(patch) > vcs.MaxPatchBytes {
+		patch = patch[:vcs.MaxPatchBytes]
+	}
+	return patch, nil
+}
+
+// fetchDiscussionThreads mapea las discusiones inline del MR a threads con
+// resolución (§6 F5): una discusión con al menos una nota inline (position
+// presente) y no-system es un PRThread — el CommentID es el id de la
+// DISCUSIÓN, exactamente lo que postDiscussion/PostInlineComment persisten
+// en comments_sent.comment_id. Resolución por nota: GitLab solo la reporta
+// con la feature habilitada en el proyecto — ausente ⇒ false honesto (log
+// debug, regla de input honesto de la guía).
+func (a *Adapter) fetchDiscussionThreads(ctx context.Context, repo *store.Repository, pr *store.PullRequest, token string) ([]vcs.PRThread, error) {
+	var threads []vcs.PRThread
+	for pageNum := 1; ; pageNum++ {
+		path := fmt.Sprintf("%s/api/v4/projects/%d/merge_requests/%d/discussions?per_page=%d&page=%d",
+			a.apiBase(repo), repo.ExternalID, pr.Number, page, pageNum)
+		var batch []glDiscussionThread
+		status, err := a.doJSON(ctx, http.MethodGet, path, token, nil, &batch)
+		if err != nil {
+			return nil, fmt.Errorf("discusiones del MR %d: %w", pr.Number, err)
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("discusiones del MR %d: status %d", pr.Number, status)
+		}
+		for _, d := range batch {
+			for _, n := range d.Notes {
+				if n.Position == nil || n.System {
+					continue // nota de conversación o del sistema: no es hilo inline
+				}
+				resolved := false
+				if n.Resolved == nil {
+					slog.DebugContext(ctx, "vcs gitlab: discusión sin flag de resolución (¿feature deshabilitada en el proyecto?)",
+						"mr", pr.Number, "discussion", d.ID)
+				} else {
+					resolved = *n.Resolved
+				}
+				threads = append(threads, vcs.PRThread{CommentID: d.ID, Resolved: resolved})
+				break // una discusión = un hilo: la primera nota inline la representa
+			}
+		}
+		if len(batch) < page {
+			return threads, nil
 		}
 	}
 }

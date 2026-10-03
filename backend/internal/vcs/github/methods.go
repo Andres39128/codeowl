@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
@@ -31,6 +33,7 @@ type ghAPICommit struct {
 		Message string `json:"message"`
 		Author  struct {
 			Name string `json:"name"`
+			Date string `json:"date"` // ISO 8601 (§6 F5: AuthoredAt)
 		} `json:"author"`
 	} `json:"commit"`
 }
@@ -100,15 +103,19 @@ func (a *Adapter) FetchDefaultBranch(ctx context.Context, repo *store.Repository
 	return nil
 }
 
-// FetchPRTimeline trae los commits del PR (mapa: FetchPRTimeline). Para F5
-// se sumará el estado final de los threads — F1 devuelve el insumo mínimo.
+// FetchPRTimeline trae los primeros vcs.MaxTimelineCommits commits del PR
+// con fecha de autoría y patch de cada uno, más el estado final de los
+// threads de review inline (mapa: FetchPRTimeline, §6 F5). Best-effort:
+// patch ausente por commit o threads fallidos no fallan la timeline (log +
+// campo vacío); solo el fallo del endpoint de commits es error. Fetches
+// secuenciales: respetan el client/timeout compartido del adapter.
 func (a *Adapter) FetchPRTimeline(ctx context.Context, repo *store.Repository, pr *store.PullRequest) (*vcs.PRTimeline, error) {
 	token, err := a.repoToken(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("token de instalación para la timeline del PR %d: %w", pr.Number, err)
 	}
 	timeline := &vcs.PRTimeline{}
-	for pageNum := 1; ; pageNum++ {
+	for pageNum := 1; len(timeline.Commits) < vcs.MaxTimelineCommits; pageNum++ {
 		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/commits?per_page=%d&page=%d",
 			repo.Owner, repo.Name, pr.Number, page, pageNum)
 		var batch []ghAPICommit
@@ -120,16 +127,138 @@ func (a *Adapter) FetchPRTimeline(ctx context.Context, repo *store.Repository, p
 			return nil, fmt.Errorf("commits del PR %d: status %d", pr.Number, status)
 		}
 		for _, c := range batch {
+			if len(timeline.Commits) == vcs.MaxTimelineCommits {
+				break
+			}
+			authoredAt, err := time.Parse(time.RFC3339, c.Commit.Author.Date)
+			if err != nil {
+				// Fecha ausente o no-ISO: cero honesto, el commit sigue.
+				authoredAt = time.Time{}
+			}
 			timeline.Commits = append(timeline.Commits, vcs.PRCommit{
-				SHA:     c.SHA,
-				Message: c.Commit.Message,
-				Author:  c.Commit.Author.Name,
+				SHA:        c.SHA,
+				Message:    c.Commit.Message,
+				Author:     c.Commit.Author.Name,
+				AuthoredAt: authoredAt,
 			})
 		}
 		if len(batch) < page {
-			return timeline, nil
+			break
 		}
 	}
+	for i := range timeline.Commits {
+		patch, err := a.fetchCommitPatch(ctx, repo, token, timeline.Commits[i].SHA)
+		if err != nil {
+			slog.DebugContext(ctx, "vcs github: patch del commit omitido (best-effort)",
+				"pr", pr.Number, "sha", timeline.Commits[i].SHA, "err", err)
+			continue
+		}
+		timeline.Commits[i].Patch = patch
+	}
+	threads, err := a.fetchReviewThreads(ctx, repo, pr, token)
+	if err != nil {
+		slog.WarnContext(ctx, "vcs github: threads de review omitidos (best-effort)",
+			"pr", pr.Number, "err", err)
+	} else {
+		timeline.Threads = threads
+	}
+	return timeline, nil
+}
+
+// fetchCommitPatch trae el diff crudo de un commit: GET /commits/{sha} con
+// media type de diff devuelve el texto plano del parche, truncado a
+// vcs.MaxPatchBytes.
+func (a *Adapter) fetchCommitPatch(ctx context.Context, repo *store.Repository, token, sha string) (string, error) {
+	req, err := newAPIRequest(ctx, http.MethodGet, a.baseURL,
+		fmt.Sprintf("/repos/%s/%s/commits/%s", repo.Owner, repo.Name, sha), token, mediaTypeDiff, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w", req.Method, req.URL.Path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", apiError(http.MethodGet, req.URL.Path, resp.StatusCode, resp.Body)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, vcs.MaxPatchBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("leyendo patch %s: %w", sha, err)
+	}
+	if len(b) > vcs.MaxPatchBytes {
+		b = b[:vcs.MaxPatchBytes]
+	}
+	return string(b), nil
+}
+
+// ghReviewThreadsQuery es la consulta GraphQL de los threads de review del
+// PR: la REST no expone resolución de hilos (§6 F5). El token de instalación
+// sirve para GraphQL sin cambios.
+const ghReviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!){` +
+	`repository(owner:$owner,name:$name){pullRequest(number:$number){` +
+	`reviewThreads(first:100){nodes{isResolved comments(first:50){nodes{databaseId}}}}}}}`
+
+// fetchReviewThreads trae el estado de resolución de los hilos inline vía
+// GraphQL (§6 F5): cada comentario del hilo (databaseId = el ID REST que
+// PostInlineComment persiste en comments_sent) hereda la resolución del
+// hilo — nuestro comentario vive en exactamente un hilo.
+// ponytail: tope duro 100 hilos × 50 comentarios — un PR revisado por el
+// bot nunca los supera; paginar reviewThreads si algún día crece.
+func (a *Adapter) fetchReviewThreads(ctx context.Context, repo *store.Repository, pr *store.PullRequest, token string) ([]vcs.PRThread, error) {
+	reqBody := struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}{
+		Query: ghReviewThreadsQuery,
+		Variables: map[string]any{
+			"owner":  repo.Owner,
+			"name":   repo.Name,
+			"number": pr.Number,
+		},
+	}
+	var out struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					ReviewThreads struct {
+						Nodes []struct {
+							IsResolved bool `json:"isResolved"`
+							Comments   struct {
+								Nodes []struct {
+									DatabaseID int64 `json:"databaseId"`
+								} `json:"nodes"`
+							} `json:"comments"`
+						} `json:"nodes"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	status, err := a.doJSON(ctx, http.MethodPost, "/graphql", token, mediaTypeJSON, reqBody, &out)
+	if err != nil {
+		return nil, fmt.Errorf("graphql de threads: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("graphql de threads: status %d", status)
+	}
+	if len(out.Errors) > 0 {
+		return nil, fmt.Errorf("graphql de threads: %d errores GraphQL, primero: %s",
+			len(out.Errors), out.Errors[0].Message)
+	}
+	var threads []vcs.PRThread
+	for _, th := range out.Data.Repository.PullRequest.ReviewThreads.Nodes {
+		for _, c := range th.Comments.Nodes {
+			threads = append(threads, vcs.PRThread{
+				CommentID: strconv.FormatInt(c.DatabaseID, 10),
+				Resolved:  th.IsResolved,
+			})
+		}
+	}
+	return threads, nil
 }
 
 // GetDiff produce el diff unificado base...head vía el endpoint compare de
@@ -141,7 +270,7 @@ func (a *Adapter) GetDiff(ctx context.Context, repo *store.Repository, pr *store
 	if err != nil {
 		return "", fmt.Errorf("token de instalación para el diff del PR %d: %w", pr.Number, err)
 	}
-	req, err := newAPIRequest(ctx, http.MethodGet,
+	req, err := newAPIRequest(ctx, http.MethodGet, a.baseURL,
 		fmt.Sprintf("/repos/%s/%s/compare/%s...%s", repo.Owner, repo.Name, pr.BaseSha, pr.HeadSha),
 		token, mediaTypeDiff, nil)
 	if err != nil {
@@ -326,7 +455,7 @@ func (a *Adapter) postIssueComment(ctx context.Context, repo *store.Repository, 
 
 // doJSON arma la request, la ejecuta y decodea la respuesta JSON en out.
 func (a *Adapter) doJSON(ctx context.Context, method, path, token, accept string, body, out any) (int, error) {
-	req, err := newAPIRequest(ctx, method, path, token, accept, body)
+	req, err := newAPIRequest(ctx, method, a.baseURL, path, token, accept, body)
 	if err != nil {
 		return 0, err
 	}
