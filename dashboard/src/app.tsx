@@ -1,7 +1,8 @@
 /** App F1: sesión → login o shell con routing hash. #/ aterriza según rol
  * (admin → proveedores, member → cola); settings es exclusivo del admin y un
- * member que navega a #/settings/* es redirigido a la cola (§3.4). La lista
- * de PRs es visible a member y admin; #/prs/<id> renderiza el detalle (F3). */
+ * member que navega a #/settings/* es redirigido a la cola (§3.4). El triage
+ * (F5) y la lista de PRs son visibles a member y admin; #/prs/<id> renderiza
+ * el detalle (F3). */
 
 import { useEffect } from "preact/hooks";
 import { Layout } from "./components/Layout";
@@ -12,6 +13,7 @@ import { Queue } from "./features/queue/Queue";
 import { Providers } from "./features/settings/Providers";
 import { Repos } from "./features/settings/Repos";
 import { Users } from "./features/settings/Users";
+import { Triage } from "./features/triage/Triage";
 import { prIdFromHash, resolveRoute } from "./lib/router";
 import { useHashRoute } from "./lib/useHashRoute";
 import { useSession } from "./lib/useSession";
@@ -20,6 +22,7 @@ import { useSession } from "./lib/useSession";
 // permite migrar a path routing cuando haga falta.
 const PAGES = {
 	queue: Queue,
+	triage: Triage,
 	prs: Prs,
 	providers: Providers,
 	repos: Repos,

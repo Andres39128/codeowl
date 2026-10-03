@@ -66,6 +66,17 @@ describe("resolveRoute", () => {
 		});
 	});
 
+	it("triage es visible a member y admin sin redirect (§6 F5)", () => {
+		expect(resolveRoute("#/triage", false)).toEqual({
+			route: "triage",
+			redirect: null,
+		});
+		expect(resolveRoute("#/triage", true)).toEqual({
+			route: "triage",
+			redirect: null,
+		});
+	});
+
 	it("detalle #/prs/<id> comparte la ruta prs; id inválido vuelve a la lista", () => {
 		expect(prIdFromHash("#/prs/7")).toBe(7);
 		expect(prIdFromHash("#/prs")).toBeNull();

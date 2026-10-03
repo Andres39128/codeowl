@@ -25,6 +25,7 @@ const detail: PrDetailView = {
 		head_sha: "abc1234abcdef",
 		base_ref: "main",
 		updated_at: "2026-10-01T12:00:00Z",
+		risk_score: null,
 		latest_review: null,
 	},
 	review: null,

@@ -83,6 +83,8 @@ export interface PrView {
 	head_sha: string;
 	base_ref: string;
 	updated_at: string;
+	/** Score 0-100 de la última corrida (F5): null si aún no corrió ninguna. */
+	risk_score: number | null;
 	latest_review: LatestReviewView | null;
 }
 
@@ -120,4 +122,21 @@ export interface PrDetailView {
 /** Cuerpo de GET /api/prs/{id}/diff (proxy al adapter vía GetDiff, F3). */
 export interface PrDiffView {
 	diff: string;
+}
+
+/** Cuerpo de GET /api/metrics (F5): agregados de outcome y costo LLM de los
+ * últimos N días. Las tasas viajan 0..1 o null cuando el denominador es 0 —
+ * null honesto, no 0% disfrazado de dato (decisión 8). */
+export interface MetricsView {
+	window_days: number;
+	merged_prs: number;
+	avg_cycle_time_hours: number | null;
+	findings_with_outcome: number;
+	accepted: number;
+	accepted_rate: number | null;
+	resolved_comments: number;
+	false_positives: number;
+	false_positive_rate: number | null;
+	reviews_with_cost: number;
+	avg_tokens_per_review: number | null;
 }

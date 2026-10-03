@@ -1,6 +1,7 @@
 /** Shell del dashboard: sidebar con navegación, marca, toggle de tema, usuario
  * y logout (reutiliza la identidad del shell F0). §3.4: la sección de
- * configuración solo se muestra al admin; cola y PRs son de todo usuario. */
+ * configuración solo se muestra al admin; cola, triage y PRs son de todo
+ * usuario. */
 
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
@@ -50,6 +51,14 @@ export function Layout({
 						class={linkClass(route === "queue")}
 					>
 						Cola de Jobs
+					</a>
+
+					<a
+						href="#/triage"
+						aria-current={ariaCurrent(route === "triage")}
+						class={linkClass(route === "triage")}
+					>
+						Triage
 					</a>
 
 					<a

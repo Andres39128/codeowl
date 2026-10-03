@@ -1,13 +1,20 @@
 /** Routing hash puro y testeable: resuelve la ruta efectiva según el hash y el
  * rol (§3.4 — todo settings es exclusivo del admin; el member aterriza en la
- * cola y consulta PRs). El detalle de PR (#/prs/<id>) comparte la ruta `prs`
- * con el id como parámetro; un id inválido vuelve a la lista. App corrige el
- * hash cuando `redirect` viene no null. */
+ * cola y consulta triage y PRs). El detalle de PR (#/prs/<id>) comparte la
+ * ruta `prs` con el id como parámetro; un id inválido vuelve a la lista. App
+ * corrige el hash cuando `redirect` viene no null. */
 
-export type Route = "queue" | "prs" | "providers" | "repos" | "users";
+export type Route =
+	| "queue"
+	| "triage"
+	| "prs"
+	| "providers"
+	| "repos"
+	| "users";
 
 const ROUTE_HASH: Record<Route, string> = {
 	queue: "#/queue",
+	triage: "#/triage",
 	prs: "#/prs",
 	providers: "#/settings/providers",
 	repos: "#/settings/repos",
@@ -16,6 +23,7 @@ const ROUTE_HASH: Record<Route, string> = {
 
 const HASH_ROUTE: Record<string, Route> = {
 	"#/queue": "queue",
+	"#/triage": "triage",
 	"#/prs": "prs",
 	"#/settings/providers": "providers",
 	"#/settings/repos": "repos",
@@ -45,7 +53,12 @@ export function resolveRoute(
 		// Detalle de PR: mismo route `prs`, el id viaja en el hash.
 		if (prIdFromHash(hash) !== null) return { route: "prs", redirect: null };
 		if (hash.startsWith("#/prs/")) return { route: "prs", redirect: "#/prs" };
-	} else if (isAdmin || route === "queue" || route === "prs") {
+	} else if (
+		isAdmin ||
+		route === "queue" ||
+		route === "triage" ||
+		route === "prs"
+	) {
 		return { route, redirect: null };
 	}
 	const fallback = defaultRoute(isAdmin);
