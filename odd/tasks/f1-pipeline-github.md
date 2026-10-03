@@ -51,7 +51,7 @@ Forecast >>400 líneas. `ask-on-risk` → evaluar al cierre (chained PRs o excep
 - [x] T8 — feat: Dashboard settings + queue (ruta: delegado) — commit 9ebd7af907b7; 49 tests, 74kB JS, admin/member routing, Modal/Banner reutilizables
   - features/settings: proveedores LLM (CRUD + prueba conexión), repos conectados (conectar/desconectar), usuarios (invitar/reset/desactivar); features/queue: panel de estado
   - Verificación: pnpm build + test + lint
-- [ ] T9 — test: integration test webhook simulado end-to-end (ruta: delegado)
+- [x] T9 — test: integration test webhook simulado end-to-end (ruta: delegado) — commit 0cf2fb5eeb2f; PASS con BD; webhook→filter→upsert→enqueue→pipeline→findings→publication verificado; 3 webhooks (opened/synchronize/closed)
   - Webhook firmado → handler → job encolado → review ejecutada (con stub LLM) → publicación verificada
   - Verificación: go test integration tag
 
