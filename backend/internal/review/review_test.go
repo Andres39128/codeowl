@@ -794,18 +794,6 @@ func TestIsDuplicateDriftBoundaries(t *testing.T) {
 	}
 }
 
-func TestMermaidValidation(t *testing.T) {
-	if !validMermaid("sequenceDiagram\n  A->>B: hola") {
-		t.Error("sequenceDiagram debería validar")
-	}
-	if !validMermaid("graph TD\n A-->B") {
-		t.Error("graph debería validar")
-	}
-	if validMermaid("") || validMermaid("hola mundo") {
-		t.Error("texto sin encabezado de diagrama no debería validar")
-	}
-}
-
 // Config efectiva en la corrida (§9.5/§6 F3): los tests de acá abajo corren
 // contra un repo git real (el review.yaml se lee del merge-base) usando el
 // helper gitRepo de repoconfig_test.go.

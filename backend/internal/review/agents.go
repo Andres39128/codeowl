@@ -190,9 +190,15 @@ func runSummarizer(ctx context.Context, gw Gateway, cfg Config, language, stats 
 		}
 		s, perr := parseSummary(content)
 		if perr == nil {
-			if s.Mermaid != "" && !validMermaid(s.Mermaid) {
-				slog.Warn("review: mermaid del summarizer no parsea, se omite (§9.8)")
-				s.Mermaid = ""
+			if s.Mermaid != "" {
+				clean, merr := cleanMermaid(s.Mermaid)
+				if merr != nil {
+					slog.Warn("review: mermaid del summarizer no parsea, se omite (§9.8)",
+						"motivo", merr.Error())
+					s.Mermaid = ""
+				} else {
+					s.Mermaid = clean // sin cerco de transporte: publication lo reenvuelve (§9.5)
+				}
 			}
 			return s, nil
 		}
@@ -423,32 +429,6 @@ func stripFences(s string) string {
 	s = strings.TrimPrefix(s, "```")
 	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
-}
-
-// mermaidKinds son los encabezados de diagrama que Mermaid reconoce.
-var mermaidKinds = []string{
-	"sequenceDiagram", "graph", "flowchart", "stateDiagram", "classDiagram",
-	"erDiagram", "gantt", "pie", "mindmap", "timeline",
-}
-
-// validMermaid es un chequeo estructural mínimo: primera línea no vacía con
-// encabezado de diagrama conocido.
-// ponytail: parser Mermaid completo si F3 lo exige — el render final lo hace
-// el VCS en el PR, este guard solo evita publicar basura evidente.
-func validMermaid(s string) bool {
-	for _, l := range strings.Split(s, "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" {
-			continue
-		}
-		for _, k := range mermaidKinds {
-			if strings.HasPrefix(l, k) {
-				return true
-			}
-		}
-		return false
-	}
-	return false
 }
 
 // reviewerUser arma el prompt de usuario del Reviewer: archivo + sus hunks
