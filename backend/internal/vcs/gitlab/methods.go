@@ -281,11 +281,15 @@ func (a *Adapter) PostInlineComment(ctx context.Context, repo *store.Repository,
 	return a.postDiscussion(ctx, repo, pr, body, pos)
 }
 
-// PostSuggestion publica la sugerencia como bloque ```suggestion``` —
-// aplicable con un clic desde GitLab (mapa: PostSuggestion).
+// PostSuggestion publica el comentario con cambios sugeridos (mapa:
+// PostSuggestion). El body ya trae el bloque ```suggestion``` con SOLO el
+// código corregido — la cerca oficial de GitLab para "Suggested changes"
+// (docs: ```suggestion:-x+y```, la variante sin modificadores reemplaza la
+// línea anclada): en una discusión posicionada en el diff, GitLab la
+// renderiza con "Apply suggestion". Versiones sin soporte muestran el bloque
+// como código plano: el comentario sigue visible, solo pierde el botón.
 func (a *Adapter) PostSuggestion(ctx context.Context, repo *store.Repository, pr *store.PullRequest, pos vcs.CommentPosition, body string) (string, error) {
-	wrapped := "```suggestion\n" + body + "\n```"
-	return a.postDiscussion(ctx, repo, pr, wrapped, pos)
+	return a.postDiscussion(ctx, repo, pr, body, pos)
 }
 
 // PostSummary publica el resumen único del MR, editado in place en cada

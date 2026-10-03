@@ -88,7 +88,10 @@ func main() {
 		},
 		&jobs.ChatJobWorker{
 			Store: st, Gateway: gateway, Provider: provider, Queue: q,
-			Config: review.ChatConfig{DiffMaxLines: cfg.Stage2.ChatDiffMaxLines},
+			Config: review.ChatConfig{
+				DiffMaxLines:    cfg.Stage2.ChatDiffMaxLines,
+				TestMaxSnippets: cfg.Stage2.ChatTestMaxSnippets,
+			},
 		},
 		&jobs.CleanupJobWorker{
 			Store: st, RetentionDays: cfg.Stage2.CleanupRetentionDays,

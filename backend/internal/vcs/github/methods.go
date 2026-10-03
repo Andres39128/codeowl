@@ -236,11 +236,12 @@ func (a *Adapter) PostInlineComment(ctx context.Context, repo *store.Repository,
 	return a.postPRComment(ctx, repo, pr, body, pos)
 }
 
-// PostSuggestion publica la sugerencia como bloque ```suggestion``` —
-// aplicable con un clic desde GitHub (mapa: PostSuggestion).
+// PostSuggestion publica el comentario con la sugerencia aplicable con un
+// clic (mapa: PostSuggestion). El body ya trae el bloque ```suggestion``` con
+// SOLO el código corregido: anclado a la línea del diff, GitHub lo renderiza
+// con el botón "Apply suggestion".
 func (a *Adapter) PostSuggestion(ctx context.Context, repo *store.Repository, pr *store.PullRequest, pos vcs.CommentPosition, body string) (string, error) {
-	wrapped := "```suggestion\n" + body + "\n```"
-	return a.postPRComment(ctx, repo, pr, wrapped, pos)
+	return a.postPRComment(ctx, repo, pr, body, pos)
 }
 
 // PostSummary publica el resumen único del PR, editado in place en cada

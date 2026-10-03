@@ -8,10 +8,12 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
@@ -45,6 +47,14 @@ const (
 // (§9.6: presupuesto propio del chat — un diff de 10MB no viaja al LLM).
 const defaultChatDiffMaxLines = 5000
 
+// defaultTestMaxSnippets es el tope de pruebas que genera /tests (§9.6:
+// presupuesto propio — un PR de 50 hallazgos no genera 50 pruebas).
+const defaultTestMaxSnippets = 3
+
+// testsSinHallazgos es la respuesta de /tests sin revisión previa: sin
+// hallazgos no hay contra qué generar pruebas.
+const testsSinHallazgos = "No hay hallazgos de una revisión previa en este pull request: corré /review y volvé a pedirme /tests."
+
 // closedRefusal es la negativa de /review sobre un PR cerrado (§3.6: una
 // corrida sobre un PR cerrado terminaría stale quemando LLM — se responde
 // sin encolar).
@@ -72,13 +82,14 @@ type ChatResult struct {
 
 // ChatConfig son los topes propios del chat (§9.6: presupuesto por comando).
 type ChatConfig struct {
-	DiffMaxLines int // tope de líneas de diff que entran al prompt
+	DiffMaxLines    int // tope de líneas de diff que entran al prompt
+	TestMaxSnippets int // tope de pruebas generadas por /tests (§9.6)
 }
 
 // DefaultChatConfig devuelve la config por defecto (espejo de
-// config.DefaultChatDiffMaxLines — §4.2).
+// config.DefaultChatDiffMaxLines y DefaultChatTestMaxSnippets — §4.2).
 func DefaultChatConfig() ChatConfig {
-	return ChatConfig{DiffMaxLines: defaultChatDiffMaxLines}
+	return ChatConfig{DiffMaxLines: defaultChatDiffMaxLines, TestMaxSnippets: defaultTestMaxSnippets}
 }
 
 // normalized clampea los valores fuera de rango a los defaults (mismo
@@ -86,6 +97,9 @@ func DefaultChatConfig() ChatConfig {
 func (c ChatConfig) normalized() ChatConfig {
 	if c.DiffMaxLines < 1 {
 		c.DiffMaxLines = defaultChatDiffMaxLines
+	}
+	if c.TestMaxSnippets < 1 {
+		c.TestMaxSnippets = defaultTestMaxSnippets
 	}
 	return c
 }
@@ -145,6 +159,16 @@ func HandleChat(ctx context.Context, cfg ChatConfig, st Store, gw Gateway, provi
 	}
 	diff = truncateLines(diff, cfg.DiffMaxLines)
 
+	// /tests genera una prueba por hallazgo de la última revisión (F4):
+	// ilustrativas, en el hilo — jamás inline aplicable.
+	if cmd == cmdTests {
+		resp, err := handleTests(ctx, cfg, st, gw, provider, input, &repo, &pr, diff)
+		if err != nil {
+			return nil, err
+		}
+		return &ChatResult{Response: resp}, nil
+	}
+
 	language := input.Language
 	if language == "" {
 		language = defaultChatLanguage
@@ -178,29 +202,81 @@ func parseCommand(body string) (cmd, question string) {
 	return "", strings.Join(fields[i:], " ")
 }
 
+// handleTests ejecuta /tests (F4): una prueba unitaria por hallazgo de la
+// última revisión, hasta el tope cfg.TestMaxSnippets (§9.6). Los hallazgos de
+// archivos sin framework conocido se saltan; si ninguno genera prueba, se
+// responde igual — jamás silencio. La respuesta va al hilo (PostReply).
+func handleTests(ctx context.Context, cfg ChatConfig, st Store, gw Gateway, provider vcs.VCSProvider, input ChatInput, repo *store.Repository, pr *store.PullRequest, diff string) (string, error) {
+	rev, err := st.GetLatestReviewByPR(ctx, input.PullRequestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if perr := postChat(ctx, provider, st, repo, pr, input, testsSinHallazgos); perr != nil {
+			return "", perr
+		}
+		return testsSinHallazgos, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("buscando la última review del PR %d: %w", input.PullRequestID, err)
+	}
+	rows, err := st.ListFindingsByReview(ctx, rev.ID)
+	if err != nil {
+		return "", fmt.Errorf("cargando los hallazgos de la review %d: %w", rev.ID, err)
+	}
+
+	hunks, _, _ := splitDiffByFile(diff)
+	var snippets strings.Builder
+	n := 0
+	for _, r := range rows {
+		if n >= cfg.TestMaxSnippets {
+			break
+		}
+		fw, ok := frameworkForFile(r.File)
+		if !ok {
+			continue // extensión sin framework conocido: no se inventa
+		}
+		code, err := runTestGenerator(ctx, gw, Finding{
+			File: r.File, Line: r.Line, Severity: r.Severity,
+			Category: r.Category, Body: r.Body, Suggestion: r.Suggestion.String,
+		}, hunks[r.File], fw)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", err // el job está muriendo: el reintento regenera
+			}
+			slog.Warn("review: /tests sin prueba para un hallazgo", "archivo", r.File, "error", err)
+			continue
+		}
+		n++
+		fmt.Fprintf(&snippets, "\n**%s:%d** · %s · %s\n\n%s\n", r.File, r.Line, severityLabel[r.Severity], r.Category, code)
+	}
+
+	body := "### Pruebas sugeridas\n"
+	if n > 0 {
+		body += "\nPruebas que reproducen los hallazgos de la última revisión (ilustrativas — no se aplican con un clic):\n" + snippets.String()
+	} else {
+		body += "\nNo pude generar pruebas para los hallazgos de la última revisión."
+	}
+	if err := postChat(ctx, provider, st, repo, pr, input, body); err != nil {
+		return "", err
+	}
+	return body, nil
+}
+
 // frameworkByExt mapea la extensión del archivo cambiado al framework de
-// testing que sugiere el chat (§6 F2: detección por extensión — lo fino con
-// go-enry llega si algún día hace falta).
+// testing que usa el generador de pruebas (F4: detección por extensión — lo
+// fino con go-enry llega si algún día hace falta).
 var frameworkByExt = map[string]string{
 	".go": "go test", ".ts": "vitest", ".tsx": "vitest", ".py": "pytest", ".rs": "cargo test",
 }
 
-// detectFrameworks deduce los frameworks de testing de las extensiones de los
-// archivos del diff. Orden estable: prompts y tests deterministas.
-func detectFrameworks(diff string) []string {
-	_, changed, _ := splitDiffByFile(diff)
-	seen := map[string]bool{}
-	var out []string
-	for file := range changed {
-		for ext, fw := range frameworkByExt {
-			if strings.HasSuffix(file, ext) && !seen[fw] {
-				seen[fw] = true
-				out = append(out, fw)
-			}
+// frameworkForFile deduce el framework de testing por extensión del archivo
+// del hallazgo. false = extensión sin framework conocido: esa prueba no se
+// genera.
+func frameworkForFile(file string) (string, bool) {
+	for ext, fw := range frameworkByExt {
+		if strings.HasSuffix(file, ext) {
+			return fw, true
 		}
 	}
-	sort.Strings(out)
-	return out
+	return "", false
 }
 
 // chatUser arma el prompt de usuario del chat: el comentario del usuario con
@@ -213,9 +289,6 @@ func chatUser(question, cmd, diff string) string {
 		b.WriteString(chatUserMarker + " (solo la mención al bot)\n\n")
 	}
 	switch cmd {
-	case cmdTests:
-		fmt.Fprintf(&b, "Pedido: sugerí pruebas unitarias para los archivos cambiados. Frameworks detectados en el diff: %s.\n\n",
-			strings.Join(detectFrameworks(diff), ", "))
 	case cmdExplain:
 		b.WriteString("Pedido: explicá el diff (o el punto que el comentario mencione) en lenguaje llano.\n\n")
 	default:

@@ -44,9 +44,11 @@ const (
 	DefaultGitLabBotUsername         = "codeowl"
 	DefaultBranchTipCacheTTL         = 30 * time.Second
 	// Chat (§3.5/§9.6): username del bot en GitHub para las menciones del
-	// chat y tope de diff que entra al prompt del chat (presupuesto propio).
+	// chat, tope de diff que entra al prompt del chat (presupuesto propio) y
+	// tope de pruebas que genera /tests.
 	DefaultGitHubBotUsername    = "codeowl-bot"
 	DefaultChatDiffMaxLines     = 5000
+	DefaultChatTestMaxSnippets  = 3
 	DefaultAnalyzerImage        = "localhost/codeowl-analyzer:latest"
 	DefaultAnalyzerMemory       = "1g"              // §9.4: tope de RAM del sandbox
 	DefaultAnalyzerPidsLimit    = 256               // §9.4: tope de procesos del sandbox
@@ -100,8 +102,9 @@ type Stage2Config struct {
 	GitLabBotUsername         string        // anti-bucle del chat (GitLab no expone flag de bot)
 	BranchTipCacheTTL         time.Duration // cache del tip de la rama base (§3.6.1.1)
 	// Chat (§3.5/§9.6): los consumen internal/vcs/github e internal/review.
-	GitHubBotUsername string // mención del bot en comentarios del chat (F2)
-	ChatDiffMaxLines  int    // tope de diff que entra al prompt del chat (§9.6)
+	GitHubBotUsername   string // mención del bot en comentarios del chat (F2)
+	ChatDiffMaxLines    int    // tope de diff que entra al prompt del chat (§9.6)
+	ChatTestMaxSnippets int    // tope de pruebas generadas por /tests (§9.6)
 	// Sandbox analyzer (§9.4): los consumen internal/analyze.
 	AnalyzerImage     string
 	AnalyzerMemory    string
@@ -323,6 +326,14 @@ func Load() (*Config, error) {
 		errs = append(errs, "CHAT_DIFF_MAX_LINES debe ser mayor o igual a 1")
 	}
 	s2.ChatDiffMaxLines = chatDiffMax
+
+	testMax, err := loadInt("CHAT_TEST_MAX_SNIPPETS", DefaultChatTestMaxSnippets)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if testMax < 1 {
+		errs = append(errs, "CHAT_TEST_MAX_SNIPPETS debe ser mayor o igual a 1")
+	}
+	s2.ChatTestMaxSnippets = testMax
 
 	branchTTL, err := loadDuration("BRANCH_TIP_CACHE_TTL", DefaultBranchTipCacheTTL)
 	if err != nil {

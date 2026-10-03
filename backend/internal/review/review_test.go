@@ -172,6 +172,23 @@ func (s *stubStore) GetCommentsSentByPRAndType(_ context.Context, arg store.GetC
 	return append([]store.CommentsSent(nil), s.comments[arg.Type]...), nil
 }
 
+func (s *stubStore) ListFindingsByReview(_ context.Context, reviewID int64) ([]store.Finding, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.Finding
+	for i, arg := range s.findings {
+		if arg.ReviewID != reviewID {
+			continue
+		}
+		out = append(out, store.Finding{
+			ID: int64(i + 1), ReviewID: arg.ReviewID, File: arg.File, Line: arg.Line,
+			Severity: arg.Severity, Category: arg.Category, Body: arg.Body,
+			Suggestion: arg.Suggestion, Source: arg.Source,
+		})
+	}
+	return out, nil
+}
+
 func (s *stubStore) CreateCommentSent(_ context.Context, arg store.CreateCommentSentParams) (store.CommentsSent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -200,14 +217,16 @@ func (s *stubStore) UpdateCommentSentCommentID(_ context.Context, arg store.Upda
 }
 
 // stubGateway responde de colas por agente: reviewer por archivo,
-// summarizer y chat por marcador. Cuenta las llamadas.
+// summarizer, chat y testgen por marcador. Cuenta las llamadas.
 type stubGateway struct {
-	mu         sync.Mutex
-	calls      int
-	reviewer   map[string][]string
-	summarizer []string
-	chat       []string
-	chatSeen   []string // prompts de usuario de chat recibidos
+	mu          sync.Mutex
+	calls       int
+	reviewer    map[string][]string
+	summarizer  []string
+	chat        []string
+	chatSeen    []string // prompts de usuario de chat recibidos
+	testgen     []string // respuestas encoladas para /tests
+	testgenSeen []string // prompts de usuario de testgen recibidos
 }
 
 func newStubGateway() *stubGateway {
@@ -233,6 +252,15 @@ func (g *stubGateway) Complete(_ context.Context, _, system, user string) (strin
 		}
 		r := g.chat[0]
 		g.chat = g.chat[1:]
+		return r, nil
+	}
+	if strings.HasPrefix(user, testgenUserMarker) {
+		g.testgenSeen = append(g.testgenSeen, user)
+		if len(g.testgen) == 0 {
+			return "", fmt.Errorf("sin respuesta de testgen encolada (llamada %d)", g.calls)
+		}
+		r := g.testgen[0]
+		g.testgen = g.testgen[1:]
 		return r, nil
 	}
 	first := strings.SplitN(user, "\n", 2)[0]
@@ -268,6 +296,8 @@ type stubVCS struct {
 	summaryID    string
 	inlineReqs   []vcs.CommentPosition
 	inlineBods   []string
+	suggestReqs  []vcs.CommentPosition // publicaciones vía PostSuggestion
+	suggestBods  []string
 	replyParents []string // padres de las respuestas de chat
 	replyBods    []string // cuerpos de las respuestas de chat
 }
@@ -288,8 +318,16 @@ func (s *stubVCS) GetDiff(context.Context, *store.Repository, *store.PullRequest
 func (s *stubVCS) ListOpenPRs(context.Context, *store.Repository) ([]vcs.OpenPR, error) {
 	return nil, nil
 }
-func (s *stubVCS) PostSuggestion(context.Context, *store.Repository, *store.PullRequest, vcs.CommentPosition, string) (string, error) {
-	return "", nil
+
+func (s *stubVCS) PostSuggestion(_ context.Context, _ *store.Repository, _ *store.PullRequest, pos vcs.CommentPosition, body string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failInline {
+		return "", fmt.Errorf("VCS caído")
+	}
+	s.suggestReqs = append(s.suggestReqs, pos)
+	s.suggestBods = append(s.suggestBods, body)
+	return fmt.Sprintf("suggestion-%d", len(s.suggestReqs)), nil
 }
 
 func (s *stubVCS) PostInlineComment(_ context.Context, _ *store.Repository, _ *store.PullRequest, pos vcs.CommentPosition, body string) (string, error) {
@@ -390,18 +428,28 @@ func TestRunHappyPath(t *testing.T) {
 	if strings.Contains(d.vcs.summaryBods[0], "### Hallazgos:") {
 		t.Errorf("el resumen provisional no debería traer recuento final:\n%s", d.vcs.summaryBods[0])
 	}
-	// Inline: LLM línea 3 y SAST línea 5 anclan al RIGHT del fixture.
-	if len(d.vcs.inlineReqs) != 2 {
-		t.Fatalf("inline publicados = %d, querés 2", len(d.vcs.inlineReqs))
+	// Inline: el LLM (con sugerencia) publica vía PostSuggestion; el SAST
+	// (sin sugerencia) vía PostInlineComment. Ambos anclan al RIGHT.
+	if len(d.vcs.suggestReqs) != 1 || d.vcs.suggestReqs[0].Line != 3 ||
+		d.vcs.suggestReqs[0].Side != vcs.SideRight {
+		t.Fatalf("PostSuggestion = %+v, querés main.go:3 RIGHT", d.vcs.suggestReqs)
 	}
-	if d.vcs.inlineReqs[0].Line != 3 || d.vcs.inlineReqs[0].Side != vcs.SideRight {
-		t.Errorf("inline[0] = %+v, querés main.go:3 RIGHT", d.vcs.inlineReqs[0])
+	// El bloque aplicable trae SOLO el código corregido — sin doble envoltura
+	// y con la explicación fuera del fence.
+	if !strings.Contains(d.vcs.suggestBods[0], "```suggestion\ndb.Query(q, arg)\n```") {
+		t.Errorf("la sugerencia no quedó como bloque aplicable con solo el código:\n%s", d.vcs.suggestBods[0])
 	}
-	if d.vcs.inlineReqs[1].Line != 5 || d.vcs.inlineReqs[1].Side != vcs.SideRight {
-		t.Errorf("inline[1] = %+v, querés main.go:5 RIGHT", d.vcs.inlineReqs[1])
+	if !strings.Contains(d.vcs.suggestBods[0], "inyección SQL") {
+		t.Errorf("el comentario de sugerencia debe traer la explicación:\n%s", d.vcs.suggestBods[0])
 	}
-	if !strings.Contains(d.vcs.inlineBods[0], "```suggestion") {
-		t.Errorf("la sugerencia del LLM no quedó como bloque aplicable:\n%s", d.vcs.inlineBods[0])
+	if strings.Contains(d.vcs.suggestBods[0], "```suggestion\n```suggestion") {
+		t.Errorf("la sugerencia quedó envuelta dos veces:\n%s", d.vcs.suggestBods[0])
+	}
+	if len(d.vcs.inlineReqs) != 1 || d.vcs.inlineReqs[0].Line != 5 || d.vcs.inlineReqs[0].Side != vcs.SideRight {
+		t.Fatalf("inline publicados = %+v, querés solo el SAST en main.go:5 RIGHT", d.vcs.inlineReqs)
+	}
+	if strings.Contains(d.vcs.inlineBods[0], "```") {
+		t.Errorf("el inline sin sugerencia no debe traer bloque de código:\n%s", d.vcs.inlineBods[0])
 	}
 	// Persistencia.
 	if len(d.st.findings) != 2 {
@@ -733,5 +781,43 @@ func TestMermaidValidation(t *testing.T) {
 	}
 	if validMermaid("") || validMermaid("hola mundo") {
 		t.Error("texto sin encabezado de diagrama no debería validar")
+	}
+}
+
+// El generador de pruebas (F4): pasa el hallazgo, el framework y los hunks
+// al LLM y devuelve la prueba; salida vacía es error (el caller la salta).
+func TestRunTestGenerator(t *testing.T) {
+	d := newDeps()
+	d.gw.testgen = []string{"```go\nfunc TestX(t *testing.T) {}\n```"}
+	f := Finding{File: "main.go", Line: 3, Severity: "high", Category: "security", Body: "inyección SQL"}
+
+	out, err := runTestGenerator(context.Background(), d.gw, f, "hunks de main.go", "go test")
+	if err != nil {
+		t.Fatalf("runTestGenerator: %v", err)
+	}
+	if !strings.Contains(out, "func TestX") {
+		t.Errorf("salida: %q", out)
+	}
+	prompt := d.gw.testgenSeen[0]
+	for _, want := range []string{"main.go:3", "inyección SQL", "go test", "```diff", "hunks de main.go"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("el prompt debe traer %q:\n%s", want, prompt)
+		}
+	}
+
+	// La corrección sugerida, si existe, viaja en el prompt.
+	d.gw.testgen = []string{"```go\nfunc TestY(t *testing.T) {}\n```"}
+	f.Suggestion = "db.Query(q, arg)"
+	if _, err := runTestGenerator(context.Background(), d.gw, f, "", "go test"); err != nil {
+		t.Fatalf("runTestGenerator con sugerencia: %v", err)
+	}
+	if !strings.Contains(d.gw.testgenSeen[1], "db.Query(q, arg)") {
+		t.Errorf("el prompt debe traer la corrección sugerida:\n%s", d.gw.testgenSeen[1])
+	}
+
+	// Salida vacía → error: el caller la salta sin publicar basura.
+	d.gw.testgen = []string{"   "}
+	if _, err := runTestGenerator(context.Background(), d.gw, f, "", "go test"); err == nil {
+		t.Error("la salida vacía debe fallar")
 	}
 }

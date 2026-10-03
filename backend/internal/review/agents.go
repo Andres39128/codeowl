@@ -24,6 +24,7 @@ import (
 var (
 	promptReviewer   = prompts.Reviewer()
 	promptSummarizer = prompts.Summarizer()
+	promptTestgen    = prompts.Testgen()
 )
 
 // roleReview es el rol del gateway para Reviewer y Summarizer (mapa:
@@ -33,8 +34,9 @@ const roleReview = "review"
 // Marcadores del prompt de usuario: enrutan la respuesta del gateway (los
 // stubs de test los usan para saber a qué agente responden).
 const (
-	userFilePrefix   = "Archivo: "
-	summarizerMarker = "Resumí el siguiente pull request."
+	userFilePrefix    = "Archivo: "
+	summarizerMarker  = "Resumí el siguiente pull request."
+	testgenUserMarker = "Hallazgo de la revisión:"
 )
 
 // SummaryResult es la salida del Summarizer (contrato §9.8).
@@ -141,6 +143,36 @@ func runSummarizer(ctx context.Context, gw Gateway, cfg Config, stats string, co
 		slog.Warn("review: salida malformada del summarizer", "intento", attempt+1, "error", perr)
 	}
 	return nil, fmt.Errorf("salida malformada tras %d reintentos: %w", cfg.AgentRetries, lastErr)
+}
+
+// runTestGenerator genera UNA prueba unitaria que documenta el hallazgo
+// (comando /tests, F4). Sin reintentos: el chat publica lo que genere — el
+// reintento del job regenera todo el lote.
+func runTestGenerator(ctx context.Context, gw Gateway, f Finding, hunks, framework string) (string, error) {
+	out, err := gw.Complete(ctx, roleReview, promptTestgen, testgenUser(f, hunks, framework))
+	if err != nil {
+		return "", fmt.Errorf("failover agotado: %w", err)
+	}
+	if strings.TrimSpace(stripFences(out)) == "" {
+		return "", fmt.Errorf("salida vacía del generador de pruebas")
+	}
+	return out, nil
+}
+
+// testgenUser arma el prompt de usuario del generador de pruebas: hallazgo
+// (con su corrección si la hay), framework detectado por extensión y los
+// hunks del archivo — el contexto mínimo para una prueba que reproduce el
+// problema.
+func testgenUser(f Finding, hunks, framework string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s:%d — severidad %s, categoría %s.\n\n%s",
+		testgenUserMarker, f.File, f.Line, f.Severity, f.Category, f.Body)
+	if f.Suggestion != "" {
+		b.WriteString("\n\nCorrección sugerida:\n\n```suggestion\n" + f.Suggestion + "\n```")
+	}
+	fmt.Fprintf(&b, "\n\nFramework de pruebas: %s.\n\n", framework)
+	b.WriteString("Hunks del diff de " + f.File + ":\n\n```diff\n" + hunks + "```")
+	return b.String()
 }
 
 // parseFindings valida la salida JSON del Reviewer para el archivo dado.

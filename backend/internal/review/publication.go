@@ -87,9 +87,19 @@ func (p *publisher) publishSummary(ctx context.Context, body string) error {
 
 // publishInline publica el comentario inline del finding en su posición del
 // diff y registra la fila inline con su huella (dedup de corridas futuras,
-// §3.6.3).
+// §3.6.3). Con sugerencia va por PostSuggestion (aplicable con un clic);
+// sin ella, PostInlineComment (comentario plano).
 func (p *publisher) publishInline(ctx context.Context, f Finding, pos vcs.CommentPosition) error {
-	id, err := p.vcs.PostInlineComment(ctx, p.repo, p.pr, pos, maskSecrets(inlineBody(f)))
+	body := maskSecrets(inlineBody(f))
+	var (
+		id  string
+		err error
+	)
+	if f.Suggestion != "" {
+		id, err = p.vcs.PostSuggestion(ctx, p.repo, p.pr, pos, body)
+	} else {
+		id, err = p.vcs.PostInlineComment(ctx, p.repo, p.pr, pos, body)
+	}
 	if err != nil {
 		return err
 	}
@@ -112,8 +122,10 @@ var severityLabel = map[string]string{
 }
 
 // inlineBody arma el cuerpo del comentario inline: severidad + categoría +
-// cuerpo, con la sugerencia como bloque aplicable con un clic (mapa:
-// PostSuggestion — el bloque ```suggestion``` vive dentro del comentario).
+// cuerpo y, si hay sugerencia, el bloque aplicable con un clic (publicado
+// vía PostSuggestion). El bloque ```suggestion``` contiene SOLO el código
+// corregido — sin markdown ni explicación: es lo que el VCS inserta al
+// aplicar la sugerencia.
 func inlineBody(f Finding) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s · %s**\n\n%s", severityLabel[f.Severity], f.Category, f.Body)

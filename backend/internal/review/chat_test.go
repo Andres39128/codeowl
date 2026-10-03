@@ -35,6 +35,24 @@ func chatRows(d *deps) []store.CommentsSent {
 	return d.st.comments["chat"]
 }
 
+// seedReviewWithFindings crea una review corrida y le cuelga hallazgos:
+// el insumo de /tests.
+func seedReviewWithFindings(t *testing.T, d *deps, fs ...store.CreateFindingParams) {
+	t.Helper()
+	rev, err := d.st.CreateReview(context.Background(), store.CreateReviewParams{
+		PullRequestID: testPRID, HeadSha: testHead, BaseSha: testBase,
+	})
+	if err != nil {
+		t.Fatalf("seed review: %v", err)
+	}
+	for i := range fs {
+		fs[i].ReviewID = rev.ID
+		if _, err := d.st.CreateFinding(context.Background(), fs[i]); err != nil {
+			t.Fatalf("seed finding: %v", err)
+		}
+	}
+}
+
 // /review sobre un PR abierto: EnqueueReview=true para el worker, sin LLM,
 // sin respuesta en el hilo y sin fila de chat (mapa: /review no responde).
 func TestChatReviewEnPRAbiertoEncola(t *testing.T) {
@@ -101,11 +119,19 @@ func TestChatReviewEnPRCerradoRespondeSinEncolar(t *testing.T) {
 	}
 }
 
-// /tests: el LLM genera sugerencias con el framework detectado del diff
-// (.go → go test) y la respuesta se publica en el hilo del comentario.
-func TestChatTestsGeneraSugerencias(t *testing.T) {
+// /tests (F4): una prueba por hallazgo de la última revisión, con el
+// framework detectado por extensión (.go → go test); los archivos sin
+// framework conocido se saltan y la respuesta va al hilo del comentario.
+func TestChatTestsGeneraPruebas(t *testing.T) {
 	d := newDeps()
-	d.gw.chat = []string{"Sugerencia: test de tabla para fmt.Println."}
+	const prueba = "```go\nfunc TestMainValida(t *testing.T) {}\n```"
+	d.gw.testgen = []string{prueba}
+	seedReviewWithFindings(t, d,
+		store.CreateFindingParams{File: "main.go", Line: 3, Severity: "high",
+			Category: "security", Body: "inyección SQL", Source: SourceLLM},
+		store.CreateFindingParams{File: "notes.txt", Line: 1, Severity: "low",
+			Category: "other", Body: "nota", Source: SourceLLM},
+	)
 
 	in := chatInput()
 	in.CommentBody = "@codeowl-bot /tests por favor"
@@ -113,18 +139,19 @@ func TestChatTestsGeneraSugerencias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleChat: %v", err)
 	}
-	if res.Response != "Sugerencia: test de tabla para fmt.Println." {
-		t.Errorf("respuesta: %q", res.Response)
-	}
+	// Solo main.go tiene framework conocido: una llamada, no dos.
 	if d.gw.calls != 1 {
-		t.Fatalf("/tests es una llamada LLM: llamadas=%d", d.gw.calls)
+		t.Fatalf("/tests genera una prueba por hallazgo con framework: llamadas=%d", d.gw.calls)
 	}
-	prompt := d.gw.chatSeen[0]
-	if !strings.Contains(prompt, "go test") {
-		t.Errorf("el prompt debe nombrar el framework detectado (.go → go test): %q", prompt)
+	prompt := d.gw.testgenSeen[0]
+	for _, want := range []string{"main.go:3", "inyección SQL", "go test", "```diff"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("el prompt de testgen debe traer %q:\n%s", want, prompt)
+		}
 	}
-	if !strings.Contains(prompt, "main.go") {
-		t.Errorf("el prompt debe traer el diff: %q", prompt)
+	if !strings.Contains(res.Response, "### Pruebas sugeridas") ||
+		!strings.Contains(res.Response, "main.go:3") || !strings.Contains(res.Response, prueba) {
+		t.Errorf("la respuesta debe listar la prueba con su hallazgo:\n%s", res.Response)
 	}
 	if len(d.vcs.replyParents) != 1 || d.vcs.replyParents[0] != chatParent {
 		t.Errorf("la respuesta va al hilo del comentario padre: %v", d.vcs.replyParents)
@@ -132,6 +159,57 @@ func TestChatTestsGeneraSugerencias(t *testing.T) {
 	rows := chatRows(d)
 	if len(rows) != 1 || rows[0].ParentCommentID.String != chatParent {
 		t.Errorf("la respuesta debe registrarse con su padre: %+v", rows)
+	}
+}
+
+// Tope de /tests (§9.6): TestMaxSnippets acota las llamadas LLM — un PR con
+// muchos hallazgos no genera una prueba por cada uno.
+func TestChatTestsTopeSnippets(t *testing.T) {
+	d := newDeps()
+	d.gw.testgen = []string{"```go\nfunc TestA(t *testing.T) {}\n```"}
+	seedReviewWithFindings(t, d,
+		store.CreateFindingParams{File: "main.go", Line: 3, Severity: "high",
+			Category: "security", Body: "uno", Source: SourceLLM},
+		store.CreateFindingParams{File: "main.go", Line: 5, Severity: "low",
+			Category: "style", Body: "dos", Source: SourceLLM},
+	)
+	cfg := DefaultChatConfig()
+	cfg.TestMaxSnippets = 1
+
+	in := chatInput()
+	in.CommentBody = "@codeowl-bot /tests"
+	res, err := HandleChat(context.Background(), cfg, d.st, d.gw, d.vcs, in)
+	if err != nil {
+		t.Fatalf("HandleChat: %v", err)
+	}
+	if d.gw.calls != 1 {
+		t.Fatalf("con tope 1, llamadas=%d, querés 1", d.gw.calls)
+	}
+	if n := strings.Count(res.Response, "**main.go:"); n != 1 {
+		t.Errorf("la respuesta debe traer 1 snippet, trae %d:\n%s", n, res.Response)
+	}
+}
+
+// /tests sin revisión previa: negativa publicada en el hilo, sin LLM.
+func TestChatTestsSinHallazgos(t *testing.T) {
+	d := newDeps()
+	d.gw.chat = []string{"el chat no debería ser llamado"}
+	d.gw.testgen = []string{"el testgen no debería ser llamado"}
+
+	in := chatInput()
+	in.CommentBody = "@codeowl-bot /tests"
+	res, err := HandleChat(context.Background(), DefaultChatConfig(), d.st, d.gw, d.vcs, in)
+	if err != nil {
+		t.Fatalf("HandleChat: %v", err)
+	}
+	if res.Response != testsSinHallazgos {
+		t.Errorf("respuesta: %q", res.Response)
+	}
+	if d.gw.calls != 0 {
+		t.Errorf("sin hallazgos no hay LLM: llamadas=%d", d.gw.calls)
+	}
+	if len(d.vcs.replyBods) != 1 {
+		t.Errorf("la negativa se publica en el hilo: %d", len(d.vcs.replyBods))
 	}
 }
 

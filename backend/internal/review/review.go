@@ -64,6 +64,7 @@ type Store interface {
 	GetPullRequest(ctx context.Context, id int64) (store.PullRequest, error)
 	CreateReview(ctx context.Context, arg store.CreateReviewParams) (store.Review, error)
 	GetLatestReviewByPR(ctx context.Context, pullRequestID int64) (store.Review, error)
+	ListFindingsByReview(ctx context.Context, reviewID int64) ([]store.Finding, error)
 	UpdateReviewStatus(ctx context.Context, arg store.UpdateReviewStatusParams) (store.Review, error)
 	UpdateReviewSummary(ctx context.Context, arg store.UpdateReviewSummaryParams) (store.Review, error)
 	CreateFinding(ctx context.Context, arg store.CreateFindingParams) (store.Finding, error)
