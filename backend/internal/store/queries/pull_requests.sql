@@ -39,6 +39,15 @@ SET state = $2,
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdatePullRequestRiskScore :exec
+-- Risk score del tail de Run (§6 F5, T3): proxy 0-100 computable, se pisa en
+-- cada corrida. Toca updated_at: la otra escritura de la tabla (estado) hace
+-- lo mismo y el listado del dashboard ordena por ahí.
+UPDATE pull_requests
+SET risk_score = $2,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: ListPullRequestsWithLatestReview :many
 -- Listado del dashboard (guía §6 F3): TODOS los PRs — los cerrados conservan
 -- valor de auditoría — con su última corrida y el conteo de hallazgos de esa

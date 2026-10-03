@@ -70,6 +70,8 @@ type CommentsSent struct {
 	Anchor          pgtype.Text
 	ParentCommentID pgtype.Text
 	CreatedAt       pgtype.Timestamptz
+	Resolved        pgtype.Bool
+	Applied         pgtype.Bool
 }
 
 type Finding struct {
@@ -84,6 +86,7 @@ type Finding struct {
 	Source     string
 	Verified   pgtype.Bool
 	CreatedAt  pgtype.Timestamptz
+	Accepted   pgtype.Bool
 }
 
 type LlmProvider struct {
@@ -107,6 +110,7 @@ type LlmUsage struct {
 	TokensIn  int32
 	TokensOut int32
 	CreatedAt pgtype.Timestamptz
+	ReviewID  pgtype.Int8
 }
 
 type PullRequest struct {
@@ -121,6 +125,7 @@ type PullRequest struct {
 	MergedAt     pgtype.Timestamptz
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+	RiskScore    pgtype.Int4
 }
 
 type RepoIndex struct {

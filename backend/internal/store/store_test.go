@@ -98,6 +98,22 @@ func TestMigrateSobreBDEmpiezaLimpiaYEsIdempotente(t *testing.T) {
 			t.Errorf("la tabla %s debe existir tras migrar (n=%d err=%v)", tabla, n, err)
 		}
 	}
+	// Columnas de métricas F5 (guía §6 F5, migración 0005): additive-only
+	// sobre las filas existentes — sin tablas nuevas.
+	for _, c := range []struct{ tabla, col string }{
+		{"pull_requests", "risk_score"},
+		{"comments_sent", "resolved"},
+		{"comments_sent", "applied"},
+		{"findings", "accepted"},
+		{"llm_usage", "review_id"},
+	} {
+		var n int
+		if err := st.Pool.QueryRow(context.Background(),
+			"SELECT COUNT(1) FROM information_schema.columns WHERE table_name = $1 AND column_name = $2",
+			c.tabla, c.col).Scan(&n); err != nil || n != 1 {
+			t.Errorf("la columna %s.%s debe existir tras migrar (n=%d err=%v)", c.tabla, c.col, n, err)
+		}
+	}
 }
 
 func TestSeedAdminIdempotente(t *testing.T) {

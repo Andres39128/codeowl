@@ -137,6 +137,35 @@ func TestCompleteExitosoRegistraUsage(t *testing.T) {
 	if u.JobID.Valid {
 		t.Error("job_id debe ser null desde Complete sin contexto de job")
 	}
+	if u.ReviewID.Valid {
+		t.Error("review_id debe ser null sin WithReview en el contexto")
+	}
+}
+
+func TestCompleteStampaReviewIdDelContexto(t *testing.T) {
+	// §6 F5: linkage de costo por review — el ctx anotado con WithReview
+	// (id decimal de reviews.id) pisa llm_usage.review_id en el usage.
+	srv := newStub(t, stubOK("ok", 2, 1))
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "review", 1)}}
+	g := newGateway(t, fs, testLimits())
+
+	if _, err := g.Complete(WithReview(context.Background(), "42"), "review", "sys", "user"); err != nil {
+		t.Fatalf("Complete(): %v", err)
+	}
+	if _, err := g.Complete(WithReview(context.Background(), "corrida-no-numérica"), "review", "sys", "user"); err != nil {
+		t.Fatalf("Complete() con anotación no numérica: %v", err)
+	}
+
+	usages := fs.recordedUsages()
+	if len(usages) != 2 {
+		t.Fatalf("usage registrado: got %d filas want 2", len(usages))
+	}
+	if !usages[0].ReviewID.Valid || usages[0].ReviewID.Int64 != 42 {
+		t.Errorf("WithReview numérico debe stampar review_id: got %+v", usages[0].ReviewID)
+	}
+	if usages[1].ReviewID.Valid {
+		t.Errorf("una anotación no numérica no debe stampar review_id: got %+v", usages[1].ReviewID)
+	}
 }
 
 func TestFailoverAlSiguienteProveedor(t *testing.T) {

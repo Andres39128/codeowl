@@ -17,3 +17,11 @@ FROM findings f
 JOIN reviews r ON r.id = f.review_id
 WHERE r.pull_request_id = $1
 ORDER BY f.id;
+
+-- name: UpdateFindingAccepted :exec
+-- Outcome F5 (§6): el MetricsJob (T5) marca si la sugerencia del hallazgo
+-- terminó aplicada (heurística por contenido sobre los patches posteriores).
+-- Null = sin evaluar; nunca se des-marca a null una vez escrito.
+UPDATE findings
+SET accepted = $2
+WHERE id = $1;

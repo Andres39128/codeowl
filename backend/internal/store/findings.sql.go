@@ -15,7 +15,7 @@ const createFinding = `-- name: CreateFinding :one
 
 INSERT INTO findings (review_id, file, line, severity, category, body, suggestion, source, verified)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at
+RETURNING id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at, accepted
 `
 
 type CreateFindingParams struct {
@@ -58,12 +58,13 @@ func (q *Queries) CreateFinding(ctx context.Context, arg CreateFindingParams) (F
 		&i.Source,
 		&i.Verified,
 		&i.CreatedAt,
+		&i.Accepted,
 	)
 	return i, err
 }
 
 const listFindingsByPR = `-- name: ListFindingsByPR :many
-SELECT f.id, f.review_id, f.file, f.line, f.severity, f.category, f.body, f.suggestion, f.source, f.verified, f.created_at
+SELECT f.id, f.review_id, f.file, f.line, f.severity, f.category, f.body, f.suggestion, f.source, f.verified, f.created_at, f.accepted
 FROM findings f
 JOIN reviews r ON r.id = f.review_id
 WHERE r.pull_request_id = $1
@@ -92,6 +93,7 @@ func (q *Queries) ListFindingsByPR(ctx context.Context, pullRequestID int64) ([]
 			&i.Source,
 			&i.Verified,
 			&i.CreatedAt,
+			&i.Accepted,
 		); err != nil {
 			return nil, err
 		}
@@ -104,7 +106,7 @@ func (q *Queries) ListFindingsByPR(ctx context.Context, pullRequestID int64) ([]
 }
 
 const listFindingsByReview = `-- name: ListFindingsByReview :many
-SELECT id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at FROM findings WHERE review_id = $1 ORDER BY id
+SELECT id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at, accepted FROM findings WHERE review_id = $1 ORDER BY id
 `
 
 func (q *Queries) ListFindingsByReview(ctx context.Context, reviewID int64) ([]Finding, error) {
@@ -128,6 +130,7 @@ func (q *Queries) ListFindingsByReview(ctx context.Context, reviewID int64) ([]F
 			&i.Source,
 			&i.Verified,
 			&i.CreatedAt,
+			&i.Accepted,
 		); err != nil {
 			return nil, err
 		}
@@ -137,4 +140,23 @@ func (q *Queries) ListFindingsByReview(ctx context.Context, reviewID int64) ([]F
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateFindingAccepted = `-- name: UpdateFindingAccepted :exec
+UPDATE findings
+SET accepted = $2
+WHERE id = $1
+`
+
+type UpdateFindingAcceptedParams struct {
+	ID       int64
+	Accepted pgtype.Bool
+}
+
+// Outcome F5 (§6): el MetricsJob (T5) marca si la sugerencia del hallazgo
+// terminó aplicada (heurística por contenido sobre los patches posteriores).
+// Null = sin evaluar; nunca se des-marca a null una vez escrito.
+func (q *Queries) UpdateFindingAccepted(ctx context.Context, arg UpdateFindingAcceptedParams) error {
+	_, err := q.db.Exec(ctx, updateFindingAccepted, arg.ID, arg.Accepted)
+	return err
 }

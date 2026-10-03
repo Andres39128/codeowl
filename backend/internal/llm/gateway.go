@@ -12,8 +12,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
 )
@@ -380,12 +383,27 @@ func (g *Gateway) attempt(ctx context.Context, apiKey string, p store.LlmProvide
 	return chatResponse{}, true, 0, err
 }
 
+// reviewIDOrNull traduce la anotación WithReview —el id decimal de reviews.id
+// (review.Run lo anota)— al nullable llm_usage.review_id (§6 F5: linkage de
+// costo por review). Sin anotación o cadena no numérica (chat, indexación,
+// pruebas de conexión, tests del tope por review) → null: el costo por
+// review son las reviews.
+func reviewIDOrNull(ctx context.Context) pgtype.Int8 {
+	id, _ := ctx.Value(reviewIDKey{}).(string)
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: n, Valid: true}
+}
+
 // logUsage registra la fila de llm_usage (§9.6: sin ese registro no hay
 // métrica de costo en F5). Best-effort: un fallo de registro no invalida la
 // respuesta ya obtenida. El identificador del proveedor es su base_url
 // (llm_providers no tiene columna name).
 func (g *Gateway) logUsage(ctx context.Context, role string, p store.LlmProvider, u usage) {
 	if _, err := g.store.CreateLlmUsage(ctx, store.CreateLlmUsageParams{
+		ReviewID:  reviewIDOrNull(ctx),
 		Role:      role,
 		Provider:  p.BaseUrl,
 		Model:     p.Model,

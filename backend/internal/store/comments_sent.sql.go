@@ -15,7 +15,7 @@ const createCommentSent = `-- name: CreateCommentSent :one
 
 INSERT INTO comments_sent (pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at
+RETURNING id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at, resolved, applied
 `
 
 type CreateCommentSentParams struct {
@@ -53,12 +53,14 @@ func (q *Queries) CreateCommentSent(ctx context.Context, arg CreateCommentSentPa
 		&i.Anchor,
 		&i.ParentCommentID,
 		&i.CreatedAt,
+		&i.Resolved,
+		&i.Applied,
 	)
 	return i, err
 }
 
 const getCommentSentByAnchor = `-- name: GetCommentSentByAnchor :one
-SELECT id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at FROM comments_sent
+SELECT id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at, resolved, applied FROM comments_sent
 WHERE pull_request_id = $1 AND anchor = $2
 `
 
@@ -82,12 +84,14 @@ func (q *Queries) GetCommentSentByAnchor(ctx context.Context, arg GetCommentSent
 		&i.Anchor,
 		&i.ParentCommentID,
 		&i.CreatedAt,
+		&i.Resolved,
+		&i.Applied,
 	)
 	return i, err
 }
 
 const getCommentsSentByPRAndType = `-- name: GetCommentsSentByPRAndType :many
-SELECT id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at FROM comments_sent
+SELECT id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at, resolved, applied FROM comments_sent
 WHERE pull_request_id = $1 AND type = $2
 ORDER BY id
 `
@@ -119,6 +123,8 @@ func (q *Queries) GetCommentsSentByPRAndType(ctx context.Context, arg GetComment
 			&i.Anchor,
 			&i.ParentCommentID,
 			&i.CreatedAt,
+			&i.Resolved,
+			&i.Applied,
 		); err != nil {
 			return nil, err
 		}
@@ -134,7 +140,7 @@ const updateCommentSentCommentID = `-- name: UpdateCommentSentCommentID :one
 UPDATE comments_sent
 SET comment_id = $2
 WHERE id = $1
-RETURNING id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at
+RETURNING id, pull_request_id, review_id, comment_id, type, file, category, anchor, parent_comment_id, created_at, resolved, applied
 `
 
 type UpdateCommentSentCommentIDParams struct {
@@ -157,6 +163,44 @@ func (q *Queries) UpdateCommentSentCommentID(ctx context.Context, arg UpdateComm
 		&i.Anchor,
 		&i.ParentCommentID,
 		&i.CreatedAt,
+		&i.Resolved,
+		&i.Applied,
 	)
 	return i, err
+}
+
+const updateCommentsSentApplied = `-- name: UpdateCommentsSentApplied :exec
+UPDATE comments_sent
+SET applied = $2
+WHERE id = $1
+`
+
+type UpdateCommentsSentAppliedParams struct {
+	ID      int64
+	Applied pgtype.Bool
+}
+
+// ¿La sugerencia terminó aplicada? Heurística por comentario inline (T5):
+// con resolved alimenta la tasa FP (§6 F5) sin joins por huella.
+func (q *Queries) UpdateCommentsSentApplied(ctx context.Context, arg UpdateCommentsSentAppliedParams) error {
+	_, err := q.db.Exec(ctx, updateCommentsSentApplied, arg.ID, arg.Applied)
+	return err
+}
+
+const updateCommentsSentResolved = `-- name: UpdateCommentsSentResolved :exec
+UPDATE comments_sent
+SET resolved = $2
+WHERE id = $1
+`
+
+type UpdateCommentsSentResolvedParams struct {
+	ID       int64
+	Resolved pgtype.Bool
+}
+
+// Estado final del thread inline (§6 F5): el MetricsJob (T5) lo escribe al
+// cierre del PR. Null = sin evaluar.
+func (q *Queries) UpdateCommentsSentResolved(ctx context.Context, arg UpdateCommentsSentResolvedParams) error {
+	_, err := q.db.Exec(ctx, updateCommentsSentResolved, arg.ID, arg.Resolved)
+	return err
 }

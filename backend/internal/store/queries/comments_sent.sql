@@ -23,3 +23,17 @@ UPDATE comments_sent
 SET comment_id = $2
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateCommentsSentResolved :exec
+-- Estado final del thread inline (§6 F5): el MetricsJob (T5) lo escribe al
+-- cierre del PR. Null = sin evaluar.
+UPDATE comments_sent
+SET resolved = $2
+WHERE id = $1;
+
+-- name: UpdateCommentsSentApplied :exec
+-- ¿La sugerencia terminó aplicada? Heurística por comentario inline (T5):
+-- con resolved alimenta la tasa FP (§6 F5) sin joins por huella.
+UPDATE comments_sent
+SET applied = $2
+WHERE id = $1;

@@ -13,13 +13,14 @@ import (
 
 const createLlmUsage = `-- name: CreateLlmUsage :one
 
-INSERT INTO llm_usage (job_id, role, provider, model, tokens_in, tokens_out)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, job_id, role, provider, model, tokens_in, tokens_out, created_at
+INSERT INTO llm_usage (job_id, review_id, role, provider, model, tokens_in, tokens_out)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, job_id, role, provider, model, tokens_in, tokens_out, created_at, review_id
 `
 
 type CreateLlmUsageParams struct {
 	JobID     pgtype.Int8
+	ReviewID  pgtype.Int8
 	Role      string
 	Provider  string
 	Model     string
@@ -28,10 +29,12 @@ type CreateLlmUsageParams struct {
 }
 
 // Uso de LLM (guía §3.3): base de las métricas F5 y de los presupuestos (§9.6).
-// Una fila por llamada LLM; job_id null en la prueba de conexión de settings.
+// Una fila por llamada LLM; job_id null en la prueba de conexión de settings;
+// review_id null fuera de corrida (chat, index, pruebas — §6 F5).
 func (q *Queries) CreateLlmUsage(ctx context.Context, arg CreateLlmUsageParams) (LlmUsage, error) {
 	row := q.db.QueryRow(ctx, createLlmUsage,
 		arg.JobID,
+		arg.ReviewID,
 		arg.Role,
 		arg.Provider,
 		arg.Model,
@@ -48,12 +51,39 @@ func (q *Queries) CreateLlmUsage(ctx context.Context, arg CreateLlmUsageParams) 
 		&i.TokensIn,
 		&i.TokensOut,
 		&i.CreatedAt,
+		&i.ReviewID,
 	)
 	return i, err
 }
 
+const getAvgLlmTokensPerReview = `-- name: GetAvgLlmTokensPerReview :one
+SELECT COALESCE(AVG(per_review.total_tokens), 0)::float8 AS avg_tokens_per_review,
+       COUNT(*) AS reviews_counted
+FROM (
+    SELECT SUM(tokens_in + tokens_out) AS total_tokens
+    FROM llm_usage
+    WHERE review_id IS NOT NULL
+    GROUP BY review_id
+) per_review
+`
+
+type GetAvgLlmTokensPerReviewRow struct {
+	AvgTokensPerReview float64
+	ReviewsCounted     int64
+}
+
+// Costo LLM medio por review (§6 F5): costo = tokens (in+out), sin precio
+// por modelo modelado. Un grupo por review con linkage; las reviews sin
+// usage no cuentan. El AVG es sobre totales por review, no por llamada.
+func (q *Queries) GetAvgLlmTokensPerReview(ctx context.Context) (GetAvgLlmTokensPerReviewRow, error) {
+	row := q.db.QueryRow(ctx, getAvgLlmTokensPerReview)
+	var i GetAvgLlmTokensPerReviewRow
+	err := row.Scan(&i.AvgTokensPerReview, &i.ReviewsCounted)
+	return i, err
+}
+
 const listLlmUsageByJob = `-- name: ListLlmUsageByJob :many
-SELECT id, job_id, role, provider, model, tokens_in, tokens_out, created_at FROM llm_usage WHERE job_id = $1 ORDER BY id
+SELECT id, job_id, role, provider, model, tokens_in, tokens_out, created_at, review_id FROM llm_usage WHERE job_id = $1 ORDER BY id
 `
 
 func (q *Queries) ListLlmUsageByJob(ctx context.Context, jobID pgtype.Int8) ([]LlmUsage, error) {
@@ -74,6 +104,7 @@ func (q *Queries) ListLlmUsageByJob(ctx context.Context, jobID pgtype.Int8) ([]L
 			&i.TokensIn,
 			&i.TokensOut,
 			&i.CreatedAt,
+			&i.ReviewID,
 		); err != nil {
 			return nil, err
 		}

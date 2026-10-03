@@ -12,7 +12,7 @@ import (
 )
 
 const getPullRequest = `-- name: GetPullRequest :one
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at FROM pull_requests WHERE id = $1
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score FROM pull_requests WHERE id = $1
 `
 
 // Por ID: el pipeline de review resuelve la fila desde el job (§3.6.1.3 —
@@ -32,12 +32,13 @@ func (q *Queries) GetPullRequest(ctx context.Context, id int64) (PullRequest, er
 		&i.MergedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RiskScore,
 	)
 	return i, err
 }
 
 const getPullRequestByRepoNumber = `-- name: GetPullRequestByRepoNumber :one
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at FROM pull_requests WHERE repository_id = $1 AND number = $2
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score FROM pull_requests WHERE repository_id = $1 AND number = $2
 `
 
 type GetPullRequestByRepoNumberParams struct {
@@ -60,12 +61,13 @@ func (q *Queries) GetPullRequestByRepoNumber(ctx context.Context, arg GetPullReq
 		&i.MergedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RiskScore,
 	)
 	return i, err
 }
 
 const listOpenPullRequestsByRepo = `-- name: ListOpenPullRequestsByRepo :many
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at FROM pull_requests
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score FROM pull_requests
 WHERE repository_id = $1 AND state = 'open'
 ORDER BY number DESC
 `
@@ -91,6 +93,7 @@ func (q *Queries) ListOpenPullRequestsByRepo(ctx context.Context, repositoryID i
 			&i.MergedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RiskScore,
 		); err != nil {
 			return nil, err
 		}
@@ -203,13 +206,33 @@ func (q *Queries) ListPullRequestsWithLatestReview(ctx context.Context) ([]ListP
 	return items, nil
 }
 
+const updatePullRequestRiskScore = `-- name: UpdatePullRequestRiskScore :exec
+UPDATE pull_requests
+SET risk_score = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdatePullRequestRiskScoreParams struct {
+	ID        int64
+	RiskScore pgtype.Int4
+}
+
+// Risk score del tail de Run (§6 F5, T3): proxy 0-100 computable, se pisa en
+// cada corrida. Toca updated_at: la otra escritura de la tabla (estado) hace
+// lo mismo y el listado del dashboard ordena por ahí.
+func (q *Queries) UpdatePullRequestRiskScore(ctx context.Context, arg UpdatePullRequestRiskScoreParams) error {
+	_, err := q.db.Exec(ctx, updatePullRequestRiskScore, arg.ID, arg.RiskScore)
+	return err
+}
+
 const updatePullRequestState = `-- name: UpdatePullRequestState :one
 UPDATE pull_requests
 SET state = $2,
     merged_at = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at
+RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score
 `
 
 type UpdatePullRequestStateParams struct {
@@ -235,6 +258,7 @@ func (q *Queries) UpdatePullRequestState(ctx context.Context, arg UpdatePullRequ
 		&i.MergedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RiskScore,
 	)
 	return i, err
 }
@@ -251,7 +275,7 @@ SET author = EXCLUDED.author,
     base_sha = EXCLUDED.base_sha,
     merged_at = COALESCE(EXCLUDED.merged_at, pull_requests.merged_at),
     updated_at = now()
-RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at
+RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score
 `
 
 type UpsertPullRequestParams struct {
@@ -295,6 +319,7 @@ func (q *Queries) UpsertPullRequest(ctx context.Context, arg UpsertPullRequestPa
 		&i.MergedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RiskScore,
 	)
 	return i, err
 }
