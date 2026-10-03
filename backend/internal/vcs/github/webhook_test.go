@@ -33,11 +33,12 @@ import (
 const testWebhookSecret = "secreto-de-test-del-webhook"
 
 // recordingQueue es el stub de jobs.JobQueue (§4.5: stub de 10 líneas, sin
-// mocks): registra kinds y args encolados.
+// mocks): registra kinds, args encolados y PRs cuyo descarte se pidió.
 type recordingQueue struct {
-	mu    sync.Mutex
-	kinds []string
-	args  []json.RawMessage
+	mu      sync.Mutex
+	kinds   []string
+	args    []json.RawMessage
+	cancels []int64
 }
 
 func (q *recordingQueue) Enqueue(_ context.Context, kind string, args json.RawMessage) error {
@@ -46,6 +47,13 @@ func (q *recordingQueue) Enqueue(_ context.Context, kind string, args json.RawMe
 	q.kinds = append(q.kinds, kind)
 	q.args = append(q.args, args)
 	return nil
+}
+
+func (q *recordingQueue) CancelPendingByPR(_ context.Context, prID int64) (int, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.cancels = append(q.cancels, prID)
+	return 1, nil
 }
 
 func (q *recordingQueue) Register(...jobs.Worker) error { return nil }
@@ -66,6 +74,16 @@ func (q *recordingQueue) last() (string, json.RawMessage) {
 		return "", nil
 	}
 	return q.kinds[len(q.kinds)-1], q.args[len(q.args)-1]
+}
+
+// lastCancel devuelve el último PR cuyo descarte se pidió (0 si ninguno).
+func (q *recordingQueue) lastCancel() int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.cancels) == 0 {
+		return 0
+	}
+	return q.cancels[len(q.cancels)-1]
 }
 
 // deliverySeq garantiza delivery IDs únicos entre fixtures.
@@ -323,25 +341,41 @@ func TestWebhookPRCloseSinJobYMergeEncolaIndice(t *testing.T) {
 		t.Fatalf("opened debe encolar: jobs=%d", e.q.count())
 	}
 
-	// Cierre simple (sin merge): solo estado, sin job (§3.5).
+	// Cierre simple (sin merge): descarte de jobs del PR (§3.5, sin jobs
+	// vivos acá — igual se pide) + MetricsJob (§6 F5).
 	closed := prPayload(repo.ExternalID, 5, "closed", "h1", "b1", "main", func(p map[string]any) {
 		pr := p["pull_request"].(map[string]any)
 		pr["state"] = "closed"
 	})
 	serve(t, e, createSignedPayload(t, "pull_request", closed), http.StatusOK)
-	if e.q.count() != 1 {
-		t.Errorf("close simple no debe encolar (MetricsJob es F5): jobs=%d", e.q.count())
+	if e.q.count() != 2 {
+		t.Fatalf("el cierre debe encolar el MetricsJob: jobs=%d", e.q.count())
+	}
+	kind, args := e.q.last()
+	if kind != jobs.KindMetrics {
+		t.Errorf("el cierre debe encolar el MetricsJob: got %q", kind)
 	}
 	pr, err := e.getPR(t, repo.ID, 5)
 	if err != nil {
 		t.Fatalf("PR: %v", err)
+	}
+	var metricsArgs jobs.MetricsJobArgs
+	if err := json.Unmarshal(args, &metricsArgs); err != nil {
+		t.Fatalf("args del MetricsJob: %v", err)
+	}
+	if metricsArgs.RepositoryID != repo.ID || metricsArgs.PullRequestID != pr.ID {
+		t.Errorf("el MetricsJob debe apuntar al repo y PR cerrados: %+v", metricsArgs)
+	}
+	if got := e.q.lastCancel(); got != pr.ID {
+		t.Errorf("el cierre debe pedir el descarte de jobs del PR %d: pidió %d", pr.ID, got)
 	}
 	if pr.State != "closed" || pr.MergedAt.Valid {
 		t.Errorf("close simple debe dejar closed y sin merged_at: %+v", pr)
 	}
 
 	// Cierre como merge: state closed + merged_at (§3.5) + IndexJob del repo
-	// (§6 F4 — la rama default avanzó).
+	// (§6 F4 — la rama default avanzó). El MetricsJob sale en TODO cierre,
+	// merge incluido: [review, metrics(close), metrics(merge), index].
 	merged := prPayload(repo.ExternalID, 5, "closed", "h1", "b1", "main", func(p map[string]any) {
 		pr := p["pull_request"].(map[string]any)
 		pr["state"] = "closed"
@@ -350,10 +384,10 @@ func TestWebhookPRCloseSinJobYMergeEncolaIndice(t *testing.T) {
 	})
 	serve(t, e, createSignedPayload(t, "pull_request", merged), http.StatusOK)
 
-	if e.q.count() != 2 {
-		t.Fatalf("el merge debe encolar el IndexJob: jobs=%d", e.q.count())
+	if e.q.count() != 4 {
+		t.Fatalf("el merge encola MetricsJob (todo cierre) + IndexJob: jobs=%d", e.q.count())
 	}
-	kind, args := e.q.last()
+	kind, args = e.q.last()
 	if kind != jobs.KindIndex {
 		t.Errorf("kind: got %q want %q", kind, jobs.KindIndex)
 	}

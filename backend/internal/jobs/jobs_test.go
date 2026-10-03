@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -201,6 +202,14 @@ func TestInsertOptsPorKind(t *testing.T) {
 		t.Errorf("IndexJob: unicidad ByArgs con 5 estados activos: got %+v", opts.UniqueOpts)
 	}
 
+	// MetricsJob (§6 F5): cola ops con reintentos baratos y SIN unicidad —
+	// cada cierre encola el suyo y el recompute del worker es idempotente.
+	if opts := insertOpts(KindMetrics); opts.Queue != QueueOps || opts.MaxAttempts != metricsMaxAttempts {
+		t.Errorf("MetricsJob: cola ops con %d intentos: got %+v", metricsMaxAttempts, opts)
+	} else if opts.UniqueOpts.ByArgs || len(opts.UniqueOpts.ByState) != 0 {
+		t.Errorf("MetricsJob: sin unicidad (cada cierre recomputa): got %+v", opts.UniqueOpts)
+	}
+
 	if opts := insertOpts("kind_sin_routing"); opts.Queue != QueueOps {
 		t.Errorf("un kind sin routing va a ops: got %q", opts.Queue)
 	}
@@ -311,5 +320,101 @@ func TestEnqueueIndexJobGuardYUnicidad(t *testing.T) {
 	if cola != QueueReview || intentos != reviewMaxAttempts {
 		t.Errorf("el IndexJob comparte la cola review con %d intentos: cola=%q intentos=%d",
 			reviewMaxAttempts, cola, intentos)
+	}
+}
+
+// CancelPendingByPR (§3.5): descarta los jobs vivos de review y chat del PR
+// pedido (quedan cancelled) y deja intactos los de otros PRs; un PR sin
+// jobs devuelve 0 sin error.
+func TestCancelPendingByPR(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+
+	prA, prB := wNano(), wNano()
+	encolar := func(kind string, prID int64, raw json.RawMessage) {
+		t.Helper()
+		if err := q.Enqueue(ctx, kind, raw); err != nil {
+			t.Fatalf("Enqueue %s pr=%d: %v", kind, prID, err)
+		}
+	}
+	rawA, err := json.Marshal(ReviewJobArgs{PullRequestID: prA, HeadSha: "h1", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encolar(KindReview, prA, rawA)
+	rawChat, err := json.Marshal(ChatJobArgs{
+		RepositoryID: 1, PullRequestID: prA, ParentCommentID: "p1",
+		CommentBody: "b", CommentAuthor: "a", HeadSha: "h1", BaseSha: "b1", Language: "es",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encolar(KindChat, prA, rawChat)
+	rawB, err := json.Marshal(ReviewJobArgs{PullRequestID: prB, HeadSha: "h1", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encolar(KindReview, prB, rawB)
+
+	descartados, err := q.CancelPendingByPR(ctx, prA)
+	if err != nil {
+		t.Fatalf("CancelPendingByPR: %v", err)
+	}
+	if descartados != 2 {
+		t.Errorf("el PR A tiene 2 jobs vivos (review+chat): descartados=%d", descartados)
+	}
+
+	estadoDe := func(kind string, prID int64) string {
+		t.Helper()
+		var estado string
+		if err := st.Pool.QueryRow(ctx,
+			`SELECT state FROM river_job WHERE kind = $1 AND args->>'pull_request_id' = $2
+			 ORDER BY id DESC LIMIT 1`,
+			kind, strconv.FormatInt(prID, 10)).Scan(&estado); err != nil {
+			t.Fatalf("estado de %s pr=%d: %v", kind, prID, err)
+		}
+		return estado
+	}
+	if got := estadoDe(KindReview, prA); got != "cancelled" {
+		t.Errorf("el review del PR A debe quedar cancelled: got %q", got)
+	}
+	if got := estadoDe(KindChat, prA); got != "cancelled" {
+		t.Errorf("el chat del PR A debe quedar cancelled: got %q", got)
+	}
+	if got := estadoDe(KindReview, prB); got != "available" {
+		t.Errorf("el review del PR B debe seguir available: got %q", got)
+	}
+
+	// PR sin jobs vivos: 0 y sin error.
+	if n, err := q.CancelPendingByPR(ctx, wNano()); err != nil || n != 0 {
+		t.Errorf("un PR sin jobs descarta 0 sin error: n=%d err=%v", n, err)
+	}
+}
+
+// MetricsJob (§6 F5): cada cierre encola el suyo — SIN unicidad, dos
+// encolados del mismo PR insertan dos filas — en la cola ops con 3 intentos.
+func TestEnqueueMetricsJobOps(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+
+	repoID, prID := wNano(), wNano()
+	args := fmt.Sprintf(`{"repository_id": %d, "pull_request_id": %d}`, repoID, prID)
+	for i := 0; i < 2; i++ {
+		if err := EnqueueMetricsJob(ctx, q, repoID, prID); err != nil {
+			t.Fatalf("EnqueueMetricsJob %d: %v", i, err)
+		}
+	}
+	var n, intentos int
+	var cola string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT COUNT(1), MAX(queue), MAX(max_attempts) FROM river_job
+		 WHERE kind = $1 AND args = $2`, KindMetrics, args).Scan(&n, &cola, &intentos); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("el MetricsJob no lleva unicidad: cada cierre inserta la suya (n=%d)", n)
+	}
+	if cola != QueueOps || intentos != metricsMaxAttempts {
+		t.Errorf("el MetricsJob va a ops con %d intentos: cola=%q intentos=%d", metricsMaxAttempts, cola, intentos)
 	}
 }

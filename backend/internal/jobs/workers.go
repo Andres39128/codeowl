@@ -1,8 +1,9 @@
 // Workers River del dominio (mapa: backend.jobs, F1): ReviewJob ejecuta el
 // pipeline de revisión (§3.6), CleanupJob la retención (§9.11), RotationJob
 // el re-cifrado al rotar la master key (§9.2), ReconcileJob la
-// reconciliación de PRs al reconectar un repo (§3.5, sin LLM) y IndexJob la
-// indexación RAG de la rama default (§6 F4). El IndexJob consume el gateway
+// reconciliación de PRs al reconectar un repo (§3.5, sin LLM), IndexJob la
+// indexación RAG de la rama default (§6 F4) y MetricsJob el outcome de
+// métricas al cierre del PR (§6 F5, sin LLM). El IndexJob consume el gateway
 // por el rol embedding (index.Gateway) — el resto de workers solo habla con
 // proveedores vía el pipeline de review.
 package jobs
@@ -15,6 +16,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -568,6 +571,225 @@ func (w *IndexJobWorker) Work(ctx context.Context, job *river.Job[IndexJobArgs])
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// MetricsJobWorker — outcome de métricas al cierre del PR (§6 F5, sin LLM)
+// ---------------------------------------------------------------------------
+
+// metricsAgeSkew tolera el skew entre el created_at del comentario (reloj
+// local) y el authored_at del commit (author date del VCS): un commit
+// autorizado hasta 5 min ANTES de publicarse el comentario cuenta como
+// candidato de la heurística de aplicado.
+const metricsAgeSkew = 5 * time.Minute
+
+// tipoInline es el type de comments_sent que el MetricsJob evalúa: los
+// threads del VCS y las sugerencias solo aplican a comentarios inline.
+// Literal espejo de publication.go (mismo criterio que roleEmbedding).
+const tipoInline = "inline"
+
+// MetricsJobWorker escribe el outcome de métricas al cierre del PR (§6 F5):
+// resolved desde los threads del VCS y applied/accepted por heurística de
+// contenido sobre los patches posteriores al comentario. Sin LLM: lee lo que
+// ya existe (comments_sent, findings, timeline del VCS).
+type MetricsJobWorker struct {
+	river.WorkerDefaults[MetricsJobArgs]
+
+	Store    *store.Store
+	Provider vcs.VCSProvider
+}
+
+func (w *MetricsJobWorker) register(b *river.Workers) error { return river.AddWorkerSafely(b, w) }
+
+// Work ejecuta el outcome. El guard de estado es lo primero: un PR reabierto
+// tras el cierre no tiene timeline final (§6 F5) — skip honesto, sin error.
+func (w *MetricsJobWorker) Work(ctx context.Context, job *river.Job[MetricsJobArgs]) error {
+	args := job.Args
+	pr, err := w.Store.GetPullRequest(ctx, args.PullRequestID)
+	if err != nil {
+		return fmt.Errorf("cargando el PR %d: %w", args.PullRequestID, err)
+	}
+	if pr.State != "closed" {
+		slog.Info("metrics job omitido: el PR no está cerrado (reabierto tras el cierre, §6 F5)",
+			"pr", pr.Number, "state", pr.State)
+		return nil
+	}
+	repo, err := w.Store.GetRepository(ctx, args.RepositoryID)
+	if err != nil {
+		return fmt.Errorf("cargando el repo %d: %w", args.RepositoryID, err)
+	}
+	// Fallo honesto: reintenta ×3 y queda discarded (visible en §9.9) —
+	// peor que eso es marcar outcomes sobre una timeline a medias.
+	tl, err := w.Provider.FetchPRTimeline(ctx, &repo, &pr)
+	if err != nil {
+		return fmt.Errorf("trayendo la timeline del PR %d: %w", pr.Number, err)
+	}
+
+	resueltos, err := w.markResolved(ctx, args.PullRequestID, tl.Threads)
+	if err != nil {
+		return err
+	}
+	aplicados, err := w.markApplied(ctx, args.PullRequestID, tl.Commits)
+	if err != nil {
+		return err
+	}
+	slog.Info("metrics job completado", "pr", pr.Number,
+		"threads_resueltos", resueltos, "outcomes_aplicados", aplicados)
+	return nil
+}
+
+// markResolved escribe comments_sent.resolved para cada hilo del VCS que
+// matchea un comentario inline nuestro por comment_id. Los hilos sin fila
+// propia no son comentarios del bot: se ignoran (§6 F5).
+func (w *MetricsJobWorker) markResolved(ctx context.Context, prID int64, threads []vcs.PRThread) (int, error) {
+	inlines, err := w.Store.GetCommentsSentByPRAndType(ctx, store.GetCommentsSentByPRAndTypeParams{
+		PullRequestID: prID, Type: tipoInline,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("cargando los comentarios inline del PR %d: %w", prID, err)
+	}
+	porCommentID := make(map[string]store.CommentsSent, len(inlines))
+	for _, cs := range inlines {
+		porCommentID[cs.CommentID] = cs
+	}
+
+	escritos := 0
+	for _, th := range threads {
+		cs, ok := porCommentID[th.CommentID]
+		if !ok {
+			continue
+		}
+		if err := w.Store.UpdateCommentsSentResolved(ctx, store.UpdateCommentsSentResolvedParams{
+			ID: cs.ID, Resolved: pgtype.Bool{Bool: th.Resolved, Valid: true},
+		}); err != nil {
+			return escritos, fmt.Errorf("marcando resolved del comentario %d: %w", cs.ID, err)
+		}
+		escritos++
+	}
+	return escritos, nil
+}
+
+// markApplied resuelve applied por heurística de contenido (§6 F5): el
+// código sugerido de un comentario inline aparece en las líneas añadidas de
+// un commit posterior al comentario → applied=true; recorrí todos los
+// candidatos sin match → applied=false. El hallazgo matcheado recibe el
+// MISMO valor en accepted (espejo). Sin hallazgo con sugerencia identificable
+// para el comentario, este queda en null: sin evaluación honesta.
+func (w *MetricsJobWorker) markApplied(ctx context.Context, prID int64, commits []vcs.PRCommit) (int, error) {
+	inlines, err := w.Store.GetCommentsSentByPRAndType(ctx, store.GetCommentsSentByPRAndTypeParams{
+		PullRequestID: prID, Type: tipoInline,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("cargando los comentarios inline del PR %d: %w", prID, err)
+	}
+	findings, err := w.Store.ListFindingsByPR(ctx, prID)
+	if err != nil {
+		return 0, fmt.Errorf("cargando los hallazgos del PR %d: %w", prID, err)
+	}
+
+	// Huella (review, file, categoría) → hallazgos con sugerencia. El ancla
+	// vive SOLO en comments_sent (findings no tiene columna): con varios
+	// candidatos desambigua elegirFinding por ancla numérica.
+	porHuella := make(map[string][]store.Finding, len(findings))
+	for _, f := range findings {
+		if !f.Suggestion.Valid || f.Suggestion.String == "" {
+			continue
+		}
+		k := fmt.Sprintf("%d|%s|%s", f.ReviewID, f.File, f.Category)
+		porHuella[k] = append(porHuella[k], f)
+	}
+
+	escritos := 0
+	for _, cs := range inlines {
+		if !cs.ReviewID.Valid || !cs.File.Valid || !cs.Category.Valid {
+			continue
+		}
+		cands := porHuella[fmt.Sprintf("%d|%s|%s", cs.ReviewID.Int64, cs.File.String, cs.Category.String)]
+		f, ok := elegirFinding(cands, cs)
+		if !ok {
+			continue
+		}
+		aplicado := sugerenciaEnPatches(normalizar(f.Suggestion.String), cs.CreatedAt.Time, commits)
+		if err := w.Store.UpdateCommentsSentApplied(ctx, store.UpdateCommentsSentAppliedParams{
+			ID: cs.ID, Applied: pgtype.Bool{Bool: aplicado, Valid: true},
+		}); err != nil {
+			return escritos, fmt.Errorf("marcando applied del comentario %d: %w", cs.ID, err)
+		}
+		if err := w.Store.UpdateFindingAccepted(ctx, store.UpdateFindingAcceptedParams{
+			ID: f.ID, Accepted: pgtype.Bool{Bool: aplicado, Valid: true},
+		}); err != nil {
+			return escritos, fmt.Errorf("marcando accepted del hallazgo %d: %w", f.ID, err)
+		}
+		escritos++
+	}
+	return escritos, nil
+}
+
+// elegirFinding resuelve EL hallazgo de un comentario inline: un único
+// candidato con sugerencia para la huella (review, file, categoría) gana;
+// con varios, desambigua por ancla numérica (= línea del hallazgo, el modo
+// legacy de anchorFor). Sigue ambiguo (ancla simbólica) → false: el
+// comentario queda sin evaluar en vez de atribuirle un outcome ajeno.
+func elegirFinding(cands []store.Finding, cs store.CommentsSent) (store.Finding, bool) {
+	switch {
+	case len(cands) == 1:
+		return cands[0], true
+	case len(cands) == 0 || !cs.Anchor.Valid:
+		return store.Finding{}, false
+	}
+	ln, err := strconv.Atoi(strings.TrimSpace(cs.Anchor.String))
+	if err != nil {
+		return store.Finding{}, false // ancla simbólica: no desambigua
+	}
+	for _, f := range cands {
+		if int(f.Line) == ln {
+			return f, true
+		}
+	}
+	return store.Finding{}, false
+}
+
+// sugerenciaEnPatches aplica la heurística (§6 F5): la sugerencia —
+// normalizada whitespace — aparece en las líneas añadidas de un commit con
+// authored_at ≥ created_at del comentario (skew de 5 min). Commit sin fecha
+// (best-effort del adapter, T2) cuenta como elegible. El fence
+// ```suggestion``` no se procesa: findings.suggestion guarda el código crudo
+// — el fence lo agrega la publicación al armar el cuerpo.
+func sugerenciaEnPatches(sugerencia string, comentadoEn time.Time, commits []vcs.PRCommit) bool {
+	if sugerencia == "" {
+		return false
+	}
+	limite := comentadoEn.Add(-metricsAgeSkew)
+	for _, c := range commits {
+		if !c.AuthoredAt.IsZero() && c.AuthoredAt.Before(limite) {
+			continue // anterior al comentario: no puede ser "lo aplicaron"
+		}
+		if c.AuthoredAt.IsZero() {
+			slog.Debug("metrics: commit sin fecha de autoría, cuenta como elegible", "sha", c.SHA)
+		}
+		if strings.Contains(normalizar(lineasAgregadas(c.Patch)), sugerencia) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizar colapsa runs de whitespace a un espacio y recorta extremos: la
+// comparación de contenido ignora indentación y saltos de línea.
+func normalizar(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// lineasAgregadas extrae el contenido añadido del patch unificado: las
+// líneas '+' (sin el marcador; '+++' es metadata del diff). El código
+// borrado ('-') jamás matchea: lo aplicado vive del lado nuevo.
+func lineasAgregadas(patch string) string {
+	var b strings.Builder
+	for _, ln := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(ln, "+") && !strings.HasPrefix(ln, "+++") {
+			b.WriteString(ln[1:])
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
 // Satisfacción de interfaces en tiempo de compilación: el worker consume
 // exactamente el contrato que declara.
 var (
@@ -577,12 +799,14 @@ var (
 	_ river.Worker[RotationJobArgs]  = (*RotationJobWorker)(nil)
 	_ river.Worker[ReconcileJobArgs] = (*ReconcileJobWorker)(nil)
 	_ river.Worker[IndexJobArgs]     = (*IndexJobWorker)(nil)
+	_ river.Worker[MetricsJobArgs]   = (*MetricsJobWorker)(nil)
 	_ Worker                         = (*ReviewJobWorker)(nil)
 	_ Worker                         = (*ChatJobWorker)(nil)
 	_ Worker                         = (*CleanupJobWorker)(nil)
 	_ Worker                         = (*RotationJobWorker)(nil)
 	_ Worker                         = (*ReconcileJobWorker)(nil)
 	_ Worker                         = (*IndexJobWorker)(nil)
+	_ Worker                         = (*MetricsJobWorker)(nil)
 	_ review.Gateway                 = (*llm.Gateway)(nil)
 	_ review.Analyzer                = (*analyze.Runner)(nil)
 	_ review.Retriever               = indexRetriever{}

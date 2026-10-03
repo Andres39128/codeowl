@@ -124,6 +124,8 @@ type wProvider struct {
 	diff           string
 	diffErr        error
 	openPRs        []vcs.OpenPR
+	timeline       *vcs.PRTimeline // FetchPRTimeline: nil → timeline vacía
+	timelineErr    error
 }
 
 func (p *wProvider) HandleWebhook(context.Context, http.ResponseWriter, *http.Request) {
@@ -140,7 +142,13 @@ func (p *wProvider) FetchDefaultBranch(_ context.Context, _ *store.Repository, w
 	return wGitInit(workdir)
 }
 func (p *wProvider) FetchPRTimeline(context.Context, *store.Repository, *store.PullRequest) (*vcs.PRTimeline, error) {
-	return &vcs.PRTimeline{}, nil
+	if p.timelineErr != nil {
+		return nil, p.timelineErr
+	}
+	if p.timeline == nil {
+		return &vcs.PRTimeline{}, nil
+	}
+	return p.timeline, nil
 }
 func (p *wProvider) GetDiff(context.Context, *store.Repository, *store.PullRequest) (string, error) {
 	return p.diff, p.diffErr
@@ -238,7 +246,8 @@ func (q *wQueue) Enqueue(_ context.Context, kind string, _ json.RawMessage) erro
 	q.kinds = append(q.kinds, kind)
 	return nil
 }
-func (q *wQueue) Register(...Worker) error { return nil }
+func (q *wQueue) CancelPendingByPR(context.Context, int64) (int, error) { return 0, nil }
+func (q *wQueue) Register(...Worker) error                             { return nil }
 func (q *wQueue) Start(context.Context) error {
 	return nil
 }
@@ -917,5 +926,189 @@ func TestIndexRetrieverAdapterIndiceVacio(t *testing.T) {
 	syms, err := retr.RetrieveRelated(context.Background(), 42, "main.go", "package main")
 	if err != nil || syms != nil {
 		t.Errorf("con índice vacío querés (nil, nil): got (%v, %v)", syms, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MetricsJobWorker (§6 F5)
+// ---------------------------------------------------------------------------
+
+// mInline siembra un comentario inline con huella y devuelve la fila.
+func mInline(t *testing.T, st *store.Store, prID, revID int64, commentID, category, anchor string) store.CommentsSent {
+	t.Helper()
+	cs, err := st.CreateCommentSent(context.Background(), store.CreateCommentSentParams{
+		PullRequestID: prID, ReviewID: pgtype.Int8{Int64: revID, Valid: true},
+		CommentID: commentID, Type: "inline",
+		File:     pgtype.Text{String: "main.go", Valid: true},
+		Category: pgtype.Text{String: category, Valid: true},
+		Anchor:   pgtype.Text{String: anchor, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateCommentSent(%s): %v", commentID, err)
+	}
+	return cs
+}
+
+// MetricsJobWorker outcome (§6 F5): resolved se escribe desde los threads del
+// VCS matcheando comment_id (hilos ajenos se ignoran); applied sale de la
+// heurística de contenido — sugerencia en las líneas añadidas de un commit
+// POSTERIOR al comentario — y el hallazgo matcheado lleva el mismo valor en
+// accepted. El commit anterior al comentario no aplica (skew de 5 min) y el
+// comentario sin hallazgo con sugerencia queda en null (sin evaluación
+// honesta).
+func TestMetricsJobWorkerOutcome(t *testing.T) {
+	_, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	pr := wPR(t, st, repo.ID, 1)
+	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
+	if _, err := st.UpdatePullRequestState(ctx, store.UpdatePullRequestStateParams{
+		ID: pr.ID, State: "closed", MergedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rev, err := st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fAcc, err := st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: rev.ID, File: "main.go", Line: 10, Severity: "high",
+		Category: "security", Body: "body-sec", Source: "llm",
+		Suggestion: pgtype.Text{String: "db.Query(q, arg)", Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fViejo, err := st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: rev.ID, File: "main.go", Line: 30, Severity: "low",
+		Category: "tests", Body: "body-test", Source: "llm",
+		Suggestion: pgtype.Text{String: "fixViejo()", Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: rev.ID, File: "main.go", Line: 20, Severity: "medium",
+		Category: "performance", Body: "body-perf", Source: "llm",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cs1 := mInline(t, st, pr.ID, rev.ID, "t-1", "security", "10")
+	cs2 := mInline(t, st, pr.ID, rev.ID, "t-2", "performance", "20")
+	cs3 := mInline(t, st, pr.ID, rev.ID, "t-3", "tests", "30")
+
+	prov := &wProvider{timeline: &vcs.PRTimeline{
+		Threads: []vcs.PRThread{
+			{CommentID: "t-1", Resolved: true},
+			{CommentID: "t-2", Resolved: false},
+			{CommentID: "ajeno", Resolved: true}, // hilo que no es del bot: ignorado
+		},
+		Commits: []vcs.PRCommit{
+			{
+				SHA: "nuevo", AuthoredAt: time.Now(), // posterior al comentario
+				Patch: "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -10,1 +10,1 @@\n-old()\n+\tdb.Query(q, arg)\n",
+			},
+			{
+				SHA: "viejo", AuthoredAt: time.Now().Add(-time.Hour), // anterior: fuera del skew
+				Patch: "diff --git a/main_test.go b/main_test.go\n--- a/main_test.go\n+++ b/main_test.go\n@@ -1,1 +1,2 @@\n+fixViejo()\n",
+			},
+		},
+	}}
+	w := &MetricsJobWorker{Store: st, Provider: prov}
+	if err := w.Work(ctx, wJob(MetricsJobArgs{RepositoryID: repo.ID, PullRequestID: pr.ID}, 1, metricsMaxAttempts)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	inlines, err := st.GetCommentsSentByPRAndType(ctx, store.GetCommentsSentByPRAndTypeParams{
+		PullRequestID: pr.ID, Type: "inline",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	porID := make(map[string]store.CommentsSent, len(inlines))
+	for _, cs := range inlines {
+		porID[cs.CommentID] = cs
+	}
+	if got := porID[cs1.CommentID]; !got.Resolved.Valid || !got.Resolved.Bool ||
+		!got.Applied.Valid || !got.Applied.Bool {
+		t.Errorf("t-1: resolved∧applied esperados true: got %+v", got)
+	}
+	if got := porID[cs2.CommentID]; !got.Resolved.Valid || got.Resolved.Bool || got.Applied.Valid {
+		t.Errorf("t-2: resolved=false y applied NULL (hallazgo sin sugerencia): got %+v", got)
+	}
+	if got := porID[cs3.CommentID]; got.Resolved.Valid || !got.Applied.Valid || got.Applied.Bool {
+		t.Errorf("t-3: resolved NULL (sin thread) y applied=false (commit anterior): got %+v", got)
+	}
+
+	// Espejo en findings: el matcheado aceptado; el del commit viejo no.
+	findings, err := st.ListFindingsByPR(ctx, pr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aceptados := map[int64]bool{}
+	for _, f := range findings {
+		if f.Accepted.Valid {
+			aceptados[f.ID] = f.Accepted.Bool
+		}
+	}
+	if !aceptados[fAcc.ID] {
+		t.Errorf("finding %d debe quedar accepted=true (sugerencia en el commit nuevo)", fAcc.ID)
+	}
+	if val, ok := aceptados[fViejo.ID]; !ok || val {
+		t.Errorf("finding %d debe quedar accepted=false (su commit es anterior al comentario)", fViejo.ID)
+	}
+}
+
+// Guard del estado (§6 F5): un PR reabierto tras el cierre no tiene timeline
+// final — skip honesto sin error y SIN tocar el proveedor (el error del stub
+// delata cualquier llamada) ni las filas.
+func TestMetricsJobWorkerReabiertoSeSalta(t *testing.T) {
+	_, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	pr := wPR(t, st, repo.ID, 2) // sigue open: wPR nace open
+	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
+
+	rev, err := st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mInline(t, st, pr.ID, rev.ID, "t-open", "security", "1")
+	prov := &wProvider{timelineErr: errors.New("wProvider: FetchPRTimeline no esperado")}
+	w := &MetricsJobWorker{Store: st, Provider: prov}
+	if err := w.Work(ctx, wJob(MetricsJobArgs{RepositoryID: repo.ID, PullRequestID: pr.ID}, 1, metricsMaxAttempts)); err != nil {
+		t.Fatalf("el guard debe saltar sin error: %v", err)
+	}
+	filas, err := st.GetCommentsSentByPRAndType(ctx, store.GetCommentsSentByPRAndTypeParams{
+		PullRequestID: pr.ID, Type: "inline",
+	})
+	if err != nil || len(filas) != 1 {
+		t.Fatalf("GetCommentsSentByPRAndType: n=%d err=%v", len(filas), err)
+	}
+	if filas[0].Resolved.Valid {
+		t.Errorf("el PR abierto no escribe outcomes: got %+v", filas[0].Resolved)
+	}
+}
+
+// La timeline que falla es un error de verdad: River reintenta (×3) y al
+// agotar deja discarded — jamás outcomes sobre una timeline a medias (§6 F5).
+func TestMetricsJobWorkerTimelineFalla(t *testing.T) {
+	_, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	pr := wPR(t, st, repo.ID, 3)
+	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
+	if _, err := st.UpdatePullRequestState(ctx, store.UpdatePullRequestStateParams{
+		ID: pr.ID, State: "closed", MergedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &wProvider{timelineErr: errors.New("vcs caído")}
+	w := &MetricsJobWorker{Store: st, Provider: prov}
+	if err := w.Work(ctx, wJob(MetricsJobArgs{RepositoryID: repo.ID, PullRequestID: pr.ID}, 1, metricsMaxAttempts)); err == nil {
+		t.Error("el fallo de la timeline debe pedir reintento (error)")
 	}
 }

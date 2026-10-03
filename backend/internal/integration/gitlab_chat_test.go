@@ -499,13 +499,21 @@ func TestGitLabWebhookToChat(t *testing.T) {
 		t.Errorf("/review no debe registrar comments_sent: %+v err=%v", sent, err)
 	}
 
-	// -- 5. Cierre del MR (webhook close) + /review: negativa sin encolar -----
+	// -- 5. Cierre del MR (webhook close): MetricsJob del cierre (§6 F5) ------
 	resp = postGitlabWebhook(t, apiSrv.URL, glMRPayload(glProjectID, glMRIID, "close", glHeadSHA, "main"), &deliveries)
 	if resp.StatusCode/100 != 2 {
 		t.Fatalf("close: la API debe responder 2xx, fue %d", resp.StatusCode)
 	}
-	if jobs := q.pending(); len(jobs) != 0 {
-		t.Errorf("close no debe encolar (MetricsJob es F5): encoló %+v", jobs)
+	cierre := q.pending()
+	if len(cierre) != 1 || cierre[0].Kind != jobs.KindMetrics {
+		t.Fatalf("close debe encolar solo el MetricsJob: got %+v", cierre)
+	}
+	var metricsArgs jobs.MetricsJobArgs
+	if err := json.Unmarshal(cierre[0].Args, &metricsArgs); err != nil {
+		t.Fatalf("args del MetricsJob: %v", err)
+	}
+	if metricsArgs.RepositoryID != repo.ID || metricsArgs.PullRequestID != pr.ID {
+		t.Errorf("el MetricsJob debe apuntar al repo y MR cerrados: %+v", metricsArgs)
 	}
 	pr, err = st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
 		RepositoryID: repo.ID, Number: glMRIID,

@@ -116,6 +116,9 @@ func main() {
 				DefaultProfile:   cfg.Stage2.ReviewDefaultProfile,
 			},
 		},
+		&jobs.MetricsJobWorker{
+			Store: st, Provider: provider,
+		},
 	); err != nil {
 		slog.Error("registrando workers", "err", err)
 		os.Exit(1)

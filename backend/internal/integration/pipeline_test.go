@@ -107,9 +107,10 @@ func (q *capturedQueue) Enqueue(_ context.Context, kind string, args json.RawMes
 	q.ch <- enqueuedJob{Kind: kind, Args: args}
 	return nil
 }
-func (q *capturedQueue) Register(...jobs.Worker) error { return nil }
-func (q *capturedQueue) Start(context.Context) error   { return nil }
-func (q *capturedQueue) Stop(context.Context) error    { return nil }
+func (q *capturedQueue) CancelPendingByPR(context.Context, int64) (int, error) { return 0, nil }
+func (q *capturedQueue) Register(...jobs.Worker) error                        { return nil }
+func (q *capturedQueue) Start(context.Context) error                          { return nil }
+func (q *capturedQueue) Stop(context.Context) error                           { return nil }
 
 // pending drena el canal sin bloquear: los jobs encolados hasta ahora.
 func (q *capturedQueue) pending() []enqueuedJob {
@@ -560,15 +561,23 @@ func TestGitHubWebhookToReview(t *testing.T) {
 		t.Errorf("la fila del PR debe reflejar el head nuevo: %+v err=%v", pr, err)
 	}
 
-	// -- 5. Webhook closed: estado actualizado, SIN job nuevo -----------------
+	// -- 5. Webhook closed: estado actualizado + MetricsJob (§6 F5) -----------
 	resp = postWebhook(t, apiSrv.URL, "pull_request",
 		prPayload(repo.ExternalID, prNumber, "closed", syncHead, fakeBase, "closed"), &deliveries)
 	if resp.StatusCode/100 != 2 {
 		t.Fatalf("closed: la API debe responder 2xx, fue %d", resp.StatusCode)
 	}
 
-	if jobs := q.pending(); len(jobs) != 0 {
-		t.Errorf("closed no debe encolar (el MetricsJob llega en F5): encoló %d", len(jobs))
+	cierre := q.pending()
+	if len(cierre) != 1 || cierre[0].Kind != jobs.KindMetrics {
+		t.Fatalf("closed debe encolar solo el MetricsJob: got %+v", cierre)
+	}
+	var metricsArgs jobs.MetricsJobArgs
+	if err := json.Unmarshal(cierre[0].Args, &metricsArgs); err != nil {
+		t.Fatalf("args del MetricsJob: %v", err)
+	}
+	if metricsArgs.RepositoryID != repo.ID || metricsArgs.PullRequestID != pr.ID {
+		t.Errorf("el MetricsJob debe apuntar al repo y PR cerrados: %+v", metricsArgs)
 	}
 	pr, err = st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
 		RepositoryID: repo.ID, Number: prNumber,

@@ -226,10 +226,10 @@ func filterEvent(event string, p *webhookPayload) bool {
 }
 
 // handlePullRequest upserta el PR (idempotente por repo+number) y encola el
-// ReviewJob para las acciones de review. El cierre actualiza estado (el
-// merge además re-encola el IndexJob, §6 F4); el MetricsJob llega en F5
-// (§3.5). converted_to_draft y el resto de acciones nunca llegan acá: las
-// corta filterEvent.
+// ReviewJob para las acciones de review. El cierre (§3.5) descarta los jobs
+// vivos del PR (cero LLM), encola el MetricsJob (§6 F5) y — si fue merge —
+// re-encola el IndexJob (§6 F4). converted_to_draft y el resto de acciones
+// nunca llegan acá: las corta filterEvent.
 func (a *Adapter) handlePullRequest(ctx context.Context, repo store.Repository, p *webhookPayload) error {
 	pr := p.PullRequest
 	mergedAt := pgtype.Timestamptz{}
@@ -252,10 +252,25 @@ func (a *Adapter) handlePullRequest(ctx context.Context, repo store.Repository, 
 	}
 
 	if p.Action == "closed" {
-		// Cierre: solo estado (§3.5) — el descarte de jobs pendientes del PR
-		// lo hace el worker desde su tarea de jobs. Merge (§6 F4): la rama
-		// default avanzó — re-encola el índice del repo (la guarda de rol
-		// embedding vive en EnqueueIndexJob; sin proveedor queda latente).
+		// Cierre (§3.5): descarte best-effort de los jobs vivos del PR,
+		// PRIMERO — cancelar antes de encolar evita la carrera donde una
+		// review en vuelo publica sobre un PR cerrado (el re-chequeo de
+		// stale en Run queda de respaldo). El MetricsJob (§6 F5) escribe el
+		// outcome sobre las filas que ya existen, sin LLM. Merge (§6 F4):
+		// la rama default avanzó — re-encola el índice del repo (la guarda
+		// de rol embedding vive en EnqueueIndexJob; sin proveedor queda
+		// latente).
+		descartados, err := a.jq.CancelPendingByPR(ctx, row.ID)
+		if err != nil {
+			slog.WarnContext(ctx, "webhook github: fallo el descarte de jobs del PR (best-effort)",
+				"pr", pr.Number, "err", err)
+		} else {
+			slog.InfoContext(ctx, "webhook github: jobs del PR descartados al cierre",
+				"pr", pr.Number, "descartados", descartados)
+		}
+		if err := jobs.EnqueueMetricsJob(ctx, a.jq, repo.ID, row.ID); err != nil {
+			return fmt.Errorf("encolando MetricsJob del PR %d: %w", pr.Number, err)
+		}
 		slog.InfoContext(ctx, "webhook github: PR cerrado", "pr", pr.Number, "merged", pr.MergedAt != nil)
 		if mergedAt.Valid {
 			if err := jobs.EnqueueIndexJob(ctx, a.st, a.jq, repo.ID); err != nil {

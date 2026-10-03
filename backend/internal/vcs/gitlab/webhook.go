@@ -285,9 +285,9 @@ func (a *Adapter) dispatch(ctx context.Context, repo store.Repository, p *webhoo
 // handleMergeRequest procesa merge_request (§3.5): open/reopen y el update
 // que pasó el filtro upsertan el PR y encolan el ReviewJob — resolviendo el
 // tip de la rama base por API, porque el payload no trae SHA de la base
-// (§3.6.1.1). close/merge actualizan estado (el merge además re-encola el
-// IndexJob, §6 F4; MetricsJob es F5); el descarte de jobs pendientes del PR
-// lo hace el worker.
+// (§3.6.1.1). close/merge actualizan estado, descartan los jobs vivos del
+// MR (§3.5, cero LLM) y encolan el MetricsJob (§6 F5); el merge además
+// re-encola el IndexJob (§6 F4).
 func (a *Adapter) handleMergeRequest(ctx context.Context, repo store.Repository, p *webhookPayload) error {
 	var attrs glMRAttrs
 	if err := json.Unmarshal(p.ObjectAttributes, &attrs); err != nil {
@@ -317,9 +317,24 @@ func (a *Adapter) handleMergeRequest(ctx context.Context, repo store.Repository,
 		}); err != nil {
 			return fmt.Errorf("cerrando el MR %d: %w", attrs.IID, err)
 		}
-		// §6 F4: solo el merge cambia la rama default — re-encola el índice
-		// del repo (la guarda de rol embedding vive en EnqueueIndexJob; sin
-		// proveedor queda latente). El MetricsJob sigue siendo F5 (§3.5).
+		// Cierre (§3.5): descarte best-effort de los jobs vivos del MR,
+		// PRIMERO — cancelar antes de encolar evita la carrera donde una
+		// review en vuelo publica sobre un MR cerrado (el re-chequeo de
+		// stale en Run queda de respaldo). El MetricsJob (§6 F5) escribe el
+		// outcome sin LLM. Solo el merge cambia la rama default (§6 F4) —
+		// re-encola el índice del repo (la guarda de rol embedding vive en
+		// EnqueueIndexJob; sin proveedor queda latente).
+		descartados, err := a.jq.CancelPendingByPR(ctx, pr.ID)
+		if err != nil {
+			slog.WarnContext(ctx, "webhook gitlab: fallo el descarte de jobs del MR (best-effort)",
+				"mr", attrs.IID, "err", err)
+		} else {
+			slog.InfoContext(ctx, "webhook gitlab: jobs del MR descartados al cierre",
+				"mr", attrs.IID, "descartados", descartados)
+		}
+		if err := jobs.EnqueueMetricsJob(ctx, a.jq, repo.ID, pr.ID); err != nil {
+			return fmt.Errorf("encolando MetricsJob del MR %d: %w", attrs.IID, err)
+		}
 		if attrs.Action == "merge" {
 			if err := jobs.EnqueueIndexJob(ctx, a.st, a.jq, repo.ID); err != nil {
 				return fmt.Errorf("encolando IndexJob tras merge del MR %d: %w", attrs.IID, err)

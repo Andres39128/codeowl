@@ -38,6 +38,7 @@ type Server struct {
 type nopQueue struct{}
 
 func (nopQueue) Enqueue(context.Context, string, json.RawMessage) error { return nil }
+func (nopQueue) CancelPendingByPR(context.Context, int64) (int, error)  { return 0, nil }
 func (nopQueue) Register(...jobs.Worker) error                          { return nil }
 func (nopQueue) Start(context.Context) error                            { return nil }
 func (nopQueue) Stop(context.Context) error                             { return nil }

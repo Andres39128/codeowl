@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
@@ -30,7 +31,8 @@ const (
 	KindCleanup   = "cleanup"
 	KindRotation  = "rotation"
 	KindReconcile = "reconcile"
-	KindIndex     = "index" // F4
+	KindIndex     = "index"   // F4
+	KindMetrics   = "metrics" // F5
 )
 
 // Colas River (§9.6): review y chat corren con slots propios — el SLO de
@@ -50,6 +52,11 @@ const (
 // tope del review (§9.6): el resume por hash hace barato el reintento.
 // ponytail: constante, no config — subirla a Stage2 si ops pide afinarla.
 const reviewMaxAttempts = 5
+
+// metricsMaxAttempts es el tope del MetricsJob (§6 F5): sin LLM, cada
+// intento es barato — 3 intentos bastan y el fallo persistente queda
+// discarded (visible en el panel de cola, §9.9).
+const metricsMaxAttempts = 3
 
 // roleEmbedding es el rol que habilita el encolado del IndexJob (§6 F4).
 // Espejo del roleEmbedding de index: un valor literal — importar el paquete
@@ -115,6 +122,16 @@ type IndexJobArgs struct {
 
 func (IndexJobArgs) Kind() string { return KindIndex }
 
+// MetricsJobArgs son los argumentos del MetricsJob (§6 F5): el cierre del PR
+// es el trigger — el outcome (resolved/applied/accepted) se escribe UNA vez
+// sobre las filas que ya existen, sin LLM.
+type MetricsJobArgs struct {
+	RepositoryID  int64 `json:"repository_id"`
+	PullRequestID int64 `json:"pull_request_id"`
+}
+
+func (MetricsJobArgs) Kind() string { return KindMetrics }
+
 // Worker es lo que Register acepta: un worker River concreto de este
 // paquete. Un método de interfaz no puede ser genérico, así que cada worker
 // implementa register con river.AddWorkerSafely y la interfaz queda libre de
@@ -129,6 +146,13 @@ type JobQueue interface {
 	// Enqueue encola un job por kind con argumentos JSON crudos. El ReviewJob
 	// se encola único por PR (§3.6.1.4) — la unicidad la aplica la cola.
 	Enqueue(ctx context.Context, kind string, args json.RawMessage) error
+
+	// CancelPendingByPR descarta los jobs de review y chat vivos de un PR
+	// (§3.5: al cierre, cero LLM). Best-effort: los encolados se cancelan al
+	// instante; un job en vuelo se marca para cancelación y el worker corta
+	// en el próximo chequeo (el re-chequeo de stale de Run queda de
+	// respaldo). Devuelve cuántos jobs se descartaron.
+	CancelPendingByPR(ctx context.Context, pullRequestID int64) (int, error)
 
 	// Register agrega workers de dominio; debe llamarse antes de Start. La
 	// API no registra workers: su cliente es insert-only.
@@ -227,7 +251,9 @@ func uniqueWhileAliveStates() []rivertype.JobState {
 // insertOpts resuelve la cola y las opciones por kind: review e index
 // comparten la cola review y el tope de intentos (§9.6/§9.7; review además
 // unicidad §3.6.1.4, index unicidad por repo §9.6); chat lleva su cola con
-// tope de intentos; el resto va a ops.
+// tope de intentos; metrics va a ops con reintentos baratos y SIN unicidad
+// (§6 F5: cada cierre encola el suyo — el recompute del worker es
+// idempotente); el resto va a ops.
 func insertOpts(kind string) *river.InsertOpts {
 	opts := &river.InsertOpts{Queue: QueueOps}
 	switch kind {
@@ -238,6 +264,8 @@ func insertOpts(kind string) *river.InsertOpts {
 	case KindChat:
 		opts.Queue = QueueChat
 		opts.MaxAttempts = reviewMaxAttempts
+	case KindMetrics:
+		opts.MaxAttempts = metricsMaxAttempts
 	}
 	return opts
 }
@@ -284,6 +312,70 @@ func EnqueueIndexJob(ctx context.Context, st *store.Store, jq JobQueue, repoID i
 		return fmt.Errorf("encolando IndexJob: %w", err)
 	}
 	return nil
+}
+
+// EnqueueMetricsJob encola el MetricsJob del PR (§6 F5): el outcome de
+// métricas se computa al cierre, UNA vez, sobre filas existentes y sin LLM.
+// Sin guarda de proveedor: el recompute del worker es idempotente y el job
+// mismo resuelve el guard de estado (PR closed) en el worker.
+func EnqueueMetricsJob(ctx context.Context, jq JobQueue, repoID, prID int64) error {
+	args, err := json.Marshal(MetricsJobArgs{RepositoryID: repoID, PullRequestID: prID})
+	if err != nil {
+		return fmt.Errorf("serializando args del MetricsJob: %w", err)
+	}
+	if err := jq.Enqueue(ctx, KindMetrics, args); err != nil {
+		return fmt.Errorf("encolando MetricsJob: %w", err)
+	}
+	return nil
+}
+
+// cancelableStates son los estados vivos de river_job para el descarte al
+// cierre (§3.5): el mismo conjunto de uniqueWhileAliveStates. 'pending' es
+// legacy del enum (River v0.48 inserta 'available') pero se incluye por
+// paridad — un job viejo pendiente también es LLM vivo.
+const cancelableStates = `'available', 'pending', 'retryable', 'running', 'scheduled'`
+
+// CancelPendingByPR descarta los jobs de review y chat vivos de un PR (§3.5:
+// cierre → cero LLM). El SELECT es SQL crudo sobre river_job — mismo
+// criterio que api/queue.go: es tabla de River, no dominio de store, y
+// leerla por sqlc acoplaría store al schema de River. El match es por el
+// campo del payload (args->>'pull_request_id', tags json de los args de
+// review y chat). Best-effort por job: un fallo de cancel individual se
+// loguea y continúa (descarte parcial honesto; el re-chequeo de stale de
+// Run es el respaldo contra el job que escapa).
+func (q *RiverQueue) CancelPendingByPR(ctx context.Context, pullRequestID int64) (int, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT id FROM river_job
+		WHERE kind IN ('`+KindReview+`', '`+KindChat+`')
+		  AND state IN (`+cancelableStates+`)
+		  AND args->>'pull_request_id' = $1`,
+		strconv.FormatInt(pullRequestID, 10))
+	if err != nil {
+		return 0, fmt.Errorf("consultando jobs vivos del PR %d: %w", pullRequestID, err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, fmt.Errorf("escaneando jobs vivos del PR %d: %w", pullRequestID, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterando jobs vivos del PR %d: %w", pullRequestID, err)
+	}
+
+	descartados := 0
+	for _, id := range ids {
+		if _, err := q.client.JobCancel(ctx, id); err != nil {
+			slog.Error("cancelando job del PR al cierre (best-effort: continúa con el resto)",
+				"job_id", id, "pr_id", pullRequestID, "err", err)
+			continue
+		}
+		descartados++
+	}
+	return descartados, nil
 }
 
 // Register agrega workers de dominio al cliente que Start arrancará. Debe

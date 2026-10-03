@@ -43,11 +43,12 @@ var (
 )
 
 // recordingQueue es el stub de jobs.JobQueue (§4.5: stub de 10 líneas, sin
-// mocks): registra kinds y args encolados.
+// mocks): registra kinds, args encolados y MRs cuyo descarte se pidió.
 type recordingQueue struct {
-	mu    sync.Mutex
-	kinds []string
-	args  []json.RawMessage
+	mu      sync.Mutex
+	kinds   []string
+	args    []json.RawMessage
+	cancels []int64
 }
 
 func (q *recordingQueue) Enqueue(_ context.Context, kind string, args json.RawMessage) error {
@@ -56,6 +57,13 @@ func (q *recordingQueue) Enqueue(_ context.Context, kind string, args json.RawMe
 	q.kinds = append(q.kinds, kind)
 	q.args = append(q.args, args)
 	return nil
+}
+
+func (q *recordingQueue) CancelPendingByPR(_ context.Context, prID int64) (int, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.cancels = append(q.cancels, prID)
+	return 1, nil
 }
 
 func (q *recordingQueue) Register(...jobs.Worker) error { return nil }
@@ -76,6 +84,16 @@ func (q *recordingQueue) last() (string, json.RawMessage) {
 		return "", nil
 	}
 	return q.kinds[len(q.kinds)-1], q.args[len(q.args)-1]
+}
+
+// lastCancel devuelve el último MR cuyo descarte se pidió (0 si ninguno).
+func (q *recordingQueue) lastCancel() int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.cancels) == 0 {
+		return 0
+	}
+	return q.cancels[len(q.cancels)-1]
 }
 
 // webhookEnv es el entorno de un test: adapter + cola registradora + store +
@@ -532,24 +550,39 @@ func TestWebhookMRCloseSinJobYMergeEncolaIndice(t *testing.T) {
 	}
 
 	serve(t, e, createSignedPayload(t, mrPayload(repo.ExternalID, 8, "close", "h1", "main")), http.StatusOK)
-	if e.q.count() != 1 {
-		t.Errorf("close no debe encolar (MetricsJob es F5): jobs=%d", e.q.count())
+	if e.q.count() != 2 {
+		t.Fatalf("el close debe encolar el MetricsJob (§6 F5): jobs=%d", e.q.count())
+	}
+	kind, args := e.q.last()
+	if kind != jobs.KindMetrics {
+		t.Errorf("el close debe encolar el MetricsJob: got %q", kind)
 	}
 	pr, err := e.getPR(t, repo.ID, 8)
 	if err != nil || pr.State != "closed" {
 		t.Fatalf("el close debe actualizar el estado: %+v err=%v", pr, err)
+	}
+	var metricsArgs jobs.MetricsJobArgs
+	if err := json.Unmarshal(args, &metricsArgs); err != nil {
+		t.Fatalf("args del MetricsJob: %v", err)
+	}
+	if metricsArgs.RepositoryID != repo.ID || metricsArgs.PullRequestID != pr.ID {
+		t.Errorf("el MetricsJob debe apuntar al repo y MR cerrados: %+v", metricsArgs)
+	}
+	if got := e.q.lastCancel(); got != pr.ID {
+		t.Errorf("el close debe pedir el descarte de jobs del MR %d: pidió %d", pr.ID, got)
 	}
 	if pr.MergedAt.Valid {
 		t.Errorf("close simple no debe registrar merged_at: %+v", pr.MergedAt)
 	}
 
 	// Merge: close con merged_at (el updated_at del evento, §3.5) + IndexJob
-	// del repo (§6 F4 — la rama default avanzó).
+	// del repo (§6 F4 — la rama default avanzó). El MetricsJob sale en TODO
+	// cierre, merge incluido: [review, metrics(close), metrics(merge), index].
 	serve(t, e, createSignedPayload(t, mrPayload(repo.ExternalID, 8, "merge", "h1", "main")), http.StatusOK)
-	if e.q.count() != 2 {
-		t.Fatalf("el merge debe encolar el IndexJob: jobs=%d", e.q.count())
+	if e.q.count() != 4 {
+		t.Fatalf("el merge encola MetricsJob (todo cierre) + IndexJob: jobs=%d", e.q.count())
 	}
-	kind, args := e.q.last()
+	kind, args = e.q.last()
 	if kind != jobs.KindIndex {
 		t.Errorf("kind: got %q want %q", kind, jobs.KindIndex)
 	}
@@ -575,13 +608,13 @@ func TestWebhookMRReopenEncola(t *testing.T) {
 
 	serve(t, e, createSignedPayload(t, mrPayload(repo.ExternalID, 9, "open", "h1", "main")), http.StatusOK)
 	serve(t, e, createSignedPayload(t, mrPayload(repo.ExternalID, 9, "close", "h1", "main")), http.StatusOK)
-	if e.q.count() != 1 {
-		t.Fatalf("close no debe encolar: jobs=%d", e.q.count())
+	if e.q.count() != 2 {
+		t.Fatalf("el close encola el MetricsJob (§6 F5): jobs=%d", e.q.count())
 	}
 
 	// reopen se trata como open: state vuelve a open y dispara review (§3.5).
 	serve(t, e, createSignedPayload(t, mrPayload(repo.ExternalID, 9, "reopen", "h2", "main")), http.StatusOK)
-	if e.q.count() != 2 {
+	if e.q.count() != 3 {
 		t.Fatalf("reopen debe encolar la review: jobs=%d", e.q.count())
 	}
 	pr, err := e.getPR(t, repo.ID, 9)

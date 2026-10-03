@@ -386,9 +386,10 @@ func (q *stubQueue) Enqueue(_ context.Context, kind string, args json.RawMessage
 	q.payloads = append(q.payloads, args)
 	return nil
 }
-func (q *stubQueue) Register(...jobs.Worker) error { return nil }
-func (q *stubQueue) Start(context.Context) error   { return nil }
-func (q *stubQueue) Stop(context.Context) error    { return nil }
+func (q *stubQueue) CancelPendingByPR(context.Context, int64) (int, error) { return 0, nil }
+func (q *stubQueue) Register(...jobs.Worker) error                        { return nil }
+func (q *stubQueue) Start(context.Context) error                          { return nil }
+func (q *stubQueue) Stop(context.Context) error                           { return nil }
 
 func (q *stubQueue) enqueued(t *testing.T) ([]string, []json.RawMessage) {
 	t.Helper()
