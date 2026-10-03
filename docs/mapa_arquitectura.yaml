@@ -98,7 +98,8 @@ backend:
       - "repos conectados: GET/POST /api/repos, PUT /api/repos/{id} (F1, admin) — conectar = registrar; desconectar = flag enabled, sin delete (guía §3.5)"
       - "usuarios: GET/POST /api/users, PUT /api/users/{id} (F1, admin) — invitación, reset de contraseña, desactivación (guía §3.4)"
       - "cola de jobs: GET /api/jobs (F1) — lectura del panel de cola: pending/running/discarded por tipo (guía §9.9)"
-      - "detalle de PR: GET /api/prs, GET /api/prs/{id}, GET /api/prs/{id}/diff (F3, member) — lista + findings + diff resuelto por el adapter (GetDiff) bajo demanda, sin copia en BD (guía §6 F3)"
+      - "detalle de PR: GET /api/prs, GET /api/prs/{id}, GET /api/prs/{id}/diff (F3, member) — lista + findings + diff resuelto por el adapter (GetDiff) bajo demanda, sin copia en BD (guía §6 F3); GET /api/prs gana query params sort/state/repo/severity y risk_score en la lista (F5, T7)"
+      - "métricas: GET /api/metrics (F5, member) — resumen de la ventana (?days, default 30, tope 365): cycle time, % aceptados, tasa de falsos positivos (resolved ∧ ¬applied), costo LLM medio por review (llm_usage.review_id); tasas null cuando el denominador es 0 (guía §6 F5)"
     depende_de: [store, vcs, jobs, llm]
     pruebas: backend/internal/api/api_test.go (webhook firmado simulado)
     fase: F0 (auth) / F1 (webhook GitHub) / F2 (webhook GitLab)
@@ -151,7 +152,8 @@ backend:
       resumen se parsea antes de publicar; si no parsea, se omite y se registra.
       El veredicto pre-merge (F5) se publica como sección del resumen, edit in
       place — comments_sent no gana tipo nuevo. El risk_score (F5) se calcula
-      en el pipeline (tamaño de diff, archivos sensibles, severidad de
+      en el pipeline (tamaño de diff, archivos sensibles — patrones
+      RISK_SENSITIVE_PATHS, defaults si no está seteada —, severidad de
       findings, proporción de test files) y se persiste en pull_requests.
   analyze:
     ruta: backend/internal/analyze
@@ -213,6 +215,13 @@ backend:
       comando es propio, no comparte el de la review; su idempotencia es el
       comentario que la disparó (comment_id padre, guía §3.3) — un reintento
       no duplica la respuesta.
+
+      MetricsJob (F5) va a la cola ops con tope de 3 intentos y SIN unicidad
+      — cada cierre encola el suyo: el recompute del worker es idempotente y
+      el guard de estado (PR closed) vive en el worker. El handler de cierre
+      descarga PRIMERO los ReviewJob/ChatJob vivos del PR (CancelPendingByPR:
+      cero LLM tras el cierre, best-effort — el re-chequeo de stale de Run
+      queda de respaldo), encola el MetricsJob y, si fue merge, el IndexJob.
 
       IndexJob: job único por repo mientras vive otro (misma mecánica de
       unicidad que ReviewJob); se encola al completar cada review
@@ -278,7 +287,7 @@ dashboard:
       settings: {ruta: dashboard/src/features/settings, proposito: "proveedores LLM (BYOK cifrado) — acciones exclusivas del admin, repos conectados, usuarios (invitaciones y reset)", fase: F1}
       prs: {ruta: dashboard/src/features/prs, proposito: detalle de PR con findings y diff, fase: F3}
       queue: {ruta: dashboard/src/features/queue, proposito: estado de la cola de jobs (pending/running/discarded por tipo) — guía §9.9, fase: F1}
-      triage: {ruta: dashboard/src/features/triage, proposito: cola de PRs por riesgo, fase: F5}
+      triage: {ruta: dashboard/src/features/triage, proposito: "cola de PRs por riesgo con filtros (estado server-side, repo/severidad client-side) y card de métricas (/api/metrics)", fase: F5}
     depende_de: [components, lib]
     pruebas: vitest por feature
     reglas: features NO importan de otras features — lo compartido baja a components/ o lib/.

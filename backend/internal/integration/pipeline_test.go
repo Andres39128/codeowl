@@ -271,8 +271,12 @@ func newTempClone(t *testing.T) (dir, headSHA string) {
 		t.Fatalf("escribiendo main.go del clon: %v", err)
 	}
 	run("add", ".")
+	// El nanosegundo en el mensaje hace único el SHA: dos clones con
+	// contenido idéntico en el mismo segundo producen el MISMO SHA (git es
+	// determinístico) y la cache global de resultados del pipeline (§9.6,
+	// clave incluye head SHA) cruzaría hallazgos entre tests.
 	run("-c", "commit.gpgsign=false", "-c", "user.name=integration", "-c", "user.email=integration@test",
-		"commit", "-m", "commit inicial del clon de test")
+		"commit", "-m", fmt.Sprintf("commit inicial del clon de test %d", time.Now().UnixNano()))
 	return dir, strings.TrimSpace(run("rev-parse", "HEAD"))
 }
 
