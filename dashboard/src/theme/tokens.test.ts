@@ -40,6 +40,9 @@ const lightExpected = {
 	"severity-alta": "#b3261e",
 	"severity-media": "#92400e",
 	"severity-baja": "#1e6b3c",
+	"diff-add": "#e4efdc",
+	"diff-del": "#f6e3dc",
+	"diff-hl": "#f3e6c9",
 };
 const darkExpected = {
 	"bg-base": "#0e1f16",
@@ -54,6 +57,9 @@ const darkExpected = {
 	"severity-alta": "#f87171",
 	"severity-media": "#fbbf24",
 	"severity-baja": "#4ade80",
+	"diff-add": "#1a3a22",
+	"diff-del": "#3a1d19",
+	"diff-hl": "#3a2c14",
 };
 
 function luminance(hex: string): number {
@@ -79,11 +85,11 @@ const themes = [
 ];
 
 describe("tokens.css — snapshot de §5.1", () => {
-	it("claro: los 12 roles con el valor exacto de la guía", () => {
+	it("claro: los 15 roles con el valor exacto de la guía", () => {
 		expect(themes[0]?.tokens).toEqual(lightExpected);
 	});
 
-	it("oscuro: los 12 roles con el valor exacto de la guía", () => {
+	it("oscuro: los 15 roles con el valor exacto de la guía", () => {
 		expect(themes[1]?.tokens).toEqual(darkExpected);
 	});
 });
@@ -122,6 +128,20 @@ describe("contraste WCAG 2.1 AA en ambos temas (guía §5.2)", () => {
 			expect(
 				contrast(tokenOf(tokens, "accent"), tokenOf(tokens, "bg-surface")),
 			).toBeGreaterThanOrEqual(3);
+		});
+
+		it(`${name}: texto legible sobre fondos de diff (DiffViewer) ≥ 4.5:1`, () => {
+			// Fila agregada: texto severity-baja; eliminada: severity-alta;
+			// anclada a finding: texto principal + borde accent (§5.2).
+			expect(
+				contrast(tokenOf(tokens, "severity-baja"), tokenOf(tokens, "diff-add")),
+			).toBeGreaterThanOrEqual(4.5);
+			expect(
+				contrast(tokenOf(tokens, "severity-alta"), tokenOf(tokens, "diff-del")),
+			).toBeGreaterThanOrEqual(4.5);
+			expect(
+				contrast(tokenOf(tokens, "text-primary"), tokenOf(tokens, "diff-hl")),
+			).toBeGreaterThanOrEqual(4.5);
 		});
 	}
 });

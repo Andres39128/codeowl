@@ -22,6 +22,9 @@
 	--severity-alta: #b3261e; /* error / riesgo alto (≥ 4.5:1) */
 	--severity-media: #92400e; /* warning / riesgo medio (≥ 4.5:1) */
 	--severity-baja: #1e6b3c; /* success / riesgo bajo (≥ 4.5:1) */
+	--diff-add: #e4efdc; /* fondo fila agregada en diff — texto severity-baja (5.5:1) */
+	--diff-del: #f6e3dc; /* fondo fila eliminada en diff — texto severity-alta (5.3:1) */
+	--diff-hl: #f3e6c9; /* fondo fila anclada a finding — borde accent (§5.2) */
 }
 
 [data-theme="dark"] {
@@ -38,6 +41,9 @@
 	--severity-alta: #f87171;
 	--severity-media: #fbbf24;
 	--severity-baja: #4ade80;
+	--diff-add: #1a3a22; /* texto severity-baja (7.2:1) */
+	--diff-del: #3a1d19; /* texto severity-alta (5.5:1) */
+	--diff-hl: #3a2c14;
 }
 
 /* Mapeo a Tailwind v4: `inline` hace que las utilidades referencien la
@@ -56,6 +62,9 @@
 	--color-severity-alta: var(--severity-alta);
 	--color-severity-media: var(--severity-media);
 	--color-severity-baja: var(--severity-baja);
+	--color-diff-add: var(--diff-add);
+	--color-diff-del: var(--diff-del);
+	--color-diff-hl: var(--diff-hl);
 
 	/* Tipografía: system stack sin webfonts (guía §5.2.5). La escala
    * 12/14/16/20/24 es la de text-xs/sm/base/xl/2xl por defecto de v4. */
