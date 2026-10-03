@@ -59,10 +59,11 @@ func main() {
 	// Deps del dominio: gateway LLM, adapter VCS, analyzer sandbox y topes
 	// del pipeline (§4.2: el wiring llena review.Config desde Stage2Config).
 	gateway := llm.New(st, cfg.MasterKey, llm.Limits{
-		MaxPerReview: cfg.Stage2.LLMMaxPerReview,
-		MaxGlobal:    cfg.Stage2.LLMMaxGlobal,
-		Timeout:      cfg.Stage2.LLMTimeout,
-		MaxRetries:   cfg.Stage2.LLMMaxRetries,
+		MaxPerReview:   cfg.Stage2.LLMMaxPerReview,
+		MaxGlobal:      cfg.Stage2.LLMMaxGlobal,
+		Timeout:        cfg.Stage2.LLMTimeout,
+		MaxRetries:     cfg.Stage2.LLMMaxRetries,
+		EmbedBatchSize: cfg.Stage2.EmbedBatchSize,
 	})
 	provider := github.New(st, cfg, q) // el webhook encola por la interfaz; el worker no publica por acá
 	analyzer := analyze.NewRunner(analyze.Config{

@@ -387,3 +387,295 @@ func TestTestConnection(t *testing.T) {
 		t.Error("esperaba error con 401")
 	}
 }
+
+// ---- Embeddings (F4, §6) ----
+
+// embeddingsPayload arma la respuesta del stub: un embedding por input, el
+// vector del índice i vale i+1 en todas sus dims (verifica el rearmado por
+// index). order simula respuestas desordenadas (nil = orden natural);
+// prompt_tokens es 3 por input (verifica la acumulación entre lotes).
+func embeddingsPayload(n, dims int, order []int) map[string]any {
+	idxs := order
+	if idxs == nil {
+		idxs = make([]int, n)
+		for i := range idxs {
+			idxs[i] = i
+		}
+	}
+	data := make([]map[string]any, 0, len(idxs))
+	for _, idx := range idxs {
+		vec := make([]float64, dims)
+		for i := range vec {
+			vec[i] = float64(idx + 1)
+		}
+		data = append(data, map[string]any{"embedding": vec, "index": idx})
+	}
+	return map[string]any{
+		"data":  data,
+		"usage": map[string]int{"prompt_tokens": 3 * n},
+	}
+}
+
+// stubEmbeddingsOK responde 200 con embeddingsPayload para el input recibido.
+func stubEmbeddingsOK(dims int, order []int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req embedRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(embeddingsPayload(len(req.Input), dims, order))
+	}
+}
+
+func TestEmbedRearmaPorIndex(t *testing.T) {
+	var mu sync.Mutex
+	var auth, path string
+	srv := newStub(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth, path = r.Header.Get("Authorization"), r.URL.Path
+		mu.Unlock()
+		stubEmbeddingsOK(4, []int{2, 0, 1})(w, r) // desordenado a propósito
+	})
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "embedding", 1)}}
+	g := newGateway(t, fs, testLimits())
+
+	vecs, err := g.Embed(context.Background(), []string{"a", "b", "c"})
+	if err != nil {
+		t.Fatalf("Embed(): %v", err)
+	}
+	if len(vecs) != 3 {
+		t.Fatalf("vectores: got %d want 3", len(vecs))
+	}
+	for i, vec := range vecs {
+		if len(vec) != 4 || vec[0] != float32(i+1) {
+			t.Errorf("vector %d mal rearmado: dims=%d v[0]=%v want dims=4 v[0]=%d", i, len(vec), vec[0], i+1)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if auth != "Bearer sk-stub" {
+		t.Errorf("la api_key descifrada no viajó en el Bearer: %q", auth)
+	}
+	if path != "/v1/embeddings" {
+		t.Errorf("path: got %q want /v1/embeddings", path)
+	}
+
+	usages := fs.recordedUsages()
+	if len(usages) != 1 {
+		t.Fatalf("usage: got %d filas want 1", len(usages))
+	}
+	u := usages[0]
+	if u.Role != "embedding" || u.Provider != srv.URL || u.TokensIn != 9 || u.TokensOut != 0 {
+		t.Errorf("usage mal registrado: %+v", u)
+	}
+}
+
+func TestEmbedDivideEnLotes(t *testing.T) {
+	var mu sync.Mutex
+	var lens []int
+	srv := newStub(t, func(w http.ResponseWriter, r *http.Request) {
+		var req embedRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		lens = append(lens, len(req.Input))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(embeddingsPayload(len(req.Input), 2, nil))
+	})
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "embedding", 1)}}
+	lim := testLimits()
+	lim.EmbedBatchSize = 2
+	g := newGateway(t, fs, lim)
+
+	vecs, err := g.Embed(context.Background(), []string{"a", "b", "c"})
+	if err != nil {
+		t.Fatalf("Embed(): %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lens) != 2 || lens[0] != 2 || lens[1] != 1 {
+		t.Errorf("lotes: got %v want [2 1]", lens)
+	}
+	if len(vecs) != 3 {
+		t.Errorf("vectores concatenados: got %d want 3", len(vecs))
+	}
+	if usages := fs.recordedUsages(); len(usages) != 1 || usages[0].TokensIn != 9 {
+		t.Errorf("usage debe acumular los tokens de ambos lotes: %+v", usages)
+	}
+}
+
+func TestEmbedDimsInconsistentesFalla(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"embedding":[1,2],"index":0},{"embedding":[1,2,3],"index":1}]}`)
+	})
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "embedding", 1)}}
+	g := newGateway(t, fs, testLimits())
+
+	if _, err := g.Embed(context.Background(), []string{"a", "b"}); err == nil {
+		t.Fatal("esperaba error por dims inconsistentes")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Errorf("una respuesta malformada no se reintenta: %d llamadas", calls)
+	}
+	if usages := fs.recordedUsages(); len(usages) != 0 {
+		t.Errorf("sin éxito no se registra usage: %+v", usages)
+	}
+}
+
+func TestEmbedMalformadoConmutaAlSiguiente(t *testing.T) {
+	var mu sync.Mutex
+	var calls1 int
+	srv1 := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls1++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `esto no es json`)
+	})
+	srv2 := newStub(t, stubEmbeddingsOK(3, nil))
+	fs := &fakeStore{providers: []store.LlmProvider{
+		provider(t, srv1.URL, "embedding", 1),
+		provider(t, srv2.URL, "embedding", 2),
+	}}
+	g := newGateway(t, fs, testLimits())
+
+	vecs, err := g.Embed(context.Background(), []string{"a"})
+	if err != nil {
+		t.Fatalf("Embed(): %v", err)
+	}
+	if len(vecs) != 1 || len(vecs[0]) != 3 || vecs[0][0] != 1 {
+		t.Errorf("vector del segundo proveedor: %v", vecs)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls1 != 1 {
+		t.Errorf("una respuesta malformada no se reintenta: %d llamadas", calls1)
+	}
+	if usages := fs.recordedUsages(); len(usages) != 1 || usages[0].Provider != srv2.URL {
+		t.Errorf("usage debe registrar solo el proveedor exitoso: %+v", usages)
+	}
+}
+
+func TestEmbedSinProveedoresHabilitados(t *testing.T) {
+	fs := &fakeStore{}
+	g := newGateway(t, fs, testLimits())
+	_, err := g.Embed(context.Background(), []string{"a"})
+	if err == nil || !strings.Contains(err.Error(), "sin proveedores enabled") {
+		t.Errorf("esperaba error de guarda de rol: %v", err)
+	}
+}
+
+func TestEmbedVacioNoLlama(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := newStub(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		stubEmbeddingsOK(2, nil)(w, r)
+	})
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "embedding", 1)}}
+	g := newGateway(t, fs, testLimits())
+
+	for _, in := range [][]string{nil, {}} {
+		vecs, err := g.Embed(context.Background(), in)
+		if err != nil {
+			t.Fatalf("Embed(%v): %v", in, err)
+		}
+		if len(vecs) != 0 {
+			t.Errorf("Embed(%v): got %d vectores want 0", in, len(vecs))
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 0 {
+		t.Errorf("sin input no hay llamada HTTP: %d", calls)
+	}
+}
+
+func TestEmbedRateLimitRespetaRetryAfter(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := newStub(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "0") // válido: reintento inmediato
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		stubEmbeddingsOK(2, nil)(w, r)
+	})
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "embedding", 1)}}
+	g := newGateway(t, fs, testLimits())
+
+	vecs, err := g.Embed(context.Background(), []string{"a"})
+	if err != nil {
+		t.Fatalf("Embed(): %v", err)
+	}
+	if len(vecs) != 1 {
+		t.Fatalf("vectores: got %d want 1", len(vecs))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Errorf("llamadas: got %d want 2 (un 429 y un reintento)", calls)
+	}
+}
+
+func TestTestEmbedConnection(t *testing.T) {
+	srv := newStub(t, stubEmbeddingsOK(8, nil))
+	fs := &fakeStore{}
+	g := newGateway(t, fs, testLimits())
+
+	dims, latency, err := g.TestEmbedConnection(context.Background(), srv.URL, "sk-plano", "stub-model")
+	if err != nil {
+		t.Fatalf("TestEmbedConnection(): %v", err)
+	}
+	if dims != 8 {
+		t.Errorf("dims: got %d want 8", dims)
+	}
+	if latency < 0 {
+		t.Errorf("latencia negativa: %d", latency)
+	}
+	if usages := fs.recordedUsages(); len(usages) != 0 {
+		t.Errorf("la sonda de embeddings no registra usage: %+v", usages)
+	}
+
+	bad := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
+	if _, _, err := g.TestEmbedConnection(context.Background(), bad.URL, "sk-mala", "stub-model"); err == nil {
+		t.Error("esperaba error con 401")
+	}
+}
+
+func TestTestConnectionEmbeddingUsaEmbeddings(t *testing.T) {
+	var mu sync.Mutex
+	var path string
+	srv := newStub(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		path = r.URL.Path
+		mu.Unlock()
+		stubEmbeddingsOK(4, nil)(w, r)
+	})
+	fs := &fakeStore{}
+	g := newGateway(t, fs, testLimits())
+
+	if err := g.TestConnection(context.Background(), "embedding", srv.URL, "sk-plano", "stub-model"); err != nil {
+		t.Fatalf("TestConnection(rol embedding): %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if path != "/v1/embeddings" {
+		t.Errorf("el rol embedding no debe hablar chat: %s", path)
+	}
+}

@@ -37,6 +37,7 @@ const (
 	DefaultLLMMaxGlobal          = 8                 // §9.6: llamadas LLM simultáneas del gateway
 	DefaultLLMTimeout            = 120 * time.Second // §9.7: timeout por llamada LLM
 	DefaultLLMMaxRetries         = 3                 // §9.7: reintentos por proveedor ante 429/5xx
+	DefaultEmbedBatchSize        = 64                // §9.6: textos máximos por llamada /v1/embeddings
 	DefaultWebhookMaxBytes       = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
 	DefaultVCSTimeout            = 30 * time.Second  // timeout por llamada HTTP al VCS
 	// GitLab (§9.3/§3.5/§3.6.1.1): frescura anti-replay, username del bot
@@ -100,6 +101,7 @@ type Stage2Config struct {
 	LLMMaxGlobal    int
 	LLMTimeout      time.Duration
 	LLMMaxRetries   int
+	EmbedBatchSize  int // textos máximos por llamada /v1/embeddings (F4, §6)
 	// Webhook + VCS (§9.3/§4.5): los consumen internal/vcs.
 	WebhookMaxBytes int64
 	VCSTimeout      time.Duration
@@ -311,6 +313,14 @@ func Load() (*Config, error) {
 		errs = append(errs, "LLM_MAX_RETRIES debe ser mayor o igual a 0")
 	}
 	s2.LLMMaxRetries = maxRetries
+
+	embedBatch, err := loadInt("EMBED_BATCH_SIZE", DefaultEmbedBatchSize)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if embedBatch < 1 {
+		errs = append(errs, "EMBED_BATCH_SIZE debe ser mayor o igual a 1")
+	}
+	s2.EmbedBatchSize = embedBatch
 
 	whBytes, err := loadDiskSize("WEBHOOK_MAX_BYTES", DefaultWebhookMaxBytes)
 	if err != nil {

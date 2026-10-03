@@ -73,10 +73,11 @@ func main() {
 	// Gateway LLM: la api solo lo usa para la prueba de conexión de settings
 	// (una llamada mínima por rol, §3.5).
 	gateway := llm.New(st, cfg.MasterKey, llm.Limits{
-		MaxPerReview: cfg.Stage2.LLMMaxPerReview,
-		MaxGlobal:    cfg.Stage2.LLMMaxGlobal,
-		Timeout:      cfg.Stage2.LLMTimeout,
-		MaxRetries:   cfg.Stage2.LLMMaxRetries,
+		MaxPerReview:   cfg.Stage2.LLMMaxPerReview,
+		MaxGlobal:      cfg.Stage2.LLMMaxGlobal,
+		Timeout:        cfg.Stage2.LLMTimeout,
+		MaxRetries:     cfg.Stage2.LLMMaxRetries,
+		EmbedBatchSize: cfg.Stage2.EmbedBatchSize,
 	})
 
 	// Routing y middleware (auth, logging, recover) viven en internal/api.
