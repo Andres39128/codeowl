@@ -40,6 +40,7 @@ const (
 	DefaultEmbedBatchSize        = 64                // §9.6: textos máximos por llamada /v1/embeddings
 	DefaultIndexMaxSymbolsPerRun = 2000              // §9.6: tope de símbolos embebidos por IndexJob (resume §9.6)
 	DefaultRetrievalTopK         = 8                 // §9.6: K del top-K coseno del retrieval del Reviewer (F4, §6)
+	DefaultReviewContextMaxChars = 4000              // §6 F4: tope de chars del bloque "Símbolos relacionados" del prompt
 	DefaultWebhookMaxBytes       = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
 	DefaultVCSTimeout            = 30 * time.Second  // timeout por llamada HTTP al VCS
 	// GitLab (§9.3/§3.5/§3.6.1.1): frescura anti-replay, username del bot
@@ -108,6 +109,7 @@ type Stage2Config struct {
 	// threadea ReviewDefaultProfile como DefaultProfile del índice).
 	IndexMaxSymbolsPerRun int // tope de símbolos embebidos por IndexJob; agotado → parcial con resume
 	RetrievalTopK         int // K del top-K coseno del retrieval del Reviewer (§6 F4, decisión 6)
+	ReviewContextMaxChars int // tope de chars del bloque "Símbolos relacionados" del prompt del Reviewer (§6 F4)
 	// Webhook + VCS (§9.3/§4.5): los consumen internal/vcs.
 	WebhookMaxBytes int64
 	VCSTimeout      time.Duration
@@ -343,6 +345,16 @@ func Load() (*Config, error) {
 		errs = append(errs, "RETRIEVAL_TOP_K debe ser mayor o igual a 1")
 	}
 	s2.RetrievalTopK = topK
+
+	// Mínimo 500 (§6 F4): un bloque más chico no alcanza ni para un símbolo
+	// con su línea — mejor sin bloque que uno inútil.
+	ctxMax, err := loadInt("REVIEW_CONTEXT_MAX_CHARS", DefaultReviewContextMaxChars)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if ctxMax < 500 {
+		errs = append(errs, "REVIEW_CONTEXT_MAX_CHARS debe ser mayor o igual a 500")
+	}
+	s2.ReviewContextMaxChars = ctxMax
 
 	whBytes, err := loadDiskSize("WEBHOOK_MAX_BYTES", DefaultWebhookMaxBytes)
 	if err != nil {

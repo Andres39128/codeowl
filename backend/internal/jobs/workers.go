@@ -60,12 +60,13 @@ func workdirRoot(override string) string {
 type ReviewJobWorker struct {
 	river.WorkerDefaults[ReviewJobArgs]
 
-	Store    *store.Store
-	Gateway  review.Gateway  // *llm.Gateway la satisface
-	Analyzer review.Analyzer // *analyze.Runner la satisface
-	Provider vcs.VCSProvider
-	Queue    JobQueue // encola el IndexJob tras la corrida (§6 F4)
-	Config   review.Config
+	Store     *store.Store
+	Gateway   review.Gateway  // *llm.Gateway la satisface
+	Analyzer  review.Analyzer // *analyze.Runner la satisface
+	Provider  vcs.VCSProvider
+	Retriever review.Retriever // contexto simbólico del repo (§6 F4); nil → sin bloque
+	Queue     JobQueue         // encola el IndexJob tras la corrida (§6 F4)
+	Config    review.Config
 
 	WorkdirRoot string // default /var/tmp (los tests usan un tmp propio)
 }
@@ -99,7 +100,7 @@ func (w *ReviewJobWorker) Work(ctx context.Context, job *river.Job[ReviewJobArgs
 		return w.failFinal(ctx, job, fmt.Errorf("clonando el PR %d: %w", pr.Number, err))
 	}
 
-	res, err := review.Run(ctx, w.Config, w.Store, w.Gateway, w.Analyzer, w.Provider, review.ReviewInput{
+	res, err := review.Run(ctx, w.Config, w.Store, w.Gateway, w.Analyzer, w.Provider, w.Retriever, review.ReviewInput{
 		PullRequestID: args.PullRequestID,
 		RepositoryID:  repoID,
 		HeadSHA:       args.HeadSha,
@@ -144,6 +145,43 @@ func (w *ReviewJobWorker) failFinal(ctx context.Context, job *river.Job[ReviewJo
 		}
 	}
 	return cause
+}
+
+// indexRetriever adapta index.Retrieve al contrato review.Retriever (§6 F4,
+// decisión 7: la interfaz vive en review y el acoplamiento apunta hacia
+// adentro — review no importa index). Dueño de su topK vía config del
+// wiring (§9.6).
+type indexRetriever struct {
+	st   index.RetrieveStore
+	gw   index.Gateway
+	topK int
+}
+
+// RetrieveRelated resuelve los símbolos relacionados del archivo delegando
+// en index.Retrieve y convirtiendo al tipo propio del pipeline en el borde.
+func (r indexRetriever) RetrieveRelated(ctx context.Context, repoID int64, file, code string) ([]review.RelatedSymbol, error) {
+	syms, err := index.Retrieve(ctx, r.st, r.gw, repoID, file, code, r.topK)
+	if err != nil {
+		return nil, err
+	}
+	if len(syms) == 0 {
+		return nil, nil // índice sin hits: sin contexto (§6 F4, silencioso)
+	}
+	out := make([]review.RelatedSymbol, 0, len(syms))
+	for _, s := range syms {
+		out = append(out, review.RelatedSymbol{
+			File: s.File, Symbol: s.Symbol, Kind: s.Kind,
+			StartLine: s.StartLine, EndLine: s.EndLine, Via: s.Via,
+		})
+	}
+	return out, nil
+}
+
+// NewIndexRetriever arma el retriever de contexto simbólico del Reviewer
+// (§6 F4) sobre el índice RAG: misma store y gateway del rol embedding que
+// consume el IndexJobWorker.
+func NewIndexRetriever(st index.RetrieveStore, gw index.Gateway, topK int) review.Retriever {
+	return indexRetriever{st: st, gw: gw, topK: topK}
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +585,7 @@ var (
 	_ Worker                         = (*IndexJobWorker)(nil)
 	_ review.Gateway                 = (*llm.Gateway)(nil)
 	_ review.Analyzer                = (*analyze.Runner)(nil)
+	_ review.Retriever               = indexRetriever{}
 	_ index.Gateway                  = (*llm.Gateway)(nil)
 	_ index.Extractor                = (*analyze.Runner)(nil)
 )

@@ -118,12 +118,12 @@ func wPR(t *testing.T, st *store.Store, repoID, number int64) store.PullRequest 
 // llama, el test lo tiene que ver. Con fetchDefault, FetchDefaultBranch arma
 // un clon de juguete y graba el workdir (el IndexJob lo consume).
 type wProvider struct {
-	fetchWorkdir    string
-	fetchDefault    bool
-	defaultWorkdir  string
-	diff            string
-	diffErr         error
-	openPRs         []vcs.OpenPR
+	fetchWorkdir   string
+	fetchDefault   bool
+	defaultWorkdir string
+	diff           string
+	diffErr        error
+	openPRs        []vcs.OpenPR
 }
 
 func (p *wProvider) HandleWebhook(context.Context, http.ResponseWriter, *http.Request) {
@@ -840,4 +840,82 @@ func reparaJunkCifrado(t *testing.T, st *store.Store, oldKey []byte, inicio time
 		t.Fatal(err)
 	}
 	repara("llm_providers", "api_key", pids, keys)
+}
+
+// ---------------------------------------------------------------------------
+// indexRetriever — adaptador review.Retriever → index.Retrieve (§6 F4)
+// ---------------------------------------------------------------------------
+
+// wRetrieverStore satisface index.RetrieveStore con filas fijas: retrieval
+// del adaptador sin BD (§4.5: stubs de pocas líneas en los bordes).
+type wRetrieverStore struct {
+	count    int64
+	dims     int32
+	gotLimit int32 // RowLimit recibido por la búsqueda (threads del topK)
+	hits     []store.SearchRepoIndexBySimilarityRow
+	files    []store.ListRepoIndexFilesRow
+	byFiles  []store.ListRepoIndexByFilesRow
+}
+
+func (s *wRetrieverStore) CountRepoIndexByRepo(context.Context, int64) (int64, error) {
+	return s.count, nil
+}
+func (s *wRetrieverStore) GetRepoIndexDims(context.Context) (int32, error) { return s.dims, nil }
+func (s *wRetrieverStore) SearchRepoIndexBySimilarity(_ context.Context, arg store.SearchRepoIndexBySimilarityParams) ([]store.SearchRepoIndexBySimilarityRow, error) {
+	s.gotLimit = arg.RowLimit
+	return s.hits, nil
+}
+func (s *wRetrieverStore) ListRepoIndexFiles(context.Context, int64) ([]store.ListRepoIndexFilesRow, error) {
+	return s.files, nil
+}
+func (s *wRetrieverStore) ListRepoIndexByFiles(context.Context, store.ListRepoIndexByFilesParams) ([]store.ListRepoIndexByFilesRow, error) {
+	return s.byFiles, nil
+}
+
+// El adaptador convierte los RelatedSymbol de index al tipo propio de review
+// con su vía intacta (similitud + expansión por imports) y arrastra el topK
+// del wiring hasta el RowLimit del SQL (§6 F4, decisión 7).
+func TestIndexRetrieverAdapter(t *testing.T) {
+	st := &wRetrieverStore{
+		count: 1, dims: 1536,
+		hits: []store.SearchRepoIndexBySimilarityRow{
+			{File: "util/query.go", Symbol: "Query", Kind: "func", StartLine: 10, EndLine: 20, Imports: []string{"util"}},
+		},
+		files: []store.ListRepoIndexFilesRow{{File: "util/db.go", FileHash: "h", EmbeddingModel: "m"}},
+		byFiles: []store.ListRepoIndexByFilesRow{
+			{File: "util/db.go", Symbol: "Conn", Kind: "type", StartLine: 5, EndLine: 9},
+		},
+	}
+	retr := NewIndexRetriever(st, &wEmbedGateway{}, 8)
+
+	syms, err := retr.RetrieveRelated(context.Background(), 42, "main.go", "package main")
+	if err != nil {
+		t.Fatalf("RetrieveRelated: %v", err)
+	}
+	if st.gotLimit != 8 {
+		t.Errorf("RowLimit = %d, querés el topK del wiring (8)", st.gotLimit)
+	}
+	want := []review.RelatedSymbol{
+		{File: "util/query.go", Symbol: "Query", Kind: "func", StartLine: 10, EndLine: 20, Via: "similar"},
+		{File: "util/db.go", Symbol: "Conn", Kind: "type", StartLine: 5, EndLine: 9, Via: "import"},
+	}
+	if len(syms) != len(want) {
+		t.Fatalf("símbolos convertidos = %d, querés %d: %+v", len(syms), len(want), syms)
+	}
+	for i, w := range want {
+		if syms[i] != w {
+			t.Errorf("símbolo %d = %+v, querés %+v", i, syms[i], w)
+		}
+	}
+}
+
+// Índice vacío: el adaptador devuelve (nil, nil) sin llamar al gateway — el
+// bloque de contexto simplemente no existe (§6 F4: silencioso).
+func TestIndexRetrieverAdapterIndiceVacio(t *testing.T) {
+	st := &wRetrieverStore{}
+	retr := NewIndexRetriever(st, &wEmbedGateway{}, 8)
+	syms, err := retr.RetrieveRelated(context.Background(), 42, "main.go", "package main")
+	if err != nil || syms != nil {
+		t.Errorf("con índice vacío querés (nil, nil): got (%v, %v)", syms, err)
+	}
 }

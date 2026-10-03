@@ -471,7 +471,7 @@ func TestGitHubWebhookToReview(t *testing.T) {
 	})
 	vcsStub := &stubVCS{diff: diffFixture}
 
-	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, stubAnalyzer{}, vcsStub,
+	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, stubAnalyzer{}, vcsStub, nil,
 		review.ReviewInput{
 			PullRequestID: pr.ID,
 			RepositoryID:  repo.ID,

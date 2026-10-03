@@ -237,6 +237,7 @@ type stubGateway struct {
 	calls        int
 	systemSeen   []string
 	reviewer     map[string][]string
+	reviewerSeen []string // prompts de usuario del reviewer recibidos (contexto §6 F4)
 	summarizer   []string
 	chat         []string
 	chatSeen     []string // prompts de usuario de chat recibidos
@@ -292,6 +293,7 @@ func (g *stubGateway) Complete(_ context.Context, _, system, user string) (strin
 	}
 	first := strings.SplitN(user, "\n", 2)[0]
 	file := strings.TrimPrefix(first, userFilePrefix)
+	g.reviewerSeen = append(g.reviewerSeen, user)
 	q := g.reviewer[file]
 	if len(q) == 0 {
 		return "", fmt.Errorf("sin respuesta de reviewer para %s", file)
@@ -392,11 +394,12 @@ func resetCache() {
 
 // run es el harness: arma los deps por defecto y corre el pipeline.
 type deps struct {
-	st  *stubStore
-	gw  *stubGateway
-	az  *stubAnalyzer
-	vcs *stubVCS
-	cfg Config
+	st   *stubStore
+	gw   *stubGateway
+	az   *stubAnalyzer
+	vcs  *stubVCS
+	retr Retriever // contexto simbólico (§6 F4); nil por defecto
+	cfg  Config
 }
 
 func newDeps() *deps {
@@ -412,7 +415,7 @@ func newDeps() *deps {
 // run ejecuta Run con los stubs armados (el VCS y el analyzer son el mismo).
 func (d *deps) run(t *testing.T) (*ReviewResult, error) {
 	t.Helper()
-	return Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, testInput())
+	return Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, testInput())
 }
 
 // ---------------------------------------------------------------------------
@@ -799,6 +802,184 @@ func TestIsDuplicateDriftBoundaries(t *testing.T) {
 	}
 }
 
+// Contexto simbólico del Reviewer (§6 F4): stub Retriever + bloque en el
+// prompt, sin degradación ante fallo, tope de chars y prompts intactos sin
+// retriever (§9.6: la revisión jamás se degrada por indexar).
+
+// stubRetriever devuelve símbolos fijos o error, y graba las queries
+// recibidas (archivo, código) para afirmar el contrato de llamada.
+type stubRetriever struct {
+	syms    []RelatedSymbol
+	err     error
+	calls   []string // "file|code" por cada llamada recibida
+	callsN  int
+	repoIDs []int64
+}
+
+func (r *stubRetriever) RetrieveRelated(_ context.Context, repoID int64, file, code string) ([]RelatedSymbol, error) {
+	r.calls = append(r.calls, file+"|"+code)
+	r.callsN++
+	r.repoIDs = append(r.repoIDs, repoID)
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.syms, nil
+}
+
+// runReviewerHarness arma el happy path con un solo archivo y devuelve los
+// deps ya preparados; setup ajusta lo que el test necesite antes de correr.
+func runReviewerHarness(t *testing.T, setup func(d *deps)) (*ReviewResult, *deps) {
+	t.Helper()
+	d := newDeps()
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección SQL", "")}
+	d.gw.summarizer = []string{summarizerJSON}
+	if setup != nil {
+		setup(d)
+	}
+	res, err := d.run(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return res, d
+}
+
+// Bloque presente: el prompt del reviewer trae el encabezado, una línea por
+// símbolo con su vía, y queda después del fence del diff.
+func TestReviewerContextBlock(t *testing.T) {
+	_, d := runReviewerHarness(t, func(d *deps) {
+		d.retr = &stubRetriever{syms: []RelatedSymbol{
+			{File: "util/query.go", Symbol: "Query", Kind: "func", StartLine: 10, EndLine: 20, Via: "similar"},
+			{File: "util/db.go", Symbol: "Conn", Kind: "type", StartLine: 5, EndLine: 9, Via: "import"},
+		}}
+	})
+	if d.retr.(*stubRetriever).callsN != 1 {
+		t.Errorf("retrieval llamado %d veces, querés 1 por archivo", d.retr.(*stubRetriever).callsN)
+	}
+	if got := d.retr.(*stubRetriever).repoIDs[0]; got != testRepoID {
+		t.Errorf("repoID = %d, querés %d", got, testRepoID)
+	}
+	// La query es el inicio de los hunks del diff del archivo.
+	if q := d.retr.(*stubRetriever).calls[0]; !strings.HasPrefix(strings.SplitN(q, "|", 2)[1], "+++ b/main.go") {
+		t.Errorf("la query no son los hunks del archivo: %q", q)
+	}
+	if len(d.gw.reviewerSeen) != 1 {
+		t.Fatalf("llamadas al reviewer = %d, querés 1", len(d.gw.reviewerSeen))
+	}
+	prompt := d.gw.reviewerSeen[0]
+	if !strings.Contains(prompt, relatedContextHeader) {
+		t.Errorf("el prompt no trae el bloque de símbolos:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "util/query.go:10 func Query (vía similitud)") {
+		t.Errorf("falta la línea del símbolo por similitud:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "util/db.go:5 type Conn (vía import)") {
+		t.Errorf("falta la línea del símbolo por import:\n%s", prompt)
+	}
+	// El bloque va DESPUÉS del fence del diff (§6 F4, decisión 6).
+	if idx := strings.Index(prompt, relatedContextHeader); !strings.HasSuffix(prompt[:idx], "```") {
+		t.Errorf("el bloque no queda después del fence del diff:\n%s", prompt)
+	}
+}
+
+// Fallo del retriever: la corrida sigue y publica sus hallazgos; sin bloque
+// en el prompt y sin degradar el estado (§9.6: jamás se degrada por indexar).
+func TestReviewerContextRetrievalError(t *testing.T) {
+	res, d := runReviewerHarness(t, func(d *deps) {
+		d.retr = &stubRetriever{err: errors.New("índice caído")}
+	})
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés success: un fallo de retrieval no degrada la corrida (§9.6)", res.Status)
+	}
+	if res.FindingsCount != 1 {
+		t.Errorf("FindingsCount = %d, querés 1: los hallazgos siguen saliendo", res.FindingsCount)
+	}
+	if len(d.gw.reviewerSeen) != 1 || strings.Contains(d.gw.reviewerSeen[0], "Símbolos relacionados") {
+		t.Errorf("con retrieval fallida el prompt no debe traer bloque:\n%s", d.gw.reviewerSeen)
+	}
+}
+
+// Sin retriever: el prompt del reviewer es byte-idéntico al de siempre
+// (regresión de compatibilidad con repos sin indexar).
+func TestReviewerContextNil(t *testing.T) {
+	_, d := runReviewerHarness(t, nil)
+	if len(d.gw.reviewerSeen) != 1 {
+		t.Fatalf("llamadas al reviewer = %d, querés 1", len(d.gw.reviewerSeen))
+	}
+	want := reviewerUser("main.go", mainGoHunks(), "")
+	if d.gw.reviewerSeen[0] != want {
+		t.Errorf("sin retriever el prompt cambió:\n got %q\nwant %q", d.gw.reviewerSeen[0], want)
+	}
+}
+
+// Tope de chars: muchas entradas → el bloque respeta cfg.ReviewContextMaxChars,
+// descarta símbolos ENTEROS (nunca un corte a mitad de línea) y declara la
+// omisión al pie.
+func TestReviewerContextCap(t *testing.T) {
+	var syms []RelatedSymbol
+	for i := 0; i < 40; i++ {
+		syms = append(syms, RelatedSymbol{
+			File:   fmt.Sprintf("pkg/archivo%02d_con_nombre_largo.go", i),
+			Symbol: fmt.Sprintf("SimboloNumero%02d", i), Kind: "func",
+			StartLine: int32(100 + i), Via: "similar",
+		})
+	}
+	d := newDeps()
+	d.cfg.ReviewContextMaxChars = 500 // sobre el mínimo: no lo normaliza
+	d.retr = &stubRetriever{syms: syms}
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección SQL", "")}
+	d.gw.summarizer = []string{summarizerJSON}
+	if _, err := d.run(t); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	prompt := d.gw.reviewerSeen[0]
+	idx := strings.Index(prompt, relatedContextHeader)
+	if idx < 0 {
+		t.Fatalf("el prompt no trae bloque pese a tener símbolos:\n%s", prompt)
+	}
+	block := prompt[idx:]
+	if len(block) > d.cfg.ReviewContextMaxChars {
+		t.Errorf("bloque de %d chars sobre el tope de %d", len(block), d.cfg.ReviewContextMaxChars)
+	}
+	if !strings.Contains(block, "… (") || !strings.Contains(block, "más omitidos)") {
+		t.Errorf("el bloque recortado no declara la omisión:\n%s", block)
+	}
+	// Sin cortes a mitad de línea: cada línea es completa — header, símbolo
+	// con su vía, o la línea de omisión.
+	for _, l := range strings.Split(strings.TrimPrefix(block, relatedContextHeader), "\n") {
+		switch {
+		case l == "":
+			continue
+		case strings.HasPrefix(l, "… (") && strings.HasSuffix(l, "más omitidos)"):
+		case !strings.Contains(l, "(vía ") || !strings.HasSuffix(l, ")"):
+			t.Errorf("línea cortada a mitad o malformada: %q", l)
+		}
+	}
+}
+
+// Sin símbolos (índice vacío): el prompt queda byte-idéntico al de siempre
+// — el bloque simplemente no existe.
+func TestReviewerContextEmpty(t *testing.T) {
+	_, d := runReviewerHarness(t, func(d *deps) {
+		d.retr = &stubRetriever{syms: nil}
+	})
+	if len(d.gw.reviewerSeen) != 1 {
+		t.Fatalf("llamadas al reviewer = %d, querés 1", len(d.gw.reviewerSeen))
+	}
+	if strings.Contains(d.gw.reviewerSeen[0], "Símbolos relacionados") {
+		t.Errorf("con símbolos vacíos el prompt no debe traer bloque:\n%s", d.gw.reviewerSeen[0])
+	}
+	if d.gw.reviewerSeen[0] != reviewerUser("main.go", mainGoHunks(), "") {
+		t.Errorf("con índice vacío el prompt debe quedar como siempre:\n%s", d.gw.reviewerSeen[0])
+	}
+}
+
+// mainGoHunks devuelve los hunks del diff fixture para main.go (la query y
+// el prompt del reviewer lo usan como referencia canónica).
+func mainGoHunks() string {
+	hunks, _, _ := splitDiffByFile(diffFixture)
+	return hunks["main.go"]
+}
+
 // Config efectiva en la corrida (§9.5/§6 F3): los tests de acá abajo corren
 // contra un repo git real (el review.yaml se lee del merge-base) usando el
 // helper gitRepo de este archivo.
@@ -819,7 +1000,7 @@ func runConConfig(t *testing.T, cfgYAML string, setup func(d *deps)) (*ReviewRes
 	if setup != nil {
 		setup(d)
 	}
-	res, err := Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, input)
+	res, err := Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, input)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

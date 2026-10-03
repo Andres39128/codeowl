@@ -38,6 +38,17 @@ const roleReview = "review"
 // el verifier no corre — degrada, jamás bloquea (§9.6).
 const roleCheap = "cheap"
 
+// retrievalQueryMaxChars acota la QUERY del retrieval (§6 F4): los hunks ya
+// pasaron los topes de diff upstream; los primeros 2000 chars de código
+// bastan para anclar la búsqueda de similitud.
+// ponytail: query fija de 2000 chars — si la calidad de la similitud lo
+// pide, se vuelve config.
+const retrievalQueryMaxChars = 2000
+
+// relatedContextHeader encabeza el bloque de símbolos relacionados (§6 F4)
+// en el prompt de usuario del Reviewer.
+const relatedContextHeader = "\n\n## Símbolos relacionados del repositorio\n"
+
 // languagePlaceholder es el hueco de idioma de los system prompts (reviewer,
 // summarizer y chat): fillLanguage lo llena con el idioma efectivo de la
 // corrida (§9.5).
@@ -122,11 +133,14 @@ var (
 // llamada LLM por archivo, en paralelo con tope de concurrencia — los slots
 // por review los fija el gateway, §9.6). El system prompt viaja con el
 // idioma efectivo, las reglas del repo y el modo del perfil ya llenos
-// (§9.5/§6 F3). Un archivo cuya salida no parsea tras cfg.AgentRetries
-// reintentos se descarta con registro (§9.8: nunca crashea el job) y queda
-// declarado como cobertura parcial. Devuelve error solo si el contexto se
-// cancela (el job está muriendo).
-func runReviewer(ctx context.Context, gw Gateway, cfg Config, rc repoconfig.RepoConfig, files map[string]string) ([]Finding, []string, error) {
+// (§9.5/§6 F3). Cada archivo viaja con su bloque "Símbolos relacionados"
+// del índice RAG (§6 F4): la retrieval corre dentro de este errgroup (los
+// embed quedan acotados por el semáforo global del gateway). Un archivo
+// cuya salida no parsea tras cfg.AgentRetries reintentos se descarta con
+// registro (§9.8: nunca crashea el job) y queda declarado como cobertura
+// parcial. Devuelve error solo si el contexto se cancela (el job está
+// muriendo).
+func runReviewer(ctx context.Context, gw Gateway, retr Retriever, repoID int64, cfg Config, rc repoconfig.RepoConfig, files map[string]string) ([]Finding, []string, error) {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(cfg.Concurrency)
 	system := fillNits(fillInstructions(fillLanguage(promptReviewer, rc.Language), rc.Instructions), rc.Profile)
@@ -138,7 +152,8 @@ func runReviewer(ctx context.Context, gw Gateway, cfg Config, rc repoconfig.Repo
 	)
 	for file, hunks := range files {
 		g.Go(func() error {
-			fs, err := reviewFile(ctx, gw, cfg.AgentRetries, system, file, hunks)
+			related := relatedContext(ctx, retr, repoID, file, hunks, cfg.ReviewContextMaxChars)
+			fs, err := reviewFile(ctx, gw, cfg.AgentRetries, system, file, hunks, related)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -157,13 +172,91 @@ func runReviewer(ctx context.Context, gw Gateway, cfg Config, rc repoconfig.Repo
 	return findings, discarded, nil
 }
 
+// relatedContext arma el bloque "Símbolos relacionados" del archivo (§6 F4).
+// Best-effort por contrato (§9.6: la revisión jamás se degrada por indexar):
+// sin retriever, índice vacío, sin símbolos o retrieval fallida → "" y el
+// prompt queda byte-idéntico al de siempre. La query es el inicio de los
+// hunks (ya topados upstream) — nunca los hunks completos.
+func relatedContext(ctx context.Context, retr Retriever, repoID int64, file, hunks string, maxChars int) string {
+	if retr == nil {
+		return ""
+	}
+	query := hunks
+	if len(query) > retrievalQueryMaxChars {
+		query = query[:retrievalQueryMaxChars]
+	}
+	syms, err := retr.RetrieveRelated(ctx, repoID, file, query)
+	if err != nil {
+		slog.Warn("review: retrieval de símbolos falló, el archivo sigue sin contexto (§9.6)",
+			"archivo", file, "error", err)
+		return ""
+	}
+	return relatedBlock(syms, maxChars)
+}
+
+// relatedBlock renderiza el bloque de símbolos relacionados (§6 F4): una
+// línea compacta por símbolo con tope de maxChars — se descartan entradas
+// ENTERAS (nunca un corte a mitad de línea) y lo omitido queda declarado al
+// pie. Sin símbolos o sin lugar ni para uno → "" (sin bloque).
+func relatedBlock(syms []RelatedSymbol, maxChars int) string {
+	n := len(syms)
+	if n == 0 {
+		return ""
+	}
+	// Presupuesto: header + líneas completas. Si hay entradas que van a
+	// quedar fuera, se reserva el largo de la línea de omisión desde ya —
+	// así el bloque final nunca excede el tope.
+	total := len(relatedContextHeader)
+	kept := 0
+	for i, s := range syms {
+		reserva := 0
+		if rest := n - i - 1; rest > 0 {
+			reserva = len(fmt.Sprintf("\n… (%d más omitidos)", rest))
+		}
+		line := symbolLine(s)
+		if total+len(line)+1+reserva > maxChars {
+			break
+		}
+		total += len(line) + 1
+		kept++
+	}
+	if kept == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(relatedContextHeader)
+	for _, s := range syms[:kept] {
+		b.WriteString(symbolLine(s))
+		b.WriteString("\n")
+	}
+	if omitted := n - kept; omitted > 0 {
+		fmt.Fprintf(&b, "… (%d más omitidos)", omitted)
+	}
+	return b.String()
+}
+
+// symbolLine es la línea compacta de UN símbolo relacionado (§6 F4):
+// archivo:línea kind símbolo (vía X).
+func symbolLine(s RelatedSymbol) string {
+	via := s.Via
+	switch via {
+	case "similar":
+		via = "similitud"
+	case "import":
+		via = "import"
+	}
+	return fmt.Sprintf("%s:%d %s %s (vía %s)", s.File, s.StartLine, s.Kind, s.Symbol, via)
+}
+
 // reviewFile analiza UN archivo: llamada LLM, parseo estricto y reintentos
 // por salida malformada (§9.8). El fallo del gateway (failover agotado) no
-// se reintenta acá — el gateway ya agotó los suyos (§9.7).
-func reviewFile(ctx context.Context, gw Gateway, retries int, system, file, hunks string) ([]Finding, error) {
+// se reintenta acá — el gateway ya agotó los suyos (§9.7). related es el
+// bloque opcional de símbolos relacionados (§6 F4): vacío → prompt de
+// siempre.
+func reviewFile(ctx context.Context, gw Gateway, retries int, system, file, hunks, related string) ([]Finding, error) {
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
-		content, err := gw.Complete(ctx, roleReview, system, reviewerUser(file, hunks))
+		content, err := gw.Complete(ctx, roleReview, system, reviewerUser(file, hunks, related))
 		if err != nil {
 			return nil, fmt.Errorf("failover agotado: %w", err)
 		}
@@ -433,9 +526,12 @@ func stripFences(s string) string {
 }
 
 // reviewerUser arma el prompt de usuario del Reviewer: archivo + sus hunks
-// completos (encabezados incluidos — el contexto ayuda al anclaje).
-func reviewerUser(file, hunks string) string {
-	return userFilePrefix + file + "\n\n```diff\n" + hunks + "```"
+// completos (encabezados incluidos — el contexto ayuda al anclaje) y, si el
+// retriever aportó símbolos del índice, el bloque "Símbolos relacionados"
+// después del fence del diff (§6 F4). related vacío → prompt byte-idéntico
+// al de siempre (compatible con repos sin indexar).
+func reviewerUser(file, hunks, related string) string {
+	return userFilePrefix + file + "\n\n```diff\n" + hunks + "```" + related
 }
 
 // summarizerUser arma el prompt de usuario del Summarizer: estadísticas del

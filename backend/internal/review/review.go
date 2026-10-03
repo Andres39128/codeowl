@@ -57,6 +57,11 @@ const (
 	defaultCacheMaxEntries  = 100
 	defaultConcurrency      = 4
 	defaultReviewProfile    = "assertive" // §9.5: perfil global si el repo no define uno
+
+	// Tope de chars del bloque "Símbolos relacionados" (§6 F4) y su mínimo
+	// de config (REVIEW_CONTEXT_MAX_CHARS).
+	defaultReviewContextMaxChars = 4000
+	minReviewContextMaxChars     = 500
 )
 
 // Store es el subconjunto de la store que consume el pipeline (§4.5:
@@ -87,30 +92,54 @@ type Analyzer interface {
 	Run(ctx context.Context, workdir string) (*analyze.AnalysisResult, error)
 }
 
+// RelatedSymbol es un símbolo del repo relacionado con el archivo bajo
+// revisión (§6 F4): insumo del bloque "Símbolos relacionados" del prompt
+// del Reviewer. Tipo propio del pipeline — review NO importa index (§4.3:
+// el acoplamiento apunta hacia adentro); workers.NewIndexRetriever cablea
+// el real convirtiendo los tipos en el borde.
+type RelatedSymbol struct {
+	File      string
+	Symbol    string
+	Kind      string
+	StartLine int32
+	EndLine   int32
+	Via       string // "similar" (coseno) | "import" (grafo de imports) — cómo se encontró
+}
+
+// Retriever trae los símbolos relacionados de un archivo bajo revisión
+// (§6 F4). El pipeline lo trata nil-safe: nil → sin bloque de contexto y
+// el prompt queda byte-idéntico al de siempre. Sin topK en el contrato:
+// la implementación es dueña de su K vía config (§9.6).
+type Retriever interface {
+	RetrieveRelated(ctx context.Context, repoID int64, file, code string) ([]RelatedSymbol, error)
+}
+
 // Config son los topes del pipeline — todos config (§9.6/§9.8). El wiring
 // del worker los llena desde config.Stage2Config.
 type Config struct {
-	DiffMaxLines     int           // diff sobre el tope → solo resumen (§9.6)
-	DiffFileMaxLines int           // archivo sobre el tope → solo SAST (§9.6)
-	AgentRetries     int           // reintentos por salida malformada (§9.8)
-	DriftLines       int           // tolerancia de drift del ancla de dedup (§3.6.3)
-	CacheTTL         time.Duration // TTL de la cache de resultados (§9.6)
-	CacheMaxEntries  int           // tope de entradas de la cache (§9.6)
-	Concurrency      int           // análisis de archivos en paralelo (tope gateway por review, §9.6)
-	DefaultProfile   string        // perfil global para repos sin review.yaml (§9.5: chill|assertive|strict)
+	DiffMaxLines          int           // diff sobre el tope → solo resumen (§9.6)
+	DiffFileMaxLines      int           // archivo sobre el tope → solo SAST (§9.6)
+	AgentRetries          int           // reintentos por salida malformada (§9.8)
+	DriftLines            int           // tolerancia de drift del ancla de dedup (§3.6.3)
+	CacheTTL              time.Duration // TTL de la cache de resultados (§9.6)
+	CacheMaxEntries       int           // tope de entradas de la cache (§9.6)
+	Concurrency           int           // análisis de archivos en paralelo (tope gateway por review, §9.6)
+	DefaultProfile        string        // perfil global para repos sin review.yaml (§9.5: chill|assertive|strict)
+	ReviewContextMaxChars int           // tope de chars del bloque "Símbolos relacionados" del prompt (§6 F4)
 }
 
 // DefaultConfig devuelve la config por defecto (espejo de los defaults de
 // config.Stage2Config — §4.2).
 func DefaultConfig() Config {
 	return Config{
-		DiffMaxLines:     defaultDiffMaxLines,
-		DiffFileMaxLines: defaultDiffFileMaxLines,
-		AgentRetries:     defaultAgentRetries,
-		DriftLines:       defaultDriftLines,
-		CacheTTL:         defaultCacheTTL,
-		CacheMaxEntries:  defaultCacheMaxEntries,
-		Concurrency:      defaultConcurrency,
+		DiffMaxLines:          defaultDiffMaxLines,
+		DiffFileMaxLines:      defaultDiffFileMaxLines,
+		AgentRetries:          defaultAgentRetries,
+		DriftLines:            defaultDriftLines,
+		CacheTTL:              defaultCacheTTL,
+		CacheMaxEntries:       defaultCacheMaxEntries,
+		Concurrency:           defaultConcurrency,
+		ReviewContextMaxChars: defaultReviewContextMaxChars,
 	}
 }
 
@@ -138,6 +167,9 @@ func (c Config) normalized() Config {
 	}
 	if c.Concurrency < 1 {
 		c.Concurrency = d.Concurrency
+	}
+	if c.ReviewContextMaxChars < minReviewContextMaxChars {
+		c.ReviewContextMaxChars = d.ReviewContextMaxChars
 	}
 	if !repoconfig.IsValidProfile(c.DefaultProfile) {
 		c.DefaultProfile = defaultReviewProfile // inválida o cero-value → default del pipeline
@@ -183,7 +215,11 @@ type Finding struct {
 // fila running — o ante fallo de publicación, que ya marcó la corrida
 // failed (§9.7). Los recortes de cobertura NO son error: quedan partial y
 // declarados en el resumen (§9.6 — jamás recorte silencioso).
-func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyzer, provider vcs.VCSProvider, input ReviewInput) (*ReviewResult, error) {
+//
+// retr (§6 F4) aporta el contexto simbólico del repo al Reviewer; nil →
+// sin bloque y el prompt queda como siempre. Un fallo del retriever JAMÁS
+// degrada la revisión (§9.6): degrada el bloque, no la corrida.
+func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyzer, provider vcs.VCSProvider, retr Retriever, input ReviewInput) (*ReviewResult, error) {
 	cfg = cfg.normalized()
 	results.configure(cfg.CacheTTL, cfg.CacheMaxEntries)
 
@@ -296,7 +332,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		slog.Info("review: cache hit", "review", rev.ID)
 	} else if !overCap && len(fileHunks) > 0 {
 		var discarded []string
-		llmFindings, discarded, err = runReviewer(ctx, gw, cfg, rc, fileHunks)
+		llmFindings, discarded, err = runReviewer(ctx, gw, retr, input.RepositoryID, cfg, rc, fileHunks)
 		if err != nil {
 			return nil, err // cancelación del contexto: el job reintenta
 		}

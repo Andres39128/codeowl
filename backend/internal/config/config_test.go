@@ -155,6 +155,25 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Stage2.RetrievalTopK != 8 {
 		t.Errorf("RETRIEVAL_TOP_K default: got %d want 8 (§9.6)", cfg.Stage2.RetrievalTopK)
 	}
+	if cfg.Stage2.ReviewContextMaxChars != 4000 {
+		t.Errorf("REVIEW_CONTEXT_MAX_CHARS default: got %d want 4000 (§6 F4)", cfg.Stage2.ReviewContextMaxChars)
+	}
+}
+
+// REVIEW_CONTEXT_MAX_CHARS por debajo del mínimo (500, §6 F4): un bloque
+// más chico no alcanza ni para un símbolo — mejor fallar el arranque.
+func TestLoadReviewContextMaxCharsInvalido(t *testing.T) {
+	setStage1(t)
+	t.Setenv("REVIEW_CONTEXT_MAX_CHARS", "499")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "REVIEW_CONTEXT_MAX_CHARS") {
+		t.Errorf("REVIEW_CONTEXT_MAX_CHARS < 500 debe fallar mencionando el nombre: %v", err)
+	}
+
+	setStage1(t)
+	t.Setenv("REVIEW_CONTEXT_MAX_CHARS", "chau")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "REVIEW_CONTEXT_MAX_CHARS") {
+		t.Errorf("REVIEW_CONTEXT_MAX_CHARS no-entero debe fallar mencionando el nombre: %v", err)
+	}
 }
 
 func TestLoadMasterKeyInvalida(t *testing.T) {

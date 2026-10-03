@@ -89,6 +89,7 @@ func main() {
 	if err := q.Register(
 		&jobs.ReviewJobWorker{
 			Store: st, Gateway: gateway, Analyzer: analyzer, Provider: provider, Queue: q, Config: reviewCfg,
+			Retriever: jobs.NewIndexRetriever(st, gateway, cfg.Stage2.RetrievalTopK),
 		},
 		&jobs.ChatJobWorker{
 			Store: st, Gateway: gateway, Provider: provider, Queue: q,
