@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,6 +47,8 @@ type latestReviewView struct {
 // prView es la fila del listado y el bloque "pr" del detalle. Sin title:
 // pull_requests no la persiste (solo author/number — la guía §3.3 guarda lo
 // mínimo; si el dashboard quiere título, es trabajo del VCS, no de la BD).
+// RiskScore es el proxy del tail de Run (§6 F5): nil = sin corrida que lo
+// haya calculado (columna NULL en la BD).
 type prView struct {
 	ID           int64             `json:"id"`
 	Number       int64             `json:"number"`
@@ -55,8 +58,12 @@ type prView struct {
 	HeadSha      string            `json:"head_sha"`
 	BaseRef      string            `json:"base_ref"`
 	UpdatedAt    time.Time         `json:"updated_at"`
+	RiskScore    *int              `json:"risk_score"`
 	LatestReview *latestReviewView `json:"latest_review"`
 }
+
+// intPtr proyecta el score nullable de la fila a nil/valor del JSON.
+func intPtr(i int) *int { return &i }
 
 // prViewOf proyecta la fila del listado (con corrida interpolada y conteos).
 func prViewOf(row store.ListPullRequestsWithLatestReviewRow) prView {
@@ -73,6 +80,9 @@ func prViewOf(row store.ListPullRequestsWithLatestReviewRow) prView {
 		// COALESCE documentados en pull_requests.sql).
 		LatestReview: nil,
 	}
+	if row.RiskScore.Valid {
+		v.RiskScore = intPtr(int(row.RiskScore.Int32))
+	}
 	if row.ReviewID != 0 {
 		v.LatestReview = &latestReviewView{
 			ID:        row.ReviewID,
@@ -84,9 +94,59 @@ func prViewOf(row store.ListPullRequestsWithLatestReviewRow) prView {
 	return v
 }
 
-// handleListPRs: GET /api/prs — todos los PRs, el más reciente primero
-// (updated_at DESC). Los cerrados quedan: conservan valor de auditoría.
+// queryChoice valida un query param contra un conjunto cerrado: la ausencia
+// ("") siempre pasa. Fail closed (decisión 8 de F5): valor desconocido →
+// 400 con mensaje claro, jamás un ignore silencioso.
+func queryChoice(val string, allowed ...string) (string, bool) {
+	if val == "" {
+		return "", true
+	}
+	for _, a := range allowed {
+		if val == a {
+			return val, true
+		}
+	}
+	return "", false
+}
+
+// handleListPRs: GET /api/prs — todos los PRs (los cerrados quedan: conservan
+// valor de auditoría) con la última corrida. Primer query params de la API
+// (decisión 8 de F5, el triage es su primer consumidor):
+//   - sort=updated (default) | risk: el default conserva el ORDER BY
+//     updated_at DESC del SQL; risk reordena en el handler.
+//   - state=open|closed, repo={id}, severity=high|medium|low: filtran.
+//
+// El sort/filter vive en Go, no en SQL dinámico (decisión del brief): un solo
+// PR de sqlc, sin consulta duplicada por cada combinación.
+// ponytail: sort/filter O(n) sobre el listado completo — single-org, cientos
+// de PRs; mover a SQL dinámico solo si el dataset llega a millones.
 func (s *Server) handleListPRs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	sortBy, ok := queryChoice(q.Get("sort"), "updated", "risk")
+	if !ok {
+		writeError(w, http.StatusBadRequest, `valor inválido para "sort": esperado updated|risk`)
+		return
+	}
+	state, ok := queryChoice(q.Get("state"), "open", "closed")
+	if !ok {
+		writeError(w, http.StatusBadRequest, `valor inválido para "state": esperado open|closed`)
+		return
+	}
+	var repoID int64
+	if raw := q.Get("repo"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			writeError(w, http.StatusBadRequest, `valor inválido para "repo": debe ser un id numérico`)
+			return
+		}
+		repoID = id
+	}
+	severity, ok := queryChoice(q.Get("severity"), "high", "medium", "low")
+	if !ok {
+		writeError(w, http.StatusBadRequest, `valor inválido para "severity": esperado high|medium|low`)
+		return
+	}
+
 	rows, err := s.store.ListPullRequestsWithLatestReview(r.Context())
 	if err != nil {
 		slog.Error("listando PRs", "err", err, "req_id", r.Context().Value(requestIDKey))
@@ -95,7 +155,47 @@ func (s *Server) handleListPRs(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]prView, 0, len(rows))
 	for _, row := range rows {
-		views = append(views, prViewOf(row))
+		v := prViewOf(row)
+		if state != "" && v.State != state {
+			continue
+		}
+		if repoID != 0 && v.Repo.ID != repoID {
+			continue
+		}
+		// severity: al menos un finding de esa severidad en la ÚLTIMA
+		// corrida (los conteos ya vienen por corrida desde el SQL).
+		if severity != "" {
+			var n int64
+			if v.LatestReview != nil {
+				switch severity {
+				case "high":
+					n = v.LatestReview.Counts.High
+				case "medium":
+					n = v.LatestReview.Counts.Medium
+				case "low":
+					n = v.LatestReview.Counts.Low
+				}
+			}
+			if n < 1 {
+				continue
+			}
+		}
+		views = append(views, v)
+	}
+	if sortBy == "risk" {
+		// risk_score DESC, sin score al final, empate → el orden base del
+		// SQL (updated_at DESC) sobrevive gracias al sort estable.
+		sort.SliceStable(views, func(i, j int) bool {
+			ri, rj := views[i].RiskScore, views[j].RiskScore
+			switch {
+			case ri == nil:
+				return false
+			case rj == nil:
+				return true
+			default:
+				return *ri > *rj
+			}
+		})
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -172,6 +272,11 @@ func (s *Server) handlePRDetail(w http.ResponseWriter, r *http.Request) {
 		BaseRef:   pr.BaseRef,
 		UpdatedAt: pr.UpdatedAt.Time,
 	}, Findings: []findingView{}}
+	// Misma forma que el listado: el score viaja en el bloque pr (o null si
+	// aún no corrió una review que lo calculara).
+	if pr.RiskScore.Valid {
+		out.PR.RiskScore = intPtr(int(pr.RiskScore.Int32))
+	}
 
 	review, err := s.store.GetLatestReviewByPR(r.Context(), id)
 	switch {

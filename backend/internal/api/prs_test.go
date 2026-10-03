@@ -377,3 +377,294 @@ func TestPRDiffEligeAdapterPorRepo(t *testing.T) {
 
 func boolPtr(b bool) *bool    { return &b }
 func strPtr(s string) *string { return &s }
+
+// triageFx es el tablero determinista de los query params (T7, decisión 8):
+// repo principal con cinco PRs sembrados en orden (el updated_at crece con
+// cada insert, precedente de seedPRs) y un repo secundario con uno propio.
+//
+//	repo1: slow (open,  score 50, 1°) → fast (open, score 50, 2°) →
+//	       top  (open,  score 90, 3°, última corrida 1 high) →
+//	       none (open,  score nil, 4°, sin corridas) →
+//	       cerrado (closed, score 10, 5°, sin corridas)
+//	repo2: otro (open, sin score)
+type triageFx struct {
+	repo  store.Repository
+	repo2 store.Repository
+	prs   map[string]store.PullRequest
+}
+
+func seedTriage(t *testing.T, e *testEnv) *triageFx {
+	t.Helper()
+	ctx := context.Background()
+	fx := &triageFx{prs: map[string]store.PullRequest{}}
+
+	crearRepo := func(nombre string) store.Repository {
+		t.Helper()
+		repo, err := e.st.CreateRepository(ctx, store.CreateRepositoryParams{
+			Vcs: "github", ExternalID: time.Now().UnixNano()%1_000_000 + 1,
+			Owner: "acme", Name: nombre,
+		})
+		if err != nil {
+			t.Fatalf("CreateRepository(%s): %v", nombre, err)
+		}
+		return repo
+	}
+	fx.repo = crearRepo("triage-a")
+	fx.repo2 = crearRepo("triage-b")
+
+	crearPR := func(repoID int64, nombre, state string) store.PullRequest {
+		t.Helper()
+		pr, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+			RepositoryID: repoID,
+			Number:       time.Now().UnixNano()%100_000 + 1,
+			Author:       "dev-" + nombre,
+			State:        state,
+			HeadSha:      "sha-" + nombre,
+			BaseRef:      "main",
+			BaseSha:      "base-" + nombre,
+			CreatedAt:    pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+		})
+		if err != nil {
+			t.Fatalf("UpsertPullRequest(%s): %v", nombre, err)
+		}
+		fx.prs[nombre] = pr
+		return pr
+	}
+
+	// Orden de siembra = orden de updated_at (de más viejo a más nuevo).
+	crearPR(fx.repo.ID, "slow", "open")
+	crearPR(fx.repo.ID, "fast", "open")
+	top := crearPR(fx.repo.ID, "top", "open")
+	crearPR(fx.repo.ID, "none", "open")
+	crearPR(fx.repo.ID, "cerrado", "closed")
+	crearPR(fx.repo2.ID, "otro", "open")
+
+	score := func(nombre string, v int32) {
+		t.Helper()
+		if err := e.st.UpdatePullRequestRiskScore(ctx, store.UpdatePullRequestRiskScoreParams{
+			ID: fx.prs[nombre].ID, RiskScore: pgtype.Int4{Int32: v, Valid: true},
+		}); err != nil {
+			t.Fatalf("UpdatePullRequestRiskScore(%s): %v", nombre, err)
+		}
+	}
+	score("slow", 50)
+	score("fast", 50)
+	score("top", 90)
+	score("cerrado", 10)
+
+	// top: última corrida con 1 high; fast: 1 low — alimenta severity.
+	corrida := func(nombre, sev string) {
+		t.Helper()
+		pr := fx.prs[nombre]
+		rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: pr.HeadSha, BaseSha: pr.BaseSha})
+		if err != nil {
+			t.Fatalf("CreateReview(%s): %v", nombre, err)
+		}
+		if _, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+			ReviewID: rev.ID, File: nombre + ".go", Line: 1, Severity: sev,
+			Category: "security", Body: "hallazgo-" + nombre, Source: "llm",
+		}); err != nil {
+			t.Fatalf("CreateFinding(%s): %v", nombre, err)
+		}
+	}
+	corrida("top", "high")
+	corrida("fast", "low")
+
+	t.Cleanup(func() {
+		// Hojas primero (precedente seedPRs): findings → reviews → PRs → repos.
+		if _, err := e.st.Pool.Exec(ctx,
+			"DELETE FROM findings WHERE review_id IN (SELECT id FROM reviews WHERE pull_request_id = ANY($1))",
+			[]int64{top.ID, fx.prs["fast"].ID}); err != nil {
+			t.Errorf("limpiando findings: %v", err)
+		}
+		if _, err := e.st.Pool.Exec(ctx, "DELETE FROM reviews WHERE pull_request_id = ANY($1)",
+			[]int64{top.ID, fx.prs["fast"].ID}); err != nil {
+			t.Errorf("limpiando reviews: %v", err)
+		}
+		for _, repo := range []store.Repository{fx.repo, fx.repo2} {
+			if _, err := e.st.Pool.Exec(ctx, "DELETE FROM pull_requests WHERE repository_id = $1", repo.ID); err != nil {
+				t.Errorf("limpiando PRs: %v", err)
+			}
+			if _, err := e.st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id = $1", repo.ID); err != nil {
+				t.Errorf("limpiando repos: %v", err)
+			}
+		}
+	})
+	return fx
+}
+
+// ids extrae, en el orden del JSON, los ids de los PRs sembrados.
+func ids(list []prView, fx *triageFx) []int64 {
+	nombres := map[int64]string{}
+	for nombre, pr := range fx.prs {
+		nombres[pr.ID] = nombre
+	}
+	out := make([]int64, 0, len(list))
+	for _, v := range list {
+		if _, ok := nombres[v.ID]; ok {
+			out = append(out, v.ID)
+		}
+	}
+	return out
+}
+
+func mismos(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// listarPRs pide /api/prs con query y devuelve las vistas decodificadas.
+func listarPRs(t *testing.T, e *testEnv, query string) []prView {
+	t.Helper()
+	a := e.admin(t)
+	resp := e.do(t, http.MethodGet, "/api/prs"+query, a.cookie, a.csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/prs%s debe ser 200, fue %d", query, resp.StatusCode)
+	}
+	var list []prView
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	return list
+}
+
+// risk_score viaja en el JSON (90/nil/10) y el detalle lo espeja: T8 consume
+// ambas formas.
+func TestPRsRiskScoreEnListadoYDetalle(t *testing.T) {
+	e := newTestEnv(t, 5)
+	fx := seedTriage(t, e)
+
+	list := listarPRs(t, e, "")
+	buscar := func(id int64) *prView {
+		for i := range list {
+			if list[i].ID == id {
+				return &list[i]
+			}
+		}
+		return nil
+	}
+	if v := buscar(fx.prs["top"].ID); v == nil || v.RiskScore == nil || *v.RiskScore != 90 {
+		t.Errorf("top debe traer risk_score 90: %+v", v)
+	}
+	if v := buscar(fx.prs["none"].ID); v == nil || v.RiskScore != nil {
+		t.Errorf("none (sin corridas) debe traer risk_score null: %+v", v)
+	}
+	// El detalle usa el mismo bloque pr: mismo score que el listado.
+	resp := e.do(t, http.MethodGet, fmt.Sprintf("/api/prs/%d", fx.prs["top"].ID), e.admin(t).cookie, e.admin(t).csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET detalle debe ser 200, fue %d", resp.StatusCode)
+	}
+	var out prDetailView
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.PR.RiskScore == nil || *out.PR.RiskScore != 90 {
+		t.Errorf("detalle debe espejar risk_score 90: %+v", out.PR.RiskScore)
+	}
+}
+
+// sort=risk: score DESC, sin score al final, empate resuelto por updated_at
+// DESC (fast se sembró después de slow). El default (sin sort) conserva el
+// orden del SQL: updated_at DESC — que acá refleja TAMBIÉN los toques de
+// UpdatePullRequestRiskScore (T3: pisa updated_at en cada score, en orden
+// slow → fast → top → cerrado) y al PR "otro" del repo2, sembrado al final.
+func TestPRsSortPorRiesgo(t *testing.T) {
+	e := newTestEnv(t, 5)
+	fx := seedTriage(t, e)
+	porNombre := func(nombres ...string) []int64 {
+		out := make([]int64, 0, len(nombres))
+		for _, n := range nombres {
+			out = append(out, fx.prs[n].ID)
+		}
+		return out
+	}
+
+	defaultOrden := ids(listarPRs(t, e, ""), fx)
+	if !mismos(defaultOrden, porNombre("cerrado", "top", "fast", "slow", "otro", "none")) {
+		t.Errorf("default debe ser updated_at DESC (scores tocan updated_at), fue %v", defaultOrden)
+	}
+	riesgo := ids(listarPRs(t, e, "?sort=risk"), fx)
+	if !mismos(riesgo, porNombre("top", "fast", "slow", "cerrado", "otro", "none")) {
+		t.Errorf("sort=risk debe ser score DESC con nil al final (empate estable), fue %v", riesgo)
+	}
+	// sort=updated es explícitamente el default.
+	if got := ids(listarPRs(t, e, "?sort=updated"), fx); !mismos(got, defaultOrden) {
+		t.Errorf("sort=updated debe equivaler al default, fue %v", got)
+	}
+}
+
+// state, repo y severity filtran sobre el listado completo; severity mira
+// los conteos de la ÚLTIMA corrida (top tiene 1 high, fast 1 low). El orden
+// relativo es el del SQL (ver TestPRsSortPorRiesgo para el porqué).
+func TestPRsFiltrosStateRepoSeverity(t *testing.T) {
+	e := newTestEnv(t, 5)
+	fx := seedTriage(t, e)
+	porNombre := func(nombres ...string) []int64 {
+		out := make([]int64, 0, len(nombres))
+		for _, n := range nombres {
+			out = append(out, fx.prs[n].ID)
+		}
+		return out
+	}
+
+	abiertos := ids(listarPRs(t, e, "?state=open"), fx)
+	if !mismos(abiertos, porNombre("top", "fast", "slow", "otro", "none")) {
+		t.Errorf("state=open debe excluir al cerrado, fue %v", abiertos)
+	}
+	if got := ids(listarPRs(t, e, "?state=closed"), fx); !mismos(got, porNombre("cerrado")) {
+		t.Errorf("state=closed debe traer solo el cerrado, fue %v", got)
+	}
+	if got := ids(listarPRs(t, e, fmt.Sprintf("?repo=%d", fx.repo2.ID)), fx); !mismos(got, porNombre("otro")) {
+		t.Errorf("repo=repo2 debe traer solo su PR, fue %v", got)
+	}
+	if got := ids(listarPRs(t, e, "?severity=high"), fx); !mismos(got, porNombre("top")) {
+		t.Errorf("severity=high debe traer solo top, fue %v", got)
+	}
+	if got := ids(listarPRs(t, e, "?severity=low"), fx); !mismos(got, porNombre("fast")) {
+		t.Errorf("severity=low debe traer solo fast, fue %v", got)
+	}
+	if got := ids(listarPRs(t, e, "?severity=medium"), fx); len(got) != 0 {
+		t.Errorf("severity=medium no matchea nadie, fue %v", got)
+	}
+	// Combinación: el triage pide abierto y riesgoso a la vez.
+	combo := ids(listarPRs(t, e, "?state=open&sort=risk&severity=low"), fx)
+	if !mismos(combo, porNombre("fast")) {
+		t.Errorf("state=open&sort=risk&severity=low debe traer solo fast, fue %v", combo)
+	}
+}
+
+// Parámetros desconocidos → 400 con mensaje, jamás ignore silencioso
+// (decisión 8: fail closed).
+func TestPRsQueryInvalidos400(t *testing.T) {
+	e := newTestEnv(t, 5)
+	seedTriage(t, e)
+	a := e.admin(t)
+
+	casos := []string{
+		"?sort=popular",
+		"?state=merged",
+		"?repo=abc",
+		"?repo=-1",
+		"?severity=critical",
+	}
+	for _, query := range casos {
+		resp := e.do(t, http.MethodGet, "/api/prs"+query, a.cookie, a.csrf, nil)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s debe ser 400, fue %d", query, resp.StatusCode)
+			continue
+		}
+		var out struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Error == "" {
+			t.Errorf("%s debe responder {\"error\": \"...\"}: got %q err=%v", query, out.Error, err)
+		}
+	}
+}

@@ -14,12 +14,15 @@ SELECT * FROM llm_usage WHERE job_id = $1 ORDER BY id;
 -- Costo LLM medio por review (§6 F5): costo = tokens (in+out), sin precio
 -- por modelo modelado. Un grupo por review con linkage; las reviews sin
 -- usage no cuentan. El AVG es sobre totales por review, no por llamada.
+-- Ventana (T7): usos con created_at >= since — la misma convención del
+-- resumen de métricas (los outcomes se evalúan sobre filas en la ventana),
+-- así el endpoint /api/metrics es consistente en todas sus tasas.
 SELECT COALESCE(AVG(per_review.total_tokens), 0)::float8 AS avg_tokens_per_review,
        COUNT(*) AS reviews_counted
 FROM (
     SELECT SUM(tokens_in + tokens_out) AS total_tokens
     FROM llm_usage
-    WHERE review_id IS NOT NULL
+    WHERE review_id IS NOT NULL AND created_at >= sqlc.arg('since')
     GROUP BY review_id
 ) per_review;
 

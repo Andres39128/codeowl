@@ -194,9 +194,10 @@ func TestF5MetricsSummary(t *testing.T) {
 	uso(revFast.ID, 7, 3)
 	uso(0, 99, 99) // fuera de corrida: review_id null
 
-	// Limpieza de las hojas: la BD es compartida y GetAvgLlmTokensPerReview
-	// no filtra por fecha — sin esto, una re-corrida acumularía reviews
-	// viejas en el promedio. PRs/reviews/repos quedan (precedente f1).
+	// Limpieza de las hojas: la BD es compartida — sin esto, una re-corrida
+	// acumularía findings/comments/usage viejos. PRs/reviews/repos quedan
+	// (precedente f1). Con la ventana de GetAvgLlmTokensPerReview (T7) el
+	// promedio es exacto: solo nuestros usos son posteriores a `since`.
 	t.Cleanup(func() {
 		revIDs := []int64{revSlow.ID, revFast.ID}
 		prIDs := []int64{prSlow.ID, prFast.ID}
@@ -229,19 +230,17 @@ func TestF5MetricsSummary(t *testing.T) {
 		t.Errorf("FP: got %d FP de %d resueltos, querés 1 de 2 (resolved∧¬applied)", sum.FalsePositives, sum.ResolvedComments)
 	}
 
-	tok, err := st.GetAvgLlmTokensPerReview(ctx)
+	tok, err := st.GetAvgLlmTokensPerReview(ctx, pgtype.Timestamptz{Time: since, Valid: true})
 	if err != nil {
 		t.Fatalf("GetAvgLlmTokensPerReview: %v", err)
 	}
-	if tok.ReviewsCounted < 2 {
-		t.Errorf("ReviewsCounted = %d, querés al menos 2 (nuestras dos reviews)", tok.ReviewsCounted)
+	// La ventana (T7) deja fuera todo lo anterior a `since`: nuestros dos
+	// grupos (45 y 10 tokens) son exactos, sin contaminación de la BD
+	// compartida.
+	if tok.ReviewsCounted != 2 {
+		t.Errorf("ReviewsCounted = %d, querés exactamente 2", tok.ReviewsCounted)
 	}
-	// La BD es compartida: el promedio puede incluir grupos de otras filas
-	// con linkage que no controlamos — semántica "al menos" (precedente de
-	// TestLlmUsage). Nuestros grupos valen 45 y 10: el promedio cae entre
-	// ellos salvo contaminación, y contaminación extrema también la cubre
-	// el piso de 2 reviews contadas.
-	if !(tok.AvgTokensPerReview >= 10 && tok.AvgTokensPerReview <= 45) {
-		t.Errorf("AvgTokensPerReview = %v, fuera del rango de nuestros grupos [10, 45]", tok.AvgTokensPerReview)
+	if math.Abs(tok.AvgTokensPerReview-27.5) > 0.001 {
+		t.Errorf("AvgTokensPerReview = %v, querés 27.5 ((45+10)/2)", tok.AvgTokensPerReview)
 	}
 }

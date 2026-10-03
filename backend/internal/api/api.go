@@ -129,6 +129,10 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /api/prs/{id}", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePRDetail)))))
 	mux.Handle("GET /api/prs/{id}/diff", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePRDiff)))))
 
+	// Métricas (guía §6 F5): resumen de la ventana para el dashboard.
+	// Member-visible como los PRs — el member opera el triage (§3.4).
+	mux.Handle("GET /api/metrics", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleMetrics)))))
+
 	return mux
 }
 

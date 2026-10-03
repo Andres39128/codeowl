@@ -114,6 +114,7 @@ SELECT pr.id,
        pr.head_sha,
        pr.base_ref,
        pr.updated_at,
+       pr.risk_score,
        repo.owner   AS repo_owner,
        repo.name    AS repo_name,
        repo.vcs     AS repo_vcs,
@@ -146,6 +147,7 @@ type ListPullRequestsWithLatestReviewRow struct {
 	HeadSha         string
 	BaseRef         string
 	UpdatedAt       pgtype.Timestamptz
+	RiskScore       pgtype.Int4
 	RepoOwner       string
 	RepoName        string
 	RepoVcs         string
@@ -186,6 +188,7 @@ func (q *Queries) ListPullRequestsWithLatestReview(ctx context.Context) ([]ListP
 			&i.HeadSha,
 			&i.BaseRef,
 			&i.UpdatedAt,
+			&i.RiskScore,
 			&i.RepoOwner,
 			&i.RepoName,
 			&i.RepoVcs,
