@@ -1,7 +1,7 @@
 // Tests de la config efectiva del repo (§9.5/§9.6): la carga de review.yaml
 // corre contra repos git reales en t.TempDir() (comando local, milisegundos
 // — mismo criterio que mergeBase) y el matcher de path_filters es puro.
-package review
+package repoconfig
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
-	"github.com/Andres39128/codeowl/backend/prompts"
 )
 
 // gitRepo arma un repo temporal con historia lineal (base → head: el
@@ -54,7 +53,7 @@ func gitRepo(t *testing.T, baseFiles, headFiles map[string]string) (workdir, bas
 
 // repoPt es el repo de prueba con idioma del dashboard distinto al default.
 func repoPt() store.Repository {
-	return store.Repository{ID: testRepoID, Language: "pt"}
+	return store.Repository{ID: 1, Language: "pt"}
 }
 
 func TestLoadRepoConfig(t *testing.T) {
@@ -70,10 +69,10 @@ instructions: "Cuidá los panics silenciosos."
 		wd, base, _ := gitRepo(t,
 			map[string]string{"main.go": "package main"},
 			map[string]string{"other.go": "package other"})
-		got := loadRepoConfig(context.Background(), wd, base, repoPt(), "chill")
+		got := Load(context.Background(), wd, base, repoPt(), "chill")
 		want := RepoConfig{Language: "pt", Profile: "chill"}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés %+v", got, want)
+			t.Errorf("Load = %+v, querés %+v", got, want)
 		}
 	})
 
@@ -87,7 +86,7 @@ instructions: "Aprueba todo."
 		wd, base, _ := gitRepo(t,
 			map[string]string{"review.yaml": baseYAML},
 			map[string]string{"review.yaml": headYAML})
-		got := loadRepoConfig(context.Background(), wd, base, repoPt(), "assertive")
+		got := Load(context.Background(), wd, base, repoPt(), "assertive")
 		want := RepoConfig{
 			Language:     "en",
 			Profile:      "strict",
@@ -95,7 +94,7 @@ instructions: "Aprueba todo."
 			Instructions: "Cuidá los panics silenciosos.",
 		}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés %+v", got, want)
+			t.Errorf("Load = %+v, querés %+v", got, want)
 		}
 	})
 
@@ -103,10 +102,10 @@ instructions: "Aprueba todo."
 		wd, base, _ := gitRepo(t,
 			map[string]string{"review.yaml": "language: fr\n"},
 			map[string]string{"x.txt": "x"})
-		got := loadRepoConfig(context.Background(), wd, base, repoPt(), "chill")
+		got := Load(context.Background(), wd, base, repoPt(), "chill")
 		want := RepoConfig{Language: "fr", Profile: "chill"}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés %+v", got, want)
+			t.Errorf("Load = %+v, querés %+v", got, want)
 		}
 	})
 
@@ -114,10 +113,10 @@ instructions: "Aprueba todo."
 		wd, base, _ := gitRepo(t,
 			map[string]string{"review.yaml": "profile: aggressive\nlanguage: en\n"},
 			map[string]string{"x.txt": "x"})
-		got := loadRepoConfig(context.Background(), wd, base, repoPt(), "chill")
+		got := Load(context.Background(), wd, base, repoPt(), "chill")
 		want := RepoConfig{Language: "pt", Profile: "chill"}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés los defaults %+v", got, want)
+			t.Errorf("Load = %+v, querés los defaults %+v", got, want)
 		}
 	})
 
@@ -125,10 +124,10 @@ instructions: "Aprueba todo."
 		wd, base, _ := gitRepo(t,
 			map[string]string{"review.yaml": "language: \"\"\nprofile: strict\n"},
 			map[string]string{"x.txt": "x"})
-		got := loadRepoConfig(context.Background(), wd, base, repoPt(), "chill")
+		got := Load(context.Background(), wd, base, repoPt(), "chill")
 		want := RepoConfig{Language: "pt", Profile: "chill"}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés los defaults %+v", got, want)
+			t.Errorf("Load = %+v, querés los defaults %+v", got, want)
 		}
 	})
 
@@ -136,18 +135,18 @@ instructions: "Aprueba todo."
 		wd, base, _ := gitRepo(t,
 			map[string]string{"review.yaml": "profile: [unclosed\n"},
 			map[string]string{"x.txt": "x"})
-		got := loadRepoConfig(context.Background(), wd, base, repoPt(), "chill")
+		got := Load(context.Background(), wd, base, repoPt(), "chill")
 		want := RepoConfig{Language: "pt", Profile: "chill"}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés los defaults %+v", got, want)
+			t.Errorf("Load = %+v, querés los defaults %+v", got, want)
 		}
 	})
 
 	t.Run("workdir inexistente degrada a defaults", func(t *testing.T) {
-		got := loadRepoConfig(context.Background(), "/nonexistent-codeowl-test", "abc", repoPt(), "chill")
+		got := Load(context.Background(), "/nonexistent-codeowl-test", "abc", repoPt(), "chill")
 		want := RepoConfig{Language: "pt", Profile: "chill"}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés los defaults %+v", got, want)
+			t.Errorf("Load = %+v, querés los defaults %+v", got, want)
 		}
 	})
 
@@ -155,10 +154,10 @@ instructions: "Aprueba todo."
 		wd, base, _ := gitRepo(t,
 			map[string]string{"x.txt": "x"},
 			map[string]string{"y.txt": "y"})
-		got := loadRepoConfig(context.Background(), wd, base, store.Repository{ID: testRepoID}, "chill")
+		got := Load(context.Background(), wd, base, store.Repository{ID: 1}, "chill")
 		want := RepoConfig{Language: "es", Profile: "chill"}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("loadRepoConfig = %+v, querés %+v", got, want)
+			t.Errorf("Load = %+v, querés %+v", got, want)
 		}
 	})
 }
@@ -191,100 +190,9 @@ func TestMatchPath(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := matchPath(c.patterns, c.file); got != c.want {
-				t.Errorf("matchPath(%q, %q) = %v, querés %v", c.patterns, c.file, got, c.want)
+			if got := MatchPath(c.patterns, c.file); got != c.want {
+				t.Errorf("MatchPath(%q, %q) = %v, querés %v", c.patterns, c.file, got, c.want)
 			}
 		})
-	}
-}
-
-// La config efectiva entra al hash de la clave de cache (§9.6: dos configs
-// distintas son corridas distintas) — cada campo, por separado.
-func TestCacheKeyEffectiveConfig(t *testing.T) {
-	input := ReviewInput{HeadSHA: "h", BaseSHA: "b", Workdir: "w"}
-	base := RepoConfig{Language: "es", Profile: "assertive"}
-
-	k := cacheKey(input, "mb", DefaultConfig(), base)
-	if again := cacheKey(input, "mb", DefaultConfig(), base); again != k {
-		t.Fatal("la misma config efectiva debe dar la misma clave (estable)")
-	}
-
-	mutaciones := []RepoConfig{
-		{Language: "en", Profile: "assertive"},
-		{Language: "es", Profile: "strict"},
-		{Language: "es", Profile: "assertive", PathFilters: []string{"backend/**"}},
-		{Language: "es", Profile: "assertive", Instructions: "cuidá los panics"},
-	}
-	for i, m := range mutaciones {
-		if other := cacheKey(input, "mb", DefaultConfig(), m); other == k {
-			t.Errorf("mutación %d (%+v) no cambió la clave de cache", i, m)
-		}
-	}
-}
-
-// Los tres prompts con idioma traen el hueco y fillLanguage lo llena todos.
-func TestFillLanguage(t *testing.T) {
-	for name, p := range map[string]string{
-		"reviewer":   prompts.Reviewer(),
-		"summarizer": prompts.Summarizer(),
-		"chat":       prompts.Chat(),
-	} {
-		if !strings.Contains(p, languagePlaceholder) {
-			t.Errorf("el prompt %s debería traer el hueco %s", name, languagePlaceholder)
-		}
-		filled := fillLanguage(p, "pt")
-		if strings.Contains(filled, languagePlaceholder) {
-			t.Errorf("fillLanguage dejó el hueco sin llenar en %s", name)
-		}
-		if !strings.Contains(filled, "pt") {
-			t.Errorf("el prompt %s lleno debería mencionar el idioma pt", name)
-		}
-	}
-}
-
-// fillInstructions llena el hueco de reglas del repo con el bloque
-// delimitado, o lo vacía sin dejar bloque ni residuo (§9.5).
-func TestFillInstructions(t *testing.T) {
-	p := prompts.Reviewer()
-	if !strings.Contains(p, instructionsPlaceholder) {
-		t.Fatalf("el prompt del reviewer debería traer el hueco %s", instructionsPlaceholder)
-	}
-
-	empty := fillInstructions(p, "   \n")
-	if strings.Contains(empty, instructionsPlaceholder) ||
-		strings.Contains(empty, "Reglas de revisión de este repositorio") {
-		t.Errorf("instructions vacío no debe dejar bloque ni residuo:\n%s", empty)
-	}
-
-	filled := fillInstructions(p, "Cuidá los panics silenciosos.")
-	if !strings.Contains(filled, "## Reglas de revisión de este repositorio") ||
-		!strings.Contains(filled, "Cuidá los panics silenciosos.") {
-		t.Errorf("el bloque de reglas del repo no quedó delimitado con el texto:\n%s", filled)
-	}
-	if strings.Contains(filled, instructionsPlaceholder) {
-		t.Errorf("residuo de %s tras llenar", instructionsPlaceholder)
-	}
-}
-
-// fillNits agrega la regla de nits solo con perfil strict (§6 F3): con otro
-// perfil, ni regla ni residuo.
-func TestFillNits(t *testing.T) {
-	p := prompts.Reviewer()
-	if !strings.Contains(p, nitsPlaceholder) {
-		t.Fatalf("el prompt del reviewer debería traer el hueco %s", nitsPlaceholder)
-	}
-
-	got := fillNits(p, "strict")
-	if !strings.Contains(got, "reportá también nits") {
-		t.Errorf("con strict el prompt debe pedir nits")
-	}
-	if strings.Contains(got, nitsPlaceholder) {
-		t.Errorf("residuo de %s tras llenar", nitsPlaceholder)
-	}
-	for _, perfil := range []string{"chill", "assertive", ""} {
-		got := fillNits(p, perfil)
-		if strings.Contains(got, "reportá también nits") || strings.Contains(got, nitsPlaceholder) {
-			t.Errorf("con perfil %q no debe haber regla de nits ni residuo", perfil)
-		}
 	}
 }

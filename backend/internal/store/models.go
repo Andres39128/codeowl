@@ -123,6 +123,23 @@ type PullRequest struct {
 	UpdatedAt    pgtype.Timestamptz
 }
 
+type RepoIndex struct {
+	ID             int64
+	RepositoryID   int64
+	File           string
+	Symbol         string
+	Kind           string
+	StartLine      int32
+	EndLine        int32
+	Embedding      string
+	EmbeddingModel string
+	Dims           int32
+	Imports        []string
+	FileHash       string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type Repository struct {
 	ID            int64
 	Vcs           string

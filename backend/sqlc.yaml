@@ -10,3 +10,9 @@ sql:
         package: "store"
         out: "internal/store"
         sql_package: "pgx/v5"
+        # pgvector: sqlc mapearía vector → pgvector-go (dep nueva); acá el
+        # embedding siempre viaja como string (literal '[...]') con cast
+        # ::vector en la query — el marshal literal vive en Go (F4 §3.3).
+        overrides:
+          - db_type: "vector"
+            go_type: "string"

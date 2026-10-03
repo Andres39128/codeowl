@@ -1,9 +1,13 @@
-// Config efectiva del repo para la corrida (§9.5): los defaults del
-// dashboard (repo.Language) especializados por review.yaml de la rama base.
+// Package repoconfig resuelve la config efectiva del repo por corrida
+// (§9.5): los defaults del dashboard (repo.Language) especializados por
+// review.yaml de la rama base. La consumen review e index (F4): index lee
+// los path_filters vigentes del merge-base para respetarlos al indexar —
+// cero duplicación de la lógica (§4.3).
+//
 // El archivo se lee del MERGE-BASE — nunca del head: leerlo del head dejaría
 // al PR escribir sus propias reglas de revisión (inyección). Ausente o
 // inválido → defaults con registro: jamás rompe la corrida (§9.5).
-package review
+package repoconfig
 
 import (
 	"context"
@@ -30,10 +34,18 @@ type RepoConfig struct {
 // raíz del clon.
 const reviewYAMLFile = "review.yaml"
 
+// DefaultLanguage es el idioma de reserva si el repo no configuró uno
+// (migración: language default 'es', §3.3).
+const DefaultLanguage = "es"
+
 // validProfiles es el conjunto cerrado de perfiles de revisión (§9.5).
-// Espejo del conjunto de config.reviewProfiles (el pipeline no importa
-// config, §4.2).
+// Espejo del conjunto de config.reviewProfiles (config no importa acá, §4.2).
 var validProfiles = map[string]bool{"chill": true, "assertive": true, "strict": true}
+
+// IsValidProfile reporta si profile pertenece al conjunto cerrado (§9.5).
+func IsValidProfile(profile string) bool {
+	return validProfiles[profile]
+}
 
 // repoConfigFile es la forma cruda del review.yaml: punteros para distinguir
 // clave ausente (no pisa el default) de clave presente con valor inválido
@@ -45,35 +57,35 @@ type repoConfigFile struct {
 	Instructions *string  `yaml:"instructions"`
 }
 
-// loadRepoConfig resuelve la config efectiva: base = idioma del repo
-// (dashboard) + perfil global; review.yaml leído del merge-base pisa por
-// clave. Archivo ausente (el caso común) o git fallando → defaults; yaml
-// roto o valor inválido en una clave conocida → TODO el archivo se ignora
-// con registro y la corrida sigue con defaults (§9.5: jamás rompe el job).
-func loadRepoConfig(ctx context.Context, workdir, mergeBaseSHA string, repo store.Repository, defaultProfile string) RepoConfig {
+// Load resuelve la config efectiva: base = idioma del repo (dashboard) +
+// perfil global; review.yaml leído del merge-base pisa por clave. Archivo
+// ausente (el caso común) o git fallando → defaults; yaml roto o valor
+// inválido en una clave conocida → TODO el archivo se ignora con registro y
+// la corrida sigue con defaults (§9.5: jamás rompe el job).
+func Load(ctx context.Context, workdir, mergeBaseSHA string, repo store.Repository, defaultProfile string) RepoConfig {
 	base := RepoConfig{Language: repo.Language, Profile: defaultProfile}
 	if base.Language == "" {
-		base.Language = defaultChatLanguage // migración: language default 'es' (§3.3)
+		base.Language = DefaultLanguage // migración: language default 'es' (§3.3)
 	}
 
 	raw, err := exec.CommandContext(ctx, "git", "-C", workdir, "show", mergeBaseSHA+":"+reviewYAMLFile).Output()
 	if err != nil {
-		slog.Info("review: sin review.yaml legible en el merge-base, la corrida sigue con defaults",
+		slog.Info("repoconfig: sin review.yaml legible en el merge-base, la corrida sigue con defaults",
 			"merge_base", mergeBaseSHA, "error", err)
 		return base
 	}
 
 	var f repoConfigFile
 	if err := yaml.Unmarshal(raw, &f); err != nil {
-		slog.Warn("review: review.yaml con yaml inválido, se ignora completo (§9.5)", "error", err)
+		slog.Warn("repoconfig: review.yaml con yaml inválido, se ignora completo (§9.5)", "error", err)
 		return base
 	}
 	if f.Language != nil && strings.TrimSpace(*f.Language) == "" {
-		slog.Warn("review: review.yaml con language vacío, se ignora completo (§9.5)")
+		slog.Warn("repoconfig: review.yaml con language vacío, se ignora completo (§9.5)")
 		return base
 	}
 	if f.Profile != nil && !validProfiles[strings.TrimSpace(*f.Profile)] {
-		slog.Warn("review: review.yaml con perfil fuera del conjunto cerrado, se ignora completo (§9.5)",
+		slog.Warn("repoconfig: review.yaml con perfil fuera del conjunto cerrado, se ignora completo (§9.5)",
 			"profile", strings.TrimSpace(*f.Profile))
 		return base
 	}
@@ -92,14 +104,14 @@ func loadRepoConfig(ctx context.Context, workdir, mergeBaseSHA string, repo stor
 	return eff
 }
 
-// matchPath evalúa los path_filters del review.yaml contra la ruta del
+// MatchPath evalúa los path_filters del review.yaml contra la ruta del
 // archivo (§9.5). Lista vacía → true (pasa todo). Reglas en orden: patrón
 // plano incluye, `!patrón` excluye; con reglas include el default es
 // excluir lo no incluido. La ÚLTIMA regla que matchea gana (mismo criterio
 // que .gitignore). `**` cruza segmentos de ruta, `*` queda dentro de uno.
 // ponytail: matcher de segmentos propio — path.Match no soporta `**` y un
 // glob de terceros no justifica otra dependencia.
-func matchPath(patterns []string, file string) bool {
+func MatchPath(patterns []string, file string) bool {
 	decision := true // sin includes, todo pasa salvo lo excluido
 	for _, p := range patterns {
 		if p = strings.TrimSpace(p); p != "" && !strings.HasPrefix(p, "!") {

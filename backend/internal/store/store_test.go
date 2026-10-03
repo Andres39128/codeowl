@@ -85,11 +85,12 @@ func TestMigrateSobreBDEmpiezaLimpiaYEsIdempotente(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	// Tablas núcleo: F0 (users/sessions/River) + F1 (guía §3.3, migración 0003).
+	// Tablas núcleo: F0 (users/sessions/River) + F1 (guía §3.3, migración 0003)
+	// + F4 (repo_index con pgvector, migración 0004).
 	for _, tabla := range []string{
 		"users", "sessions", "river_job", "river_queue", "river_migration", "schema_migrations",
 		"llm_providers", "repositories", "pull_requests", "reviews",
-		"findings", "comments_sent", "webhook_deliveries", "llm_usage",
+		"findings", "comments_sent", "webhook_deliveries", "llm_usage", "repo_index",
 	} {
 		var n int
 		if err := st.Pool.QueryRow(context.Background(),

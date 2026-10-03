@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Andres39128/codeowl/backend/internal/repoconfig"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
 	"github.com/Andres39128/codeowl/backend/prompts"
@@ -24,9 +25,9 @@ import (
 // código — jamás strings hardcodeados en Go).
 var promptChat = prompts.Chat()
 
-// defaultChatLanguage es el idioma de reserva si el repo no configuró uno
-// (migración: language default 'es', §3.3).
-const defaultChatLanguage = "es"
+// defaultChatLanguage es el idioma de reserva si el repo no configuró uno:
+// espejo del default de repoconfig (migración: language default 'es', §3.3).
+const defaultChatLanguage = repoconfig.DefaultLanguage
 
 // chatUserMarker marca el prompt de usuario del chat: enruta la respuesta
 // del gateway en los stubs de test (mismo criterio que summarizerMarker).

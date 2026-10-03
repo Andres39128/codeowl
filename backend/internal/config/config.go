@@ -65,7 +65,7 @@ const (
 const masterKeySize = 32
 
 // reviewProfiles es el conjunto cerrado de perfiles de revisión (§9.5).
-// Espejo del conjunto de review.validProfiles (config no importa review).
+// Espejo del conjunto de repoconfig (config no importa paquetes internos).
 var reviewProfiles = map[string]bool{"chill": true, "assertive": true, "strict": true}
 
 type Config struct {

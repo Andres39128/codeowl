@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/Andres39128/codeowl/backend/internal/repoconfig"
 	"github.com/Andres39128/codeowl/backend/prompts"
 )
 
@@ -125,7 +126,7 @@ var (
 // reintentos se descarta con registro (§9.8: nunca crashea el job) y queda
 // declarado como cobertura parcial. Devuelve error solo si el contexto se
 // cancela (el job está muriendo).
-func runReviewer(ctx context.Context, gw Gateway, cfg Config, rc RepoConfig, files map[string]string) ([]Finding, []string, error) {
+func runReviewer(ctx context.Context, gw Gateway, cfg Config, rc repoconfig.RepoConfig, files map[string]string) ([]Finding, []string, error) {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(cfg.Concurrency)
 	system := fillNits(fillInstructions(fillLanguage(promptReviewer, rc.Language), rc.Instructions), rc.Profile)

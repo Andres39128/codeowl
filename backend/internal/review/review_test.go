@@ -10,6 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -18,8 +21,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
+	"github.com/Andres39128/codeowl/backend/internal/repoconfig"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
+	"github.com/Andres39128/codeowl/backend/prompts"
 )
 
 // diffFixture es un diff unificado chico: main.go con 4 líneas cambiadas.
@@ -796,7 +801,7 @@ func TestIsDuplicateDriftBoundaries(t *testing.T) {
 
 // Config efectiva en la corrida (§9.5/§6 F3): los tests de acá abajo corren
 // contra un repo git real (el review.yaml se lee del merge-base) usando el
-// helper gitRepo de repoconfig_test.go.
+// helper gitRepo de este archivo.
 
 // runConConfig arma un repo temporal cuyo commit base trae review.yaml y
 // corre el pipeline contra él (merge-base = base: historia lineal).
@@ -1058,5 +1063,132 @@ func TestRunTestGenerator(t *testing.T) {
 	d.gw.testgen = []string{"   "}
 	if _, err := runTestGenerator(context.Background(), d.gw, f, "", "go test"); err == nil {
 		t.Error("la salida vacía debe fallar")
+	}
+}
+
+// gitRepo arma un repo temporal con historia lineal (base → head: el
+// merge-base es el commit base) y devuelve el clon y ambos SHAs.
+func gitRepo(t *testing.T, baseFiles, headFiles map[string]string) (workdir, baseSHA, headSHA string) {
+	t.Helper()
+	workdir = t.TempDir()
+	run := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", workdir}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(files map[string]string) {
+		for p, c := range files {
+			full := filepath.Join(workdir, p)
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			run("add", p)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "test@codeowl")
+	run("config", "user.name", "codeowl-test")
+	write(baseFiles)
+	run("commit", "-qm", "base")
+	baseSHA = run("rev-parse", "HEAD")
+	write(headFiles)
+	run("commit", "-qm", "head")
+	headSHA = run("rev-parse", "HEAD")
+	return workdir, baseSHA, headSHA
+}
+
+// La config efectiva entra al hash de la clave de cache (§9.6: dos configs
+// distintas son corridas distintas) — cada campo, por separado.
+func TestCacheKeyEffectiveConfig(t *testing.T) {
+	input := ReviewInput{HeadSHA: "h", BaseSHA: "b", Workdir: "w"}
+	base := repoconfig.RepoConfig{Language: "es", Profile: "assertive"}
+
+	k := cacheKey(input, "mb", DefaultConfig(), base)
+	if again := cacheKey(input, "mb", DefaultConfig(), base); again != k {
+		t.Fatal("la misma config efectiva debe dar la misma clave (estable)")
+	}
+
+	mutaciones := []repoconfig.RepoConfig{
+		{Language: "en", Profile: "assertive"},
+		{Language: "es", Profile: "strict"},
+		{Language: "es", Profile: "assertive", PathFilters: []string{"backend/**"}},
+		{Language: "es", Profile: "assertive", Instructions: "cuidá los panics"},
+	}
+	for i, m := range mutaciones {
+		if other := cacheKey(input, "mb", DefaultConfig(), m); other == k {
+			t.Errorf("mutación %d (%+v) no cambió la clave de cache", i, m)
+		}
+	}
+}
+
+// Los tres prompts con idioma traen el hueco y fillLanguage lo llena todos.
+func TestFillLanguage(t *testing.T) {
+	for name, p := range map[string]string{
+		"reviewer":   prompts.Reviewer(),
+		"summarizer": prompts.Summarizer(),
+		"chat":       prompts.Chat(),
+	} {
+		if !strings.Contains(p, languagePlaceholder) {
+			t.Errorf("el prompt %s debería traer el hueco %s", name, languagePlaceholder)
+		}
+		filled := fillLanguage(p, "pt")
+		if strings.Contains(filled, languagePlaceholder) {
+			t.Errorf("fillLanguage dejó el hueco sin llenar en %s", name)
+		}
+		if !strings.Contains(filled, "pt") {
+			t.Errorf("el prompt %s lleno debería mencionar el idioma pt", name)
+		}
+	}
+}
+
+// fillInstructions llena el hueco de reglas del repo con el bloque
+// delimitado, o lo vacía sin dejar bloque ni residuo (§9.5).
+func TestFillInstructions(t *testing.T) {
+	p := prompts.Reviewer()
+	if !strings.Contains(p, instructionsPlaceholder) {
+		t.Fatalf("el prompt del reviewer debería traer el hueco %s", instructionsPlaceholder)
+	}
+
+	empty := fillInstructions(p, "   \n")
+	if strings.Contains(empty, instructionsPlaceholder) ||
+		strings.Contains(empty, "Reglas de revisión de este repositorio") {
+		t.Errorf("instructions vacío no debe dejar bloque ni residuo:\n%s", empty)
+	}
+
+	filled := fillInstructions(p, "Cuidá los panics silenciosos.")
+	if !strings.Contains(filled, "## Reglas de revisión de este repositorio") ||
+		!strings.Contains(filled, "Cuidá los panics silenciosos.") {
+		t.Errorf("el bloque de reglas del repo no quedó delimitado con el texto:\n%s", filled)
+	}
+	if strings.Contains(filled, instructionsPlaceholder) {
+		t.Errorf("residuo de %s tras llenar", instructionsPlaceholder)
+	}
+}
+
+// fillNits agrega la regla de nits solo con perfil strict (§6 F3): con otro
+// perfil, ni regla ni residuo.
+func TestFillNits(t *testing.T) {
+	p := prompts.Reviewer()
+	if !strings.Contains(p, nitsPlaceholder) {
+		t.Fatalf("el prompt del reviewer debería traer el hueco %s", nitsPlaceholder)
+	}
+
+	got := fillNits(p, "strict")
+	if !strings.Contains(got, "reportá también nits") {
+		t.Errorf("con strict el prompt debe pedir nits")
+	}
+	if strings.Contains(got, nitsPlaceholder) {
+		t.Errorf("residuo de %s tras llenar", nitsPlaceholder)
+	}
+	for _, perfil := range []string{"chill", "assertive", ""} {
+		got := fillNits(p, perfil)
+		if strings.Contains(got, "reportá también nits") || strings.Contains(got, nitsPlaceholder) {
+			t.Errorf("con perfil %q no debe haber regla de nits ni residuo", perfil)
+		}
 	}
 }

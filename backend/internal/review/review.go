@@ -23,6 +23,7 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
 	"github.com/Andres39128/codeowl/backend/internal/llm"
+	"github.com/Andres39128/codeowl/backend/internal/repoconfig"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
 	"github.com/Andres39128/codeowl/backend/prompts"
@@ -138,7 +139,7 @@ func (c Config) normalized() Config {
 	if c.Concurrency < 1 {
 		c.Concurrency = d.Concurrency
 	}
-	if !validProfiles[c.DefaultProfile] {
+	if !repoconfig.IsValidProfile(c.DefaultProfile) {
 		c.DefaultProfile = defaultReviewProfile // inválida o cero-value → default del pipeline
 	}
 	return c
@@ -261,7 +262,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// al PR escribir sus propias reglas de revisión (inyección). El merge-base
 	// se resuelve una vez y ancla también la clave de cache (§9.6).
 	mb := mergeBase(ctx, input.Workdir, input.BaseSHA, input.HeadSHA)
-	rc := loadRepoConfig(ctx, input.Workdir, mb, repo, cfg.DefaultProfile)
+	rc := repoconfig.Load(ctx, input.Workdir, mb, repo, cfg.DefaultProfile)
 
 	// path_filters (§9.5): delimitan qué examina la corrida. Los archivos
 	// fuera de los filtros no llegan al LLM (ahorro de costo) ni generan
@@ -270,14 +271,14 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// error: la corrida sigue y completa con cero hallazgos.
 	dropped := 0
 	for file := range fileHunks {
-		if !matchPath(rc.PathFilters, file) {
+		if !repoconfig.MatchPath(rc.PathFilters, file) {
 			delete(fileHunks, file)
 			dropped++
 		}
 	}
 	kept := sast[:0]
 	for _, f := range sast {
-		if matchPath(rc.PathFilters, f.File) {
+		if repoconfig.MatchPath(rc.PathFilters, f.File) {
 			kept = append(kept, f)
 		}
 	}
@@ -628,7 +629,7 @@ func diffStats(total int, changed map[string]int) string {
 // corridas distintas). El merge-base lo resuelve el caller una sola vez (Run
 // ya lo necesitó para leer review.yaml) y, si git no pudo, cayó al base_sha
 // — la cache es una optimización, no una promesa.
-func cacheKey(input ReviewInput, mb string, cfg Config, rc RepoConfig) string {
+func cacheKey(input ReviewInput, mb string, cfg Config, rc repoconfig.RepoConfig) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%+v", cfg) // topes normalizados: configs distintas son corridas distintas
 	fmt.Fprintf(h, "%+v", rc)  // config efectiva del repo: language/profile/filtros/instrucciones (§9.5)
