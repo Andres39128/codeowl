@@ -145,6 +145,9 @@ func fixtureRepo(t *testing.T) string {
 	write("src/app.js", "const unused = 1;\nconsole.log('hi');\n")
 	write(".env", "AWS_ACCESS_KEY_ID=AKIAQ7GTLKDZ3RNWPX2M\n")
 	write("go.mod", "module ejemplo\n\ngo 1.27\n")
+	// Símbolos para el modo --symbols (symbols_test.go): una función y una
+	// interfaz — kinds del conjunto cerrado de §3.3.
+	write("main.go", "package main\n\nfunc Hola() int { return 1 }\n\ntype Saludo interface{ Hola() }\n")
 	return dir
 }
 

@@ -38,6 +38,7 @@ const (
 	DefaultLLMTimeout            = 120 * time.Second // §9.7: timeout por llamada LLM
 	DefaultLLMMaxRetries         = 3                 // §9.7: reintentos por proveedor ante 429/5xx
 	DefaultEmbedBatchSize        = 64                // §9.6: textos máximos por llamada /v1/embeddings
+	DefaultIndexMaxSymbolsPerRun = 2000              // §9.6: tope de símbolos embebidos por IndexJob (resume §9.6)
 	DefaultWebhookMaxBytes       = 25 << 20          // §9.3: tope propio = el de GitHub (25 MB)
 	DefaultVCSTimeout            = 30 * time.Second  // timeout por llamada HTTP al VCS
 	// GitLab (§9.3/§3.5/§3.6.1.1): frescura anti-replay, username del bot
@@ -102,6 +103,9 @@ type Stage2Config struct {
 	LLMTimeout      time.Duration
 	LLMMaxRetries   int
 	EmbedBatchSize  int // textos máximos por llamada /v1/embeddings (F4, §6)
+	// Indexación simbólica RAG (F4, §6/§9.6): la consume internal/index (T6
+	// threadea ReviewDefaultProfile como DefaultProfile del índice).
+	IndexMaxSymbolsPerRun int // tope de símbolos embebidos por IndexJob; agotado → parcial con resume
 	// Webhook + VCS (§9.3/§4.5): los consumen internal/vcs.
 	WebhookMaxBytes int64
 	VCSTimeout      time.Duration
@@ -321,6 +325,14 @@ func Load() (*Config, error) {
 		errs = append(errs, "EMBED_BATCH_SIZE debe ser mayor o igual a 1")
 	}
 	s2.EmbedBatchSize = embedBatch
+
+	idxMax, err := loadInt("INDEX_MAX_SYMBOLS_PER_RUN", DefaultIndexMaxSymbolsPerRun)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if idxMax < 1 {
+		errs = append(errs, "INDEX_MAX_SYMBOLS_PER_RUN debe ser mayor o igual a 1")
+	}
+	s2.IndexMaxSymbolsPerRun = idxMax
 
 	whBytes, err := loadDiskSize("WEBHOOK_MAX_BYTES", DefaultWebhookMaxBytes)
 	if err != nil {

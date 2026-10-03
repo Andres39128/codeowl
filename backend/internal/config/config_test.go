@@ -149,6 +149,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Stage2.LLMMaxRetries != 3 {
 		t.Errorf("LLM_MAX_RETRIES default: got %d want 3 (§9.7)", cfg.Stage2.LLMMaxRetries)
 	}
+	if cfg.Stage2.IndexMaxSymbolsPerRun != 2000 {
+		t.Errorf("INDEX_MAX_SYMBOLS_PER_RUN default: got %d want 2000 (§9.6)", cfg.Stage2.IndexMaxSymbolsPerRun)
+	}
 }
 
 func TestLoadMasterKeyInvalida(t *testing.T) {
@@ -231,6 +234,12 @@ func TestLoadEtapa2InvalidaFallaElArranque(t *testing.T) {
 	t.Setenv("LLM_TIMEOUT", "5x")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LLM_TIMEOUT") {
 		t.Errorf("LLM_TIMEOUT inválido debe fallar mencionando el nombre: %v", err)
+	}
+
+	setStage1(t)
+	t.Setenv("INDEX_MAX_SYMBOLS_PER_RUN", "0")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "INDEX_MAX_SYMBOLS_PER_RUN") {
+		t.Errorf("INDEX_MAX_SYMBOLS_PER_RUN=0 debe fallar: el presupuesto no puede ser cero: %v", err)
 	}
 }
 
