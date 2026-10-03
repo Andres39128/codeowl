@@ -247,13 +247,15 @@ func mrPayload(projectID, iid int64, action, head, target string, mutators ...fu
 	return payload
 }
 
-// notePayload arma el payload de un evento note.
+// notePayload arma el payload de un evento note (id fijo de nota: los
+// asserts de parent_comment_id lo usan).
 func notePayload(projectID int64, noteableType, body, author string, mrIID int64) map[string]any {
 	p := map[string]any{
 		"object_kind": "note",
 		"project":     map[string]any{"id": projectID, "name": "repo"},
 		"user":        map[string]any{"username": author},
 		"object_attributes": map[string]any{
+			"id":            555,
 			"noteable_type": noteableType,
 			"note":          body,
 		},
@@ -555,7 +557,7 @@ func TestWebhookMRReopenEncola(t *testing.T) {
 	}
 }
 
-func TestWebhookNoteEnMRSeRegistraSinJob(t *testing.T) {
+func TestWebhookNoteConMencionEncolaChat(t *testing.T) {
 	e := newWebhookEnv(t)
 	repo := e.newRepo(t, true)
 
@@ -563,13 +565,29 @@ func TestWebhookNoteEnMRSeRegistraSinJob(t *testing.T) {
 	if e.q.count() != 1 {
 		t.Fatalf("open debe encolar: jobs=%d", e.q.count())
 	}
+	pr, err := e.getPR(t, repo.ID, 10)
+	if err != nil {
+		t.Fatalf("MR: %v", err)
+	}
 
-	// note en MR con mención: pasa el filtro (ChatJob llega en F2) y por
-	// ahora solo se registra y descarta — sin job, sin estado.
+	// note en MR con mención: encola el ChatJob (F2).
 	serve(t, e, createSignedPayload(t,
 		notePayload(repo.ExternalID, "MergeRequest", "@"+testBotUsername+" revisá esto", "humano", 10)), http.StatusOK)
-	if e.q.count() != 1 {
-		t.Errorf("las notas no encolan en F1/F2 temprano (ChatJob llega en F2): jobs=%d", e.q.count())
+	if e.q.count() != 2 {
+		t.Fatalf("la mención debe encolar el ChatJob: jobs=%d", e.q.count())
+	}
+	kind, args := e.q.last()
+	if kind != jobs.KindChat {
+		t.Fatalf("kind: got %q want %q", kind, jobs.KindChat)
+	}
+	var chatArgs jobs.ChatJobArgs
+	if err := json.Unmarshal(args, &chatArgs); err != nil {
+		t.Fatalf("args del ChatJob: %v", err)
+	}
+	if chatArgs.PullRequestID != pr.ID || chatArgs.ParentCommentID != "555" ||
+		chatArgs.CommentAuthor != "humano" || chatArgs.HeadSha != "h1" ||
+		chatArgs.BaseSha != "tip-main" || chatArgs.Language != repo.Language {
+		t.Errorf("args del ChatJob: got %+v", chatArgs)
 	}
 }
 

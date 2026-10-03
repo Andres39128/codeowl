@@ -13,7 +13,7 @@ import (
 
 // FS contiene los system prompts versionados.
 //
-//go:embed reviewer_system.md summarizer_system.md
+//go:embed reviewer_system.md summarizer_system.md chat_system.md
 var fs embed.FS
 
 // Reviewer devuelve el system prompt del agente Reviewer (revisión por
@@ -24,12 +24,20 @@ func Reviewer() string { return mustRead("reviewer_system.md") }
 // PR, salida JSON con summary/walkthrough/mermaid).
 func Summarizer() string { return mustRead("summarizer_system.md") }
 
+// Chat devuelve el system prompt del agente Chat (respuestas a menciones
+// @bot, salida en texto markdown — §6 F2). El hueco {{LANGUAGE}} lo llena
+// el caller con el idioma configurado del repo (§3.3).
+func Chat() string { return mustRead("chat_system.md") }
+
+// promptFiles son los archivos que componen la versión del prompt.
+var promptFiles = []string{"reviewer_system.md", "summarizer_system.md", "chat_system.md"}
+
 // Version es el hash del contenido de todos los prompts: es la "versión del
 // prompt" de la clave de cache (§9.6) — cambiar un prompt invalida la cache
 // sin tocar ningún constante.
 func Version() string {
 	h := sha256.New()
-	for _, name := range []string{"reviewer_system.md", "summarizer_system.md"} {
+	for _, name := range promptFiles {
 		f, err := fs.Open(name)
 		if err != nil {
 			// Imposible: el embed garantiza la existencia del archivo.

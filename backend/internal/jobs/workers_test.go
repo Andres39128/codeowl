@@ -147,6 +147,9 @@ func (p *wProvider) PostSuggestion(context.Context, *store.Repository, *store.Pu
 func (p *wProvider) PostSummary(context.Context, *store.Repository, *store.PullRequest, string, string) (string, error) {
 	return fmt.Sprintf("sum-%d", wNano()), nil
 }
+func (p *wProvider) PostReply(context.Context, *store.Repository, *store.PullRequest, string, string) (string, error) {
+	return "", errors.New("wProvider: PostReply no esperado")
+}
 
 // Marcadores del prompt de usuario de internal/review/agents.go (no
 // exportados): enrutan la respuesta del gateway stub al agente correcto.

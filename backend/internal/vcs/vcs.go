@@ -18,7 +18,8 @@ import (
 // FetchPRTimeline trae commits (y en F5, threads); GetDiff produce el diff
 // unificado bajo demanda; ListOpenPRs alimenta la reconciliación de estado;
 // Post* publican comentarios (inline con posición, sugerencia aplicable y
-// resumen editado in place, §3.6).
+// resumen editado in place, §3.6) y la respuesta de chat en el hilo del
+// comentario que disparó la mención (F2).
 type VCSProvider interface {
 	HandleWebhook(ctx context.Context, w http.ResponseWriter, r *http.Request)
 	FetchPR(ctx context.Context, repo *store.Repository, pr *store.PullRequest, workdir string) error
@@ -29,6 +30,7 @@ type VCSProvider interface {
 	PostInlineComment(ctx context.Context, repo *store.Repository, pr *store.PullRequest, pos CommentPosition, body string) (commentID string, err error)
 	PostSuggestion(ctx context.Context, repo *store.Repository, pr *store.PullRequest, pos CommentPosition, body string) (commentID string, err error)
 	PostSummary(ctx context.Context, repo *store.Repository, pr *store.PullRequest, body string, existingCommentID string) (commentID string, err error)
+	PostReply(ctx context.Context, repo *store.Repository, pr *store.PullRequest, parentCommentID, body string) (commentID string, err error)
 }
 
 // hunkHeaderRe matchea el encabezado de hunk del diff unificado, con conteos

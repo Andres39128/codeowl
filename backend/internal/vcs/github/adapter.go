@@ -31,6 +31,8 @@ type Adapter struct {
 	cfg *config.Config
 	jq  jobs.JobQueue
 
+	botUsername string // mención del bot en el chat (§3.5, F2)
+
 	http    *http.Client
 	baseURL string // sobrescribible en tests (stub server)
 	maxBody int64  // tope de payload de webhook (§9.3)
@@ -54,13 +56,18 @@ func New(st *store.Store, cfg *config.Config, jq jobs.JobQueue) *Adapter {
 	if maxBody <= 0 {
 		maxBody = config.DefaultWebhookMaxBytes
 	}
+	bot := cfg.Stage2.GitHubBotUsername
+	if bot == "" {
+		bot = config.DefaultGitHubBotUsername
+	}
 	return &Adapter{
-		st:      st,
-		cfg:     cfg,
-		jq:      jq,
-		http:    &http.Client{Timeout: timeout},
-		baseURL: gitHubAPIURL,
-		maxBody: maxBody,
+		st:          st,
+		cfg:         cfg,
+		jq:          jq,
+		botUsername: bot,
+		http:        &http.Client{Timeout: timeout},
+		baseURL:     gitHubAPIURL,
+		maxBody:     maxBody,
 	}
 }
 

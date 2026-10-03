@@ -41,10 +41,10 @@ const (
 	QueueOps    = "ops"
 )
 
-// reviewMaxAttempts es el tope de intentos del ReviewJob (§9.7: máximo de
-// intentos con el backoff exponencial de River — 5 intentos ≈ 16 min de
-// ventana). Al agotarlos, River lo deja discarded y el worker marca la
-// corrida failed.
+// reviewMaxAttempts es el tope de intentos del ReviewJob y del ChatJob
+// (§9.7: máximo de intentos con el backoff exponencial de River — 5 intentos
+// ≈ 16 min de ventana). Al agotarlos, River deja el job discarded y el
+// worker marca la corrida failed.
 // ponytail: constante, no config — subirla a Stage2 si ops pide afinarla.
 const reviewMaxAttempts = 5
 
@@ -61,6 +61,22 @@ type ReviewJobArgs struct {
 // Kind registra el tipo de args ante River (mismo kind que usa la API al
 // encolar por JSON crudo).
 func (ReviewJobArgs) Kind() string { return KindReview }
+
+// ChatJobArgs son los argumentos del ChatJob (§3.5/§9.12): el comentario
+// padre (parent_comment_id) es la unidad de idempotencia — un reintento del
+// job no duplica la respuesta (guía §3.3).
+type ChatJobArgs struct {
+	RepositoryID    int64  `json:"repository_id"`
+	PullRequestID   int64  `json:"pull_request_id"`
+	ParentCommentID string `json:"parent_comment_id"`
+	CommentBody     string `json:"comment_body"`
+	CommentAuthor   string `json:"comment_author"`
+	HeadSha         string `json:"head_sha"`
+	BaseSha         string `json:"base_sha"`
+	Language        string `json:"language"`
+}
+
+func (ChatJobArgs) Kind() string { return KindChat }
 
 // CleanupJobArgs son los argumentos del CleanupJob (§9.11): sin parámetros —
 // la retención la trae la config del worker.
@@ -190,8 +206,9 @@ func reviewUniqueStates() []rivertype.JobState {
 	}
 }
 
-// insertOpts resuelve la cola y las opciones por kind: review lleva
-// unicidad y tope de intentos (§3.6.1.4/§9.7); el resto va a ops.
+// insertOpts resuelve la cola y las opciones por kind: review y chat llevan
+// el tope de intentos (§9.7; review además unicidad §3.6.1.4); el resto va a
+// ops.
 func insertOpts(kind string) *river.InsertOpts {
 	opts := &river.InsertOpts{Queue: QueueOps}
 	switch kind {
@@ -201,6 +218,7 @@ func insertOpts(kind string) *river.InsertOpts {
 		opts.UniqueOpts = river.UniqueOpts{ByArgs: true, ByState: reviewUniqueStates()}
 	case KindChat:
 		opts.Queue = QueueChat
+		opts.MaxAttempts = reviewMaxAttempts
 	}
 	return opts
 }

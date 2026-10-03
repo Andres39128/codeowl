@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,8 +65,12 @@ type ghIssue struct {
 }
 
 type ghComment struct {
+	ID   int64   `json:"id"`
 	Body string  `json:"body"`
 	User ghActor `json:"user"`
+	// AuthorAssociation relation del autor con el repo (MEMBER, OWNER,
+	// CONTRIBUTOR, NONE...): filtro chat_org_only (§3.5).
+	AuthorAssociation string `json:"author_association"`
 }
 
 type ghActor struct {
@@ -275,9 +280,9 @@ func (a *Adapter) handlePullRequest(ctx context.Context, repo store.Repository, 
 	return nil
 }
 
-// handleIssueComment filtra el comentario de la conversación (§3.5): solo
-// PRs, sin bots (anti-bucle), y el PR debe existir. El ChatJob es F2: por
-// ahora el comentario que pasa el filtro se registra y descarta.
+// handleIssueComment procesa el comentario de la conversación (§3.5): sin
+// bots (anti-bucle) y solo PRs; los filtros comunes del chat y el encolado
+// del ChatJob viven en enqueueChat (F2).
 func (a *Adapter) handleIssueComment(ctx context.Context, repo store.Repository, p *webhookPayload) error {
 	if p.Comment.User.Type == "Bot" {
 		slog.InfoContext(ctx, "webhook github: comentario de bot ignorado (anti-bucle)",
@@ -289,36 +294,66 @@ func (a *Adapter) handleIssueComment(ctx context.Context, repo store.Repository,
 		// explícito: es un issue, no un PR (§3.5).
 		return nil
 	}
-	if _, err := a.st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
-		RepositoryID: repo.ID, Number: p.Issue.Number,
-	}); errors.Is(err, pgx.ErrNoRows) {
-		slog.InfoContext(ctx, "webhook github: comentario sobre PR no observado, descartado", "pr", p.Issue.Number)
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("resolviendo PR %d del comentario: %w", p.Issue.Number, err)
-	}
-	slog.InfoContext(ctx, "webhook github: comentario en PR (ChatJob llega en F2), descartado", "pr", p.Issue.Number)
-	return nil
+	return a.enqueueChat(ctx, repo, p.Issue.Number, p.Comment)
 }
 
-// handleReviewComment filtra el comentario de hilo inline (§3.5): mismo
-// tratamiento que issue_comment — alimenta el Chat de F2.
+// handleReviewComment procesa el comentario de hilo inline (§3.5): mismo
+// tratamiento que issue_comment — ambos eventos alimentan el mismo Chat.
 func (a *Adapter) handleReviewComment(ctx context.Context, repo store.Repository, p *webhookPayload) error {
 	if p.Comment.User.Type == "Bot" {
 		slog.InfoContext(ctx, "webhook github: comentario de bot ignorado (anti-bucle)",
 			"author", p.Comment.User.Login)
 		return nil
 	}
-	if _, err := a.st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
-		RepositoryID: repo.ID, Number: p.PullRequest.Number,
-	}); errors.Is(err, pgx.ErrNoRows) {
-		slog.InfoContext(ctx, "webhook github: comentario sobre PR no observado, descartado", "pr", p.PullRequest.Number)
+	return a.enqueueChat(ctx, repo, p.PullRequest.Number, p.Comment)
+}
+
+// enqueueChat aplica los filtros comunes del chat (§3.5): mención al bot,
+// PR observado y — si el repo lo exige (chat_org_only) — autor MEMBER/OWNER.
+// Pasa → encola el ChatJob con la identidad actual del PR; el webhook jamás
+// llama LLM (§3.5).
+func (a *Adapter) enqueueChat(ctx context.Context, repo store.Repository, number int64, c *ghComment) error {
+	if !strings.Contains(c.Body, "@"+a.botUsername) {
+		slog.InfoContext(ctx, "webhook github: comentario sin mención al bot, descartado", "pr", number)
+		return nil
+	}
+	pr, err := a.st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
+		RepositoryID: repo.ID, Number: number,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		slog.InfoContext(ctx, "webhook github: comentario sobre PR no observado, descartado", "pr", number)
 		return nil
 	} else if err != nil {
-		return fmt.Errorf("resolviendo PR %d del comentario: %w", p.PullRequest.Number, err)
+		return fmt.Errorf("resolviendo PR %d del comentario: %w", number, err)
 	}
-	slog.InfoContext(ctx, "webhook github: comentario inline en PR (ChatJob llega en F2), descartado", "pr", p.PullRequest.Number)
+	if repo.ChatOrgOnly && !orgAuthorAssociation(c.AuthorAssociation) {
+		slog.InfoContext(ctx, "webhook github: autor fuera de la organización (chat_org_only), descartado",
+			"pr", number, "author_association", c.AuthorAssociation)
+		return nil
+	}
+	args, err := json.Marshal(jobs.ChatJobArgs{
+		RepositoryID:    repo.ID,
+		PullRequestID:   pr.ID,
+		ParentCommentID: strconv.FormatInt(c.ID, 10),
+		CommentBody:     c.Body,
+		CommentAuthor:   c.User.Login,
+		HeadSha:         pr.HeadSha,
+		BaseSha:         pr.BaseSha,
+		Language:        repo.Language,
+	})
+	if err != nil {
+		return fmt.Errorf("serializando args del ChatJob: %w", err)
+	}
+	if err := a.jq.Enqueue(ctx, jobs.KindChat, args); err != nil {
+		return fmt.Errorf("encolando ChatJob del PR %d: %w", number, err)
+	}
 	return nil
+}
+
+// orgAuthorAssociation dice si la asociación del autor pasa el filtro
+// chat_org_only (§3.5: pasan MEMBER/OWNER).
+func orgAuthorAssociation(assoc string) bool {
+	return assoc == "MEMBER" || assoc == "OWNER"
 }
 
 // readBody lee el body con el tope de tamaño (§9.3: se rechaza antes de

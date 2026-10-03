@@ -196,6 +196,9 @@ func (s *stubVCS) PostSummary(_ context.Context, _ *store.Repository, _ *store.P
 	s.summaries = append(s.summaries, body)
 	return fmt.Sprintf("summary-%d", len(s.summaries)), nil
 }
+func (s *stubVCS) PostReply(context.Context, *store.Repository, *store.PullRequest, string, string) (string, error) {
+	return "", fmt.Errorf("stubVCS: PostReply no esperado")
+}
 
 func (s *stubVCS) recordInline(pos vcs.CommentPosition) string {
 	s.mu.Lock()

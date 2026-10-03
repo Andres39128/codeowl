@@ -8,6 +8,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -130,6 +131,67 @@ func (w *ReviewJobWorker) failFinal(ctx context.Context, job *river.Job[ReviewJo
 		}
 	}
 	return cause
+}
+
+// ---------------------------------------------------------------------------
+// ChatJobWorker — respuesta de chat a menciones @bot (§3.5/§6 F2)
+// ---------------------------------------------------------------------------
+
+// ChatJobWorker atiende una mención @bot: delega en review.HandleChat
+// (parseo del comando, LLM, publicación en el hilo con idempotencia por
+// comentario padre) y, si el comando fue /review sobre un PR abierto, encola
+// el ReviewJob con la identidad ACTUAL del PR (§3.6 — misma unicidad de
+// siempre; el webhook jamás llamó LLM, §3.5).
+type ChatJobWorker struct {
+	river.WorkerDefaults[ChatJobArgs]
+
+	Store    *store.Store
+	Gateway  review.Gateway // *llm.Gateway la satisface
+	Provider vcs.VCSProvider
+	Queue    JobQueue // encola el ReviewJob del /review
+	Config   review.ChatConfig
+}
+
+func (w *ChatJobWorker) register(b *river.Workers) error { return river.AddWorkerSafely(b, w) }
+
+func (w *ChatJobWorker) Work(ctx context.Context, job *river.Job[ChatJobArgs]) error {
+	args := job.Args
+	res, err := review.HandleChat(ctx, w.Config, w.Store, w.Gateway, w.Provider, review.ChatInput{
+		PullRequestID:   args.PullRequestID,
+		RepositoryID:    args.RepositoryID,
+		ParentCommentID: args.ParentCommentID,
+		CommentBody:     args.CommentBody,
+		CommentAuthor:   args.CommentAuthor,
+		HeadSHA:         args.HeadSha,
+		BaseSHA:         args.BaseSha,
+		Language:        args.Language,
+	})
+	if err != nil {
+		return err
+	}
+	if res.EnqueueReview {
+		// Identidad actual del PR (§3.6): un push o retarget entre el
+		// comentario y esta corrida no revisa un diff viejo.
+		pr, err := w.Store.GetPullRequest(ctx, args.PullRequestID)
+		if err != nil {
+			return fmt.Errorf("cargando el PR %d para el /review: %w", args.PullRequestID, err)
+		}
+		bargs, err := json.Marshal(ReviewJobArgs{
+			RepositoryID:  args.RepositoryID,
+			PullRequestID: args.PullRequestID,
+			HeadSha:       pr.HeadSha,
+			BaseSha:       pr.BaseSha,
+		})
+		if err != nil {
+			return fmt.Errorf("serializando args del ReviewJob: %w", err)
+		}
+		if err := w.Queue.Enqueue(ctx, KindReview, bargs); err != nil {
+			return fmt.Errorf("encolando ReviewJob del /review: %w", err)
+		}
+	}
+	slog.Info("chat job completado", "job", job.ID, "pr", args.PullRequestID,
+		"parent", args.ParentCommentID, "review_encolada", res.EnqueueReview)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -398,10 +460,12 @@ func (w *ReconcileJobWorker) Work(ctx context.Context, job *river.Job[ReconcileJ
 // exactamente el contrato que declara.
 var (
 	_ river.Worker[ReviewJobArgs]    = (*ReviewJobWorker)(nil)
+	_ river.Worker[ChatJobArgs]      = (*ChatJobWorker)(nil)
 	_ river.Worker[CleanupJobArgs]   = (*CleanupJobWorker)(nil)
 	_ river.Worker[RotationJobArgs]  = (*RotationJobWorker)(nil)
 	_ river.Worker[ReconcileJobArgs] = (*ReconcileJobWorker)(nil)
 	_ Worker                         = (*ReviewJobWorker)(nil)
+	_ Worker                         = (*ChatJobWorker)(nil)
 	_ Worker                         = (*CleanupJobWorker)(nil)
 	_ Worker                         = (*RotationJobWorker)(nil)
 	_ Worker                         = (*ReconcileJobWorker)(nil)

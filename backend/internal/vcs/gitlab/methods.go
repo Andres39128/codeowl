@@ -328,3 +328,27 @@ func (a *Adapter) PostSummary(ctx context.Context, repo *store.Repository, pr *s
 	}
 	return strconv.FormatInt(out.ID, 10), nil
 }
+
+// PostReply responde en el hilo de la nota que disparó el chat (mapa:
+// PostReply, F2): las discusiones de GitLab son planas — la respuesta es una
+// nota más del MR. El parentCommentID no cambia la publicación: es la unidad
+// de idempotencia del caller (comments_sent, §3.3).
+func (a *Adapter) PostReply(ctx context.Context, repo *store.Repository, pr *store.PullRequest, parentCommentID, body string) (string, error) {
+	token, err := a.repoToken(repo)
+	if err != nil {
+		return "", fmt.Errorf("token para responder el MR %d: %w", pr.Number, err)
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	path := fmt.Sprintf("%s/api/v4/projects/%d/merge_requests/%d/notes",
+		a.apiBase(repo), repo.ExternalID, pr.Number)
+	status, err := a.doJSON(ctx, http.MethodPost, path, token, map[string]string{"body": body}, &out)
+	if err != nil {
+		return "", fmt.Errorf("creando nota de respuesta: %w", err)
+	}
+	if status != http.StatusCreated {
+		return "", fmt.Errorf("creando nota de respuesta: status %d", status)
+	}
+	return strconv.FormatInt(out.ID, 10), nil
+}

@@ -1,9 +1,10 @@
 // Worker de codeowl: consume jobs River de Postgres (mapa: servicios.worker).
 // F1: registra los workers del dominio — ReviewJob (pipeline de revisión),
 // CleanupJob (retención diaria, §9.11), RotationJob (re-cifrado de master
-// key, §9.2) y ReconcileJob (reconciliación de PRs, §3.5) — y arranca la
-// cola. SIGTERM drena ordenado: deja de tomar jobs y termina el en curso
-// (§9.12; la ventana de gracia la fija TimeoutStopSec de la unidad).
+// key, §9.2) y ReconcileJob (reconciliación de PRs, §3.5). F2 suma el
+// ChatJob (respuestas a menciones @bot, §3.5/§6). SIGTERM drena ordenado:
+// deja de tomar jobs y termina el en curso (§9.12; la ventana de gracia la
+// fija TimeoutStopSec de la unidad).
 package main
 
 import (
@@ -84,6 +85,10 @@ func main() {
 	if err := q.Register(
 		&jobs.ReviewJobWorker{
 			Store: st, Gateway: gateway, Analyzer: analyzer, Provider: provider, Config: reviewCfg,
+		},
+		&jobs.ChatJobWorker{
+			Store: st, Gateway: gateway, Provider: provider, Queue: q,
+			Config: review.ChatConfig{DiffMaxLines: cfg.Stage2.ChatDiffMaxLines},
 		},
 		&jobs.CleanupJobWorker{
 			Store: st, RetentionDays: cfg.Stage2.CleanupRetentionDays,

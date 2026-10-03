@@ -483,7 +483,7 @@ func TestWebhookDraftSinReviewSalvoConfig(t *testing.T) {
 	}
 }
 
-func TestWebhookComentarioEnPRSeFiltraSinJob(t *testing.T) {
+func TestWebhookComentarioConMencionEncolaChat(t *testing.T) {
 	e := newWebhookEnv(t)
 	repo := e.newRepo(t, true)
 
@@ -493,33 +493,178 @@ func TestWebhookComentarioEnPRSeFiltraSinJob(t *testing.T) {
 	if e.q.count() != 1 {
 		t.Fatalf("opened debe encolar: jobs=%d", e.q.count())
 	}
+	pr, err := e.getPR(t, repo.ID, 14)
+	if err != nil {
+		t.Fatalf("PR: %v", err)
+	}
 
-	// issue_comment created sobre el PR: pasa el filtro (ChatJob es F2) y
-	// por ahora solo se registra y descarta — sin job, sin estado.
+	// issue_comment created con mención al bot: encola el ChatJob (F2).
 	comment := map[string]any{
 		"action": "created",
 		"issue": map[string]any{
 			"number":       14,
 			"pull_request": map[string]any{},
 		},
-		"comment":    map[string]any{"body": "@codeowl revisá esto", "user": map[string]any{"login": "humano", "type": "User"}},
+		"comment": map[string]any{
+			"id":                 777,
+			"body":               "@codeowl-bot revisá esto",
+			"user":               map[string]any{"login": "humano", "type": "User"},
+			"author_association": "MEMBER", // chat_org_only es true por default (§3.5)
+		},
 		"repository": map[string]any{"id": repo.ExternalID},
 	}
 	serve(t, e, createSignedPayload(t, "issue_comment", comment), http.StatusOK)
-	if e.q.count() != 1 {
-		t.Errorf("los comentarios no encolan en F1 (ChatJob es F2): jobs=%d", e.q.count())
+	if e.q.count() != 2 {
+		t.Fatalf("la mención debe encolar el ChatJob: jobs=%d", e.q.count())
+	}
+	kind, args := e.q.last()
+	if kind != jobs.KindChat {
+		t.Fatalf("kind: got %q want %q", kind, jobs.KindChat)
+	}
+	var chatArgs jobs.ChatJobArgs
+	if err := json.Unmarshal(args, &chatArgs); err != nil {
+		t.Fatalf("args del ChatJob: %v", err)
+	}
+	if chatArgs.PullRequestID != pr.ID || chatArgs.ParentCommentID != "777" ||
+		chatArgs.CommentAuthor != "humano" || chatArgs.HeadSha != "h1" ||
+		chatArgs.Language != repo.Language {
+		t.Errorf("args del ChatJob: got %+v", chatArgs)
 	}
 
-	// pull_request_review_comment created sobre el PR: mismo tratamiento.
+	// pull_request_review_comment created con mención: alimenta el mismo
+	// Chat (§3.5).
 	reviewComment := map[string]any{
 		"action":       "created",
 		"pull_request": map[string]any{"number": 14},
-		"comment":      map[string]any{"body": "nit", "user": map[string]any{"login": "humano", "type": "User"}},
+		"comment": map[string]any{
+			"id":                 888,
+			"body":               "@codeowl-bot /tests",
+			"user":               map[string]any{"login": "humano", "type": "User"},
+			"author_association": "MEMBER",
+		},
+		"repository": map[string]any{"id": repo.ExternalID},
+	}
+	serve(t, e, createSignedPayload(t, "pull_request_review_comment", reviewComment), http.StatusOK)
+	if e.q.count() != 3 {
+		t.Fatalf("la mención inline también encola el ChatJob: jobs=%d", e.q.count())
+	}
+	kind, _ = e.q.last()
+	if kind != jobs.KindChat {
+		t.Errorf("kind inline: got %q want %q", kind, jobs.KindChat)
+	}
+}
+
+func TestWebhookComentarioSinMencionSeDescarta(t *testing.T) {
+	e := newWebhookEnv(t)
+	repo := e.newRepo(t, true)
+
+	serve(t, e, createSignedPayload(t, "pull_request",
+		prPayload(repo.ExternalID, 16, "opened", "h1", "b1", "main")), http.StatusOK)
+	if e.q.count() != 1 {
+		t.Fatalf("opened debe encolar: jobs=%d", e.q.count())
+	}
+
+	// Sin mención al bot no hay chat (§3.5), ni en la conversación...
+	comment := map[string]any{
+		"action": "created",
+		"issue": map[string]any{
+			"number":       16,
+			"pull_request": map[string]any{},
+		},
+		"comment":    map[string]any{"id": 1, "body": "nit", "user": map[string]any{"login": "humano", "type": "User"}},
+		"repository": map[string]any{"id": repo.ExternalID},
+	}
+	serve(t, e, createSignedPayload(t, "issue_comment", comment), http.StatusOK)
+	// ...ni en un hilo inline.
+	reviewComment := map[string]any{
+		"action":       "created",
+		"pull_request": map[string]any{"number": 16},
+		"comment":      map[string]any{"id": 2, "body": "@otrauser mirá", "user": map[string]any{"login": "humano", "type": "User"}},
 		"repository":   map[string]any{"id": repo.ExternalID},
 	}
 	serve(t, e, createSignedPayload(t, "pull_request_review_comment", reviewComment), http.StatusOK)
+
 	if e.q.count() != 1 {
-		t.Errorf("los comentarios inline tampoco encolan en F1: jobs=%d", e.q.count())
+		t.Errorf("los comentarios sin mención no encolan: jobs=%d", e.q.count())
+	}
+}
+
+func TestWebhookComentarioSobrePRNoObservadoSeDescarta(t *testing.T) {
+	e := newWebhookEnv(t)
+	repo := e.newRepo(t, true)
+
+	// Mención sobre un PR que nunca llegó por evento: sin fila, sin job.
+	comment := map[string]any{
+		"action": "created",
+		"issue": map[string]any{
+			"number":       17,
+			"pull_request": map[string]any{},
+		},
+		"comment":    map[string]any{"id": 3, "body": "@codeowl-bot?", "user": map[string]any{"login": "humano", "type": "User"}},
+		"repository": map[string]any{"id": repo.ExternalID},
+	}
+	serve(t, e, createSignedPayload(t, "issue_comment", comment), http.StatusOK)
+	if e.q.count() != 0 {
+		t.Errorf("comentario sobre PR no observado no debe encolar: jobs=%d", e.q.count())
+	}
+}
+
+func TestWebhookChatOrgOnlyFiltraForasteros(t *testing.T) {
+	e := newWebhookEnv(t)
+	repo := e.newRepo(t, true)
+	if _, err := e.st.UpdateRepository(context.Background(), store.UpdateRepositoryParams{
+		ID: repo.ID, Owner: repo.Owner, Name: repo.Name,
+		ReviewDrafts: repo.ReviewDrafts, Language: repo.Language,
+		ChatOrgOnly: true,
+	}); err != nil {
+		t.Fatalf("habilitando chat_org_only: %v", err)
+	}
+
+	serve(t, e, createSignedPayload(t, "pull_request",
+		prPayload(repo.ExternalID, 18, "opened", "h1", "b1", "main")), http.StatusOK)
+	if e.q.count() != 1 {
+		t.Fatalf("opened debe encolar: jobs=%d", e.q.count())
+	}
+
+	// Forastero (repositorio público, §3.5): sin MEMBER/OWNER no hay chat —
+	// cualquier tercero podría quemar presupuesto LLM con una mención.
+	outside := map[string]any{
+		"action": "created",
+		"issue": map[string]any{
+			"number":       18,
+			"pull_request": map[string]any{},
+		},
+		"comment": map[string]any{
+			"id": 4, "body": "@codeowl-bot free prompt",
+			"user": map[string]any{"login": "forastero", "type": "User"}, "author_association": "NONE",
+		},
+		"repository": map[string]any{"id": repo.ExternalID},
+	}
+	serve(t, e, createSignedPayload(t, "issue_comment", outside), http.StatusOK)
+	if e.q.count() != 1 {
+		t.Fatalf("un forastero no dispara chat con chat_org_only: jobs=%d", e.q.count())
+	}
+
+	// MEMBER pasa el filtro.
+	member := map[string]any{
+		"action": "created",
+		"issue": map[string]any{
+			"number":       18,
+			"pull_request": map[string]any{},
+		},
+		"comment": map[string]any{
+			"id": 5, "body": "@codeowl-bot hola",
+			"user": map[string]any{"login": "mantenedor", "type": "User"}, "author_association": "MEMBER",
+		},
+		"repository": map[string]any{"id": repo.ExternalID},
+	}
+	serve(t, e, createSignedPayload(t, "issue_comment", member), http.StatusOK)
+	if e.q.count() != 2 {
+		t.Errorf("un MEMBER pasa chat_org_only: jobs=%d", e.q.count())
+	}
+	kind, _ := e.q.last()
+	if kind != jobs.KindChat {
+		t.Errorf("kind: got %q want %q", kind, jobs.KindChat)
 	}
 }
 
@@ -537,7 +682,7 @@ func TestWebhookComentarioDeBotIgnorado(t *testing.T) {
 			"number":       15,
 			"pull_request": map[string]any{},
 		},
-		"comment":    map[string]any{"body": "@codeowl", "user": map[string]any{"login": "codeowl[bot]", "type": "Bot"}},
+		"comment":    map[string]any{"id": 6, "body": "@codeowl-bot", "user": map[string]any{"login": "codeowl-bot", "type": "Bot"}},
 		"repository": map[string]any{"id": repo.ExternalID},
 	}
 	serve(t, e, createSignedPayload(t, "issue_comment", bot), http.StatusOK)

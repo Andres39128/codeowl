@@ -43,14 +43,18 @@ const (
 	DefaultWebhookTimestampTolerance = 5 * time.Minute // default del SDK Standard Webhooks
 	DefaultGitLabBotUsername         = "codeowl"
 	DefaultBranchTipCacheTTL         = 30 * time.Second
-	DefaultAnalyzerImage             = "localhost/codeowl-analyzer:latest"
-	DefaultAnalyzerMemory            = "1g"              // §9.4: tope de RAM del sandbox
-	DefaultAnalyzerPidsLimit         = 256               // §9.4: tope de procesos del sandbox
-	DefaultAnalyzerTimeout           = 120 * time.Second // timeout duro del sandbox (§9.4)
-	DefaultAnalyzerTmpfsSize         = "512m"            // §9.4: tmpfs de /tmp para caches de linters
-	DefaultReviewConcurrency         = 2                 // §9.6: ReviewJobs concurrentes en el worker
-	DefaultChatConcurrency           = 2                 // §9.6: slots propios del ChatJob (F2)
-	DefaultCleanupRetentionDays      = 30                // §9.11: retención de webhook_deliveries
+	// Chat (§3.5/§9.6): username del bot en GitHub para las menciones del
+	// chat y tope de diff que entra al prompt del chat (presupuesto propio).
+	DefaultGitHubBotUsername    = "codeowl-bot"
+	DefaultChatDiffMaxLines     = 5000
+	DefaultAnalyzerImage        = "localhost/codeowl-analyzer:latest"
+	DefaultAnalyzerMemory       = "1g"              // §9.4: tope de RAM del sandbox
+	DefaultAnalyzerPidsLimit    = 256               // §9.4: tope de procesos del sandbox
+	DefaultAnalyzerTimeout      = 120 * time.Second // timeout duro del sandbox (§9.4)
+	DefaultAnalyzerTmpfsSize    = "512m"            // §9.4: tmpfs de /tmp para caches de linters
+	DefaultReviewConcurrency    = 2                 // §9.6: ReviewJobs concurrentes en el worker
+	DefaultChatConcurrency      = 2                 // §9.6: slots propios del ChatJob (F2)
+	DefaultCleanupRetentionDays = 30                // §9.11: retención de webhook_deliveries
 )
 
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
@@ -95,6 +99,9 @@ type Stage2Config struct {
 	WebhookTimestampTolerance time.Duration // frescura del timestamp Standard Webhooks (replay)
 	GitLabBotUsername         string        // anti-bucle del chat (GitLab no expone flag de bot)
 	BranchTipCacheTTL         time.Duration // cache del tip de la rama base (§3.6.1.1)
+	// Chat (§3.5/§9.6): los consumen internal/vcs/github e internal/review.
+	GitHubBotUsername string // mención del bot en comentarios del chat (F2)
+	ChatDiffMaxLines  int    // tope de diff que entra al prompt del chat (§9.6)
 	// Sandbox analyzer (§9.4): los consumen internal/analyze.
 	AnalyzerImage     string
 	AnalyzerMemory    string
@@ -306,6 +313,16 @@ func Load() (*Config, error) {
 	s2.WebhookTimestampTolerance = tolerance
 
 	s2.GitLabBotUsername = envOr("GITLAB_BOT_USERNAME", DefaultGitLabBotUsername)
+
+	s2.GitHubBotUsername = envOr("GITHUB_BOT_USERNAME", DefaultGitHubBotUsername)
+
+	chatDiffMax, err := loadInt("CHAT_DIFF_MAX_LINES", DefaultChatDiffMaxLines)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if chatDiffMax < 1 {
+		errs = append(errs, "CHAT_DIFF_MAX_LINES debe ser mayor o igual a 1")
+	}
+	s2.ChatDiffMaxLines = chatDiffMax
 
 	branchTTL, err := loadDuration("BRANCH_TIP_CACHE_TTL", DefaultBranchTipCacheTTL)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,6 +85,7 @@ type glDraftChange struct {
 
 // glNoteAttrs son los object_attributes de un evento note (§3.5).
 type glNoteAttrs struct {
+	ID           int64  `json:"id"`            // padre de la respuesta de chat (idempotencia)
 	NoteableType string `json:"noteable_type"` // solo "MergeRequest" pasa
 	Note         string `json:"note"`
 }
@@ -380,11 +382,12 @@ func (a *Adapter) handleMergeRequest(ctx context.Context, repo store.Repository,
 	return nil
 }
 
-// handleNote filtra la nota (§3.5): solo noteable_type == MergeRequest, con
+// handleNote procesa la nota (§3.5): solo noteable_type == MergeRequest, con
 // mención al bot y sin comentarios del propio bot (anti-bucle — GitLab no
 // expone flag de autor bot: comparación contra el username configurado), y el
-// MR debe existir. El ChatJob llega en F2: por ahora el comentario que pasa
-// el filtro se registra y descarta, sin job.
+// MR debe existir. Pasa → encola el ChatJob (F2): el webhook jamás llama LLM.
+// ponytail: chat_org_only exige resolver la membresía del proyecto por API
+// con cache (§3.5) — se agrega cuando un repo público GitLab lo pida.
 func (a *Adapter) handleNote(ctx context.Context, repo store.Repository, p *webhookPayload) error {
 	var attrs glNoteAttrs
 	if err := json.Unmarshal(p.ObjectAttributes, &attrs); err != nil {
@@ -408,15 +411,31 @@ func (a *Adapter) handleNote(ctx context.Context, repo store.Repository, p *webh
 		slog.InfoContext(ctx, "webhook gitlab: nota sin mención al bot, descartada", "mr", p.MergeRequest.IID)
 		return nil
 	}
-	if _, err := a.st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
+	pr, err := a.st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
 		RepositoryID: repo.ID, Number: p.MergeRequest.IID,
-	}); errors.Is(err, pgx.ErrNoRows) {
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
 		slog.InfoContext(ctx, "webhook gitlab: nota sobre MR no observado, descartada", "mr", p.MergeRequest.IID)
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("resolviendo MR %d de la nota: %w", p.MergeRequest.IID, err)
 	}
-	slog.InfoContext(ctx, "webhook gitlab: mención en MR (ChatJob llega en F2), descartada", "mr", p.MergeRequest.IID)
+	args, err := json.Marshal(jobs.ChatJobArgs{
+		RepositoryID:    repo.ID,
+		PullRequestID:   pr.ID,
+		ParentCommentID: strconv.FormatInt(attrs.ID, 10),
+		CommentBody:     attrs.Note,
+		CommentAuthor:   p.User.Username,
+		HeadSha:         pr.HeadSha,
+		BaseSha:         pr.BaseSha,
+		Language:        repo.Language,
+	})
+	if err != nil {
+		return fmt.Errorf("serializando args del ChatJob: %w", err)
+	}
+	if err := a.jq.Enqueue(ctx, jobs.KindChat, args); err != nil {
+		return fmt.Errorf("encolando ChatJob del MR %d: %w", p.MergeRequest.IID, err)
+	}
 	return nil
 }
 

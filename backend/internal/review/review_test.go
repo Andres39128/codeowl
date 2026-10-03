@@ -178,7 +178,8 @@ func (s *stubStore) CreateCommentSent(_ context.Context, arg store.CreateComment
 	s.nextCmt++
 	row := store.CommentsSent{ID: s.nextCmt, PullRequestID: arg.PullRequestID,
 		ReviewID: arg.ReviewID, CommentID: arg.CommentID, Type: arg.Type,
-		File: arg.File, Category: arg.Category, Anchor: arg.Anchor}
+		File: arg.File, Category: arg.Category, Anchor: arg.Anchor,
+		ParentCommentID: arg.ParentCommentID}
 	s.comments[arg.Type] = append(s.comments[arg.Type], row)
 	return row, nil
 }
@@ -199,12 +200,14 @@ func (s *stubStore) UpdateCommentSentCommentID(_ context.Context, arg store.Upda
 }
 
 // stubGateway responde de colas por agente: reviewer por archivo,
-// summarizer global. Cuenta las llamadas.
+// summarizer y chat por marcador. Cuenta las llamadas.
 type stubGateway struct {
 	mu         sync.Mutex
 	calls      int
 	reviewer   map[string][]string
 	summarizer []string
+	chat       []string
+	chatSeen   []string // prompts de usuario de chat recibidos
 }
 
 func newStubGateway() *stubGateway {
@@ -221,6 +224,15 @@ func (g *stubGateway) Complete(_ context.Context, _, system, user string) (strin
 		}
 		r := g.summarizer[0]
 		g.summarizer = g.summarizer[1:]
+		return r, nil
+	}
+	if strings.HasPrefix(user, chatUserMarker) {
+		g.chatSeen = append(g.chatSeen, user)
+		if len(g.chat) == 0 {
+			return "", fmt.Errorf("sin respuesta de chat encolada (llamada %d)", g.calls)
+		}
+		r := g.chat[0]
+		g.chat = g.chat[1:]
 		return r, nil
 	}
 	first := strings.SplitN(user, "\n", 2)[0]
@@ -249,13 +261,15 @@ func (a *stubAnalyzer) Run(_ context.Context, _ string) (*analyze.AnalysisResult
 
 // stubVCS graba las publicaciones y sirve el diff fixture.
 type stubVCS struct {
-	diff        string
-	failInline  bool
-	mu          sync.Mutex
-	summaryBods []string
-	summaryID   string
-	inlineReqs  []vcs.CommentPosition
-	inlineBods  []string
+	diff         string
+	failInline   bool
+	mu           sync.Mutex
+	summaryBods  []string
+	summaryID    string
+	inlineReqs   []vcs.CommentPosition
+	inlineBods   []string
+	replyParents []string // padres de las respuestas de chat
+	replyBods    []string // cuerpos de las respuestas de chat
 }
 
 func newStubVCS() *stubVCS { return &stubVCS{diff: diffFixture, summaryID: "sum-1"} }
@@ -294,6 +308,14 @@ func (s *stubVCS) PostSummary(_ context.Context, _ *store.Repository, _ *store.P
 	defer s.mu.Unlock()
 	s.summaryBods = append(s.summaryBods, body)
 	return s.summaryID, nil
+}
+
+func (s *stubVCS) PostReply(_ context.Context, _ *store.Repository, _ *store.PullRequest, parentID, body string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replyParents = append(s.replyParents, parentID)
+	s.replyBods = append(s.replyBods, body)
+	return fmt.Sprintf("chat-%d", len(s.replyBods)), nil
 }
 
 // resetCache limpia la cache compartida entre tests: cada test arranca frío.

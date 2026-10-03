@@ -271,6 +271,40 @@ func (a *Adapter) PostSummary(ctx context.Context, repo *store.Repository, pr *s
 	return a.postIssueComment(ctx, repo, pr.Number, token, body)
 }
 
+// PostReply responde en el hilo del comentario que disparó el chat (mapa:
+// PostReply, F2). Si el padre es un comentario inline de review se responde
+// en su hilo (endpoint replies); un 404 — el padre es de la conversación o
+// fue borrado — cae a la conversación del PR: una respuesta a un comentario
+// de conversación es un comentario más (§6 F2).
+func (a *Adapter) PostReply(ctx context.Context, repo *store.Repository, pr *store.PullRequest, parentCommentID, body string) (string, error) {
+	token, err := a.repoToken(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("token de instalación para responder el PR %d: %w", pr.Number, err)
+	}
+	if parentCommentID != "" {
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments/%s/replies",
+			repo.Owner, repo.Name, pr.Number, parentCommentID)
+		var out struct {
+			ID int64 `json:"id"`
+		}
+		status, err := a.doJSON(ctx, http.MethodPost, path, token, mediaTypeJSON,
+			map[string]string{"body": body}, &out)
+		if err != nil {
+			return "", fmt.Errorf("respondiendo el comentario %s: %w", parentCommentID, err)
+		}
+		switch status {
+		case http.StatusCreated:
+			return strconv.FormatInt(out.ID, 10), nil
+		case http.StatusNotFound:
+			// El padre no es un comentario inline (o ya no existe): la
+			// respuesta va a la conversación.
+		default:
+			return "", fmt.Errorf("respondiendo el comentario %s: status %d", parentCommentID, status)
+		}
+	}
+	return a.postIssueComment(ctx, repo, pr.Number, token, body)
+}
+
 // postIssueComment crea un comentario en la conversación del PR (la API de
 // issues es la superficie de GitHub para comentarios de conversación).
 func (a *Adapter) postIssueComment(ctx context.Context, repo *store.Repository, number int64, token, body string) (string, error) {
@@ -281,10 +315,10 @@ func (a *Adapter) postIssueComment(ctx context.Context, repo *store.Repository, 
 	status, err := a.doJSON(ctx, http.MethodPost, path, token, mediaTypeJSON,
 		map[string]string{"body": body}, &out)
 	if err != nil {
-		return "", fmt.Errorf("creando comentario de resumen: %w", err)
+		return "", fmt.Errorf("creando comentario en la conversación: %w", err)
 	}
 	if status != http.StatusCreated {
-		return "", fmt.Errorf("creando comentario de resumen: status %d", status)
+		return "", fmt.Errorf("creando comentario en la conversación: status %d", status)
 	}
 	return strconv.FormatInt(out.ID, 10), nil
 }
