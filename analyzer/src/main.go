@@ -61,17 +61,12 @@ type report struct {
 	Findings      []finding      `json:"findings"`
 }
 
-// symbolFile es la entrada del stub de símbolos (F4 trae el árbol completo
-// vía tree-sitter; por ahora: archivo + lenguaje).
+// symbolFile es la entrada del recorrido: archivo + lenguaje (la detección
+// sigue siendo por extensión; go-enry entra si algún día hace falta más
+// precisión — §2).
 type symbolFile struct {
 	Path     string `json:"path"`
 	Language string `json:"language"`
-}
-
-// symbolReport es el JSON del modo --symbols.
-type symbolReport struct {
-	FilesAnalyzed int          `json:"files_analyzed"`
-	Files         []symbolFile `json:"files"`
 }
 
 func main() {
@@ -118,7 +113,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if symbols {
-		return emitSymbolReport(files, stdout)
+		return emitSymbolReport(workdir, files, stderr, stdout)
 	}
 	return emitLintReport(workdir, files, stdout)
 }
@@ -167,15 +162,6 @@ func detectLanguage(name string) string {
 	default:
 		return ""
 	}
-}
-
-func emitSymbolReport(files []symbolFile, stdout io.Writer) error {
-	out, err := json.Marshal(symbolReport{FilesAnalyzed: len(files), Files: files})
-	if err != nil {
-		return err
-	}
-	_, err = stdout.Write(append(out, '\n'))
-	return err
 }
 
 func emitLintReport(workdir string, files []symbolFile, stdout io.Writer) error {

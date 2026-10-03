@@ -47,10 +47,12 @@ lint target="all":
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "backend" ]; then cd backend && golangci-lint run; fi
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "dashboard" ]; then pnpm --dir dashboard lint; fi
 
-# tests backend y/o dashboard — just test [backend|dashboard|all] (§8)
+# tests backend, dashboard y/o analyzer — just test [backend|dashboard|analyzer|all] (§8)
+# analyzer es un módulo Go separado (un solo paquete): serial de por sí, sin -p 1.
 test target="all":
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "backend" ]; then cd backend && go test -count=1 -p 1 ./...; fi
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "dashboard" ]; then pnpm --dir dashboard test; fi
+    @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "analyzer" ]; then cd analyzer/src && go test -count=1 ./...; fi
 
 # aplica migraciones (golang-migrate, §3.3) contra DATABASE_URL — just migrate [up|down]
 migrate direction="up":

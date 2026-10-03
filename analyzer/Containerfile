@@ -18,11 +18,17 @@ ARG TS_PARSER_VERSION=8.71.0
 ARG RUST_VERSION=1.99.0
 
 # --- Etapa 1: binario del CLI (cgo permitido solo acá — mapa analyzer.cli) ----
+# tree-sitter (F4): bindings de Go compilados dentro del binario. Los pines de
+# runtime + grammars viven en src/go.mod con su justificación (§9.4: salida
+# reproducible entre rebuilds). gcc/musl-dev viven solo en esta etapa: el
+# binario sale estático y el runtime no los necesita.
 FROM golang:1.27-alpine AS build
 WORKDIR /src
-COPY src/go.mod ./
+RUN apk add --no-cache gcc musl-dev
+COPY src/go.mod src/go.sum ./
+RUN go mod download
 COPY src/*.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/analyzer .
+RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/analyzer .
 
 # --- Etapa 2: imagen final -----------------------------------------------------
 # Base golang: golangci-lint necesita la toolchain de Go en runtime (compila
@@ -53,10 +59,9 @@ RUN npm init -y >/dev/null \
     && npm cache clean --force
 ENV PATH="/opt/linters/node_modules/.bin:${PATH}"
 
-# tree-sitter (§2: parseo AST multi-lenguaje) entra en F4 como bindings de Go
-# compilados dentro del binario del CLI (cgo permitido solo en este contenedor,
-# mapa analyzer.cli) — el CLI oficial no publica build musl y no se usa hasta
-# F4. El pin de versión vivirá entonces en src/go.mod.
+# tree-sitter (§2: parseo AST multi-lenguaje): entró en F4 como bindings de Go
+# compilados en la etapa build de este contenedor (cgo permitido solo acá,
+# mapa analyzer.cli). Los pines de versiones viven en src/go.mod (§9.4).
 
 # Rust + Clippy: toolchain pinned, perfil mínimo + clippy. rustup-init se
 # verifica contra su checksum oficial (pinning reproducible).
