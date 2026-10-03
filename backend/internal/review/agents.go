@@ -31,6 +31,18 @@ var (
 // Reviewer/Summarizer → review).
 const roleReview = "review"
 
+// languagePlaceholder es el hueco de idioma de los system prompts (reviewer,
+// summarizer y chat): fillLanguage lo llena con el idioma efectivo de la
+// corrida (§9.5).
+const languagePlaceholder = "{{LANGUAGE}}"
+
+// fillLanguage llena el hueco de idioma del system prompt dado (mismo
+// mecanismo que el chat, §3.3). El idioma efectivo jamás llega vacío: la
+// resolución de la config cae a 'es' (§9.5).
+func fillLanguage(prompt, language string) string {
+	return strings.ReplaceAll(prompt, languagePlaceholder, language)
+}
+
 // Marcadores del prompt de usuario: enrutan la respuesta del gateway (los
 // stubs de test los usan para saber a qué agente responden).
 const (
@@ -67,13 +79,15 @@ var (
 
 // runReviewer analiza cada archivo del diff con el agente Reviewer (una
 // llamada LLM por archivo, en paralelo con tope de concurrencia — los slots
-// por review los fija el gateway, §9.6). Un archivo cuya salida no parsea
-// tras cfg.AgentRetries reintentos se descarta con registro (§9.8: nunca
+// por review los fija el gateway, §9.6). El system prompt viaja con el
+// idioma efectivo ya lleno. Un archivo cuya salida no parsea tras
+// cfg.AgentRetries reintentos se descarta con registro (§9.8: nunca
 // crashea el job) y queda declarado como cobertura parcial. Devuelve error
 // solo si el contexto se cancela (el job está muriendo).
-func runReviewer(ctx context.Context, gw Gateway, cfg Config, files map[string]string) ([]Finding, []string, error) {
+func runReviewer(ctx context.Context, gw Gateway, cfg Config, language string, files map[string]string) ([]Finding, []string, error) {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(cfg.Concurrency)
+	system := fillLanguage(promptReviewer, language)
 
 	var (
 		mu        sync.Mutex
@@ -82,7 +96,7 @@ func runReviewer(ctx context.Context, gw Gateway, cfg Config, files map[string]s
 	)
 	for file, hunks := range files {
 		g.Go(func() error {
-			fs, err := reviewFile(ctx, gw, cfg.AgentRetries, file, hunks)
+			fs, err := reviewFile(ctx, gw, cfg.AgentRetries, system, file, hunks)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -104,10 +118,10 @@ func runReviewer(ctx context.Context, gw Gateway, cfg Config, files map[string]s
 // reviewFile analiza UN archivo: llamada LLM, parseo estricto y reintentos
 // por salida malformada (§9.8). El fallo del gateway (failover agotado) no
 // se reintenta acá — el gateway ya agotó los suyos (§9.7).
-func reviewFile(ctx context.Context, gw Gateway, retries int, file, hunks string) ([]Finding, error) {
+func reviewFile(ctx context.Context, gw Gateway, retries int, system, file, hunks string) ([]Finding, error) {
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
-		content, err := gw.Complete(ctx, roleReview, promptReviewer, reviewerUser(file, hunks))
+		content, err := gw.Complete(ctx, roleReview, system, reviewerUser(file, hunks))
 		if err != nil {
 			return nil, fmt.Errorf("failover agotado: %w", err)
 		}
@@ -122,12 +136,14 @@ func reviewFile(ctx context.Context, gw Gateway, retries int, file, hunks string
 	return nil, fmt.Errorf("salida malformada tras %d reintentos: %w", retries, lastErr)
 }
 
-// runSummarizer genera el resumen del PR (§3.6.2). El mermaid se valida
-// antes de devolverse: si no parsea, se omite con registro (§9.8).
-func runSummarizer(ctx context.Context, gw Gateway, cfg Config, stats string, counts map[string]int) (*SummaryResult, error) {
+// runSummarizer genera el resumen del PR (§3.6.2) con el idioma efectivo en
+// el system prompt. El mermaid se valida antes de devolverse: si no parsea,
+// se omite con registro (§9.8).
+func runSummarizer(ctx context.Context, gw Gateway, cfg Config, language, stats string, counts map[string]int) (*SummaryResult, error) {
+	system := fillLanguage(promptSummarizer, language)
 	var lastErr error
 	for attempt := 0; attempt <= cfg.AgentRetries; attempt++ {
-		content, err := gw.Complete(ctx, roleReview, promptSummarizer, summarizerUser(stats, counts))
+		content, err := gw.Complete(ctx, roleReview, system, summarizerUser(stats, counts))
 		if err != nil {
 			return nil, fmt.Errorf("failover agotado: %w", err)
 		}

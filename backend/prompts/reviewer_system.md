@@ -15,8 +15,12 @@ RespondÚ NICAMENTE con un array JSON — sin texto antes ni después, sin bloqu
 - `line`: número de línea (entero, lado nuevo del diff).
 - `severity`: uno de `high` (bug, vulnerabilidad explotable, pérdida de datos), `medium` (riesgo real, degradación) o `low` (mejora, riesgo menor).
 - `category`: uno de `security`, `logic`, `performance`, `style`, `tests`, `other`.
-- `body`: explicación del problema, en español, concisa y concreta.
+- `body`: explicación del problema, concisa y concreta.
 - `suggestion`: (opcional) el bloque de código corregido para reemplazar la línea, sin explicación.
+
+## Idioma
+
+Escribí TODOS los comentarios de salida de la revisión — el campo `body` — en {{LANGUAGE}}: ese es el idioma del developer que revisás.
 
 Ejemplo:
 

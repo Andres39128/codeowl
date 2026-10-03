@@ -30,6 +30,7 @@ const (
 	DefaultDiffFileMaxLines      = 1000              // §9.6: tope análogo por archivo (solo SAST)
 	DefaultReviewAgentRetries    = 2                 // §9.8: reintentos por salida malformada del agente
 	DefaultReviewDriftLines      = 3                 // §3.6.3: tolerancia de drift del ancla de dedup
+	DefaultReviewProfile         = "assertive"       // §9.5: perfil global para repos sin review.yaml
 	DefaultReviewCacheTTL        = time.Hour         // §9.6: TTL de la cache de resultados
 	DefaultReviewCacheMaxEntries = 100               // §9.6: tope de entradas de la cache
 	DefaultLLMMaxPerReview       = 4                 // §9.6: llamadas LLM simultáneas por review
@@ -62,6 +63,10 @@ const (
 // masterKeySize es el tamaño en bytes de la clave AES-256 (guía §9.2).
 const masterKeySize = 32
 
+// reviewProfiles es el conjunto cerrado de perfiles de revisión (§9.5).
+// Espejo del conjunto de review.validProfiles (config no importa review).
+var reviewProfiles = map[string]bool{"chill": true, "assertive": true, "strict": true}
+
 type Config struct {
 	APIAddr           string
 	DatabaseURL       string
@@ -86,6 +91,7 @@ type Stage2Config struct {
 	// Topes del pipeline de review (§3.6/§9.6/§9.8): los consumen internal/review.
 	ReviewAgentRetries    int           // reintentos por salida malformada del agente
 	ReviewDriftLines      int           // tolerancia de drift del ancla de dedup (±N líneas)
+	ReviewDefaultProfile  string        // perfil global para repos sin review.yaml (§9.5)
 	ReviewCacheTTL        time.Duration // TTL de la cache de resultados
 	ReviewCacheMaxEntries int           // tope de entradas de la cache
 	MasterKeyPrevious     []byte        // rotación de master key (§9.2), opcional
@@ -252,6 +258,15 @@ func Load() (*Config, error) {
 		errs = append(errs, "REVIEW_DRIFT_LINES debe ser mayor o igual a 0")
 	}
 	s2.ReviewDriftLines = drift
+
+	profile := strings.TrimSpace(os.Getenv("REVIEW_DEFAULT_PROFILE"))
+	switch {
+	case profile == "":
+		profile = DefaultReviewProfile
+	case !reviewProfiles[profile]:
+		errs = append(errs, "REVIEW_DEFAULT_PROFILE debe ser chill, assertive o strict (§9.5)")
+	}
+	s2.ReviewDefaultProfile = profile
 
 	cacheTTL, err := loadDuration("REVIEW_CACHE_TTL", DefaultReviewCacheTTL)
 	if err != nil {

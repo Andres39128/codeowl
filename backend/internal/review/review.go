@@ -55,6 +55,7 @@ const (
 	defaultCacheTTL         = time.Hour
 	defaultCacheMaxEntries  = 100
 	defaultConcurrency      = 4
+	defaultReviewProfile    = "assertive" // §9.5: perfil global si el repo no define uno
 )
 
 // Store es el subconjunto de la store que consume el pipeline (§4.5:
@@ -94,6 +95,7 @@ type Config struct {
 	CacheTTL         time.Duration // TTL de la cache de resultados (§9.6)
 	CacheMaxEntries  int           // tope de entradas de la cache (§9.6)
 	Concurrency      int           // análisis de archivos en paralelo (tope gateway por review, §9.6)
+	DefaultProfile   string        // perfil global para repos sin review.yaml (§9.5: chill|assertive|strict)
 }
 
 // DefaultConfig devuelve la config por defecto (espejo de los defaults de
@@ -134,6 +136,9 @@ func (c Config) normalized() Config {
 	}
 	if c.Concurrency < 1 {
 		c.Concurrency = d.Concurrency
+	}
+	if !validProfiles[c.DefaultProfile] {
+		c.DefaultProfile = defaultReviewProfile // inválida o cero-value → default del pipeline
 	}
 	return c
 }
@@ -245,16 +250,23 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		}
 	}
 
+	// Merge-base y config efectiva del repo (§9.5): review.yaml se lee del
+	// MERGE-BASE, no del head ni del tip de la base — leerlo del head dejaría
+	// al PR escribir sus propias reglas de revisión (inyección). El merge-base
+	// se resuelve una vez y ancla también la clave de cache (§9.6).
+	mb := mergeBase(ctx, input.Workdir, input.BaseSHA, input.HeadSHA)
+	rc := loadRepoConfig(ctx, input.Workdir, mb, repo, cfg.DefaultProfile)
+
 	// (e)(f) Reviewer LLM por archivo, con cache de resultados (§9.6).
 	var llmFindings []Finding
 	var sum *SummaryResult
 	cacheable := !overCap && len(fileHunks) > 0
-	if entry, ok := results.get(cacheKey(ctx, input, cfg)); ok {
+	if entry, ok := results.get(cacheKey(input, mb, cfg, rc)); ok {
 		llmFindings, sum = entry.findings, entry.summary
 		slog.Info("review: cache hit", "review", rev.ID)
 	} else if !overCap && len(fileHunks) > 0 {
 		var discarded []string
-		llmFindings, discarded, err = runReviewer(ctx, gw, cfg, fileHunks)
+		llmFindings, discarded, err = runReviewer(ctx, gw, cfg, rc.Language, fileHunks)
 		if err != nil {
 			return nil, err // cancelación del contexto: el job reintenta
 		}
@@ -296,7 +308,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// (g) Summarizer: estadísticas del diff + recuento de hallazgos.
 	counts := countBySeverity(publishable)
 	if sum == nil {
-		if sum, err = runSummarizer(ctx, gw, cfg, diffStats(total, changed), counts); err != nil {
+		if sum, err = runSummarizer(ctx, gw, cfg, rc.Language, diffStats(total, changed), counts); err != nil {
 			// Failover agotado en el summarizer: la corrida queda partial y
 			// lo declara — el resumen provisional no puede faltar (§9.6).
 			slog.Warn("review: summarizer falló, resumen de reserva", "error", err)
@@ -381,7 +393,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 
 	res.Status = status
 	if cacheable {
-		results.put(cacheKey(ctx, input, cfg), cacheEntry{findings: llmFindings, summary: sum})
+		results.put(cacheKey(input, mb, cfg, rc), cacheEntry{findings: llmFindings, summary: sum})
 	}
 	return res, nil
 }
@@ -507,14 +519,15 @@ func diffStats(total int, changed map[string]int) string {
 }
 
 // cacheKey es la clave de la cache de resultados (§9.6): head SHA +
-// merge-base + versión del prompt + hash de la config efectiva. El
-// merge-base se resuelve en el clon (ya existe al computar la cache) y, si
-// git no puede, cae al base_sha — la cache es una optimización, no una
-// promesa.
-func cacheKey(ctx context.Context, input ReviewInput, cfg Config) string {
-	mb := mergeBase(ctx, input.Workdir, input.BaseSHA, input.HeadSHA)
+// merge-base + versión del prompt + hash de la config efectiva — los topes
+// del pipeline Y la config del repo (§9.5: dos configs distintas son
+// corridas distintas). El merge-base lo resuelve el caller una sola vez (Run
+// ya lo necesitó para leer review.yaml) y, si git no pudo, cayó al base_sha
+// — la cache es una optimización, no una promesa.
+func cacheKey(input ReviewInput, mb string, cfg Config, rc RepoConfig) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%+v", cfg) // topes normalizados: configs distintas son corridas distintas
+	fmt.Fprintf(h, "%+v", rc)  // config efectiva del repo: language/profile/filtros/instrucciones (§9.5)
 	return input.HeadSHA + "|" + mb + "|" + prompts.Version() + "|" + hex.EncodeToString(h.Sum(nil))
 }
 

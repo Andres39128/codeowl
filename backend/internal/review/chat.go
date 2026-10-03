@@ -28,10 +28,6 @@ var promptChat = prompts.Chat()
 // (migración: language default 'es', §3.3).
 const defaultChatLanguage = "es"
 
-// chatLanguagePlaceholder es el hueco del system prompt que el idioma del
-// repo llena.
-const chatLanguagePlaceholder = "{{LANGUAGE}}"
-
 // chatUserMarker marca el prompt de usuario del chat: enruta la respuesta
 // del gateway en los stubs de test (mismo criterio que summarizerMarker).
 const chatUserMarker = "Comentario del usuario en el pull request:"
@@ -173,7 +169,7 @@ func HandleChat(ctx context.Context, cfg ChatConfig, st Store, gw Gateway, provi
 	if language == "" {
 		language = defaultChatLanguage
 	}
-	system := strings.ReplaceAll(promptChat, chatLanguagePlaceholder, language)
+	system := fillLanguage(promptChat, language)
 
 	resp, err := gw.Complete(ctx, roleReview, system, chatUser(question, cmd, diff))
 	if err != nil {
