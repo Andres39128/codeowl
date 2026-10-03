@@ -13,17 +13,24 @@ import (
 	"github.com/Andres39128/codeowl/backend/internal/config"
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
+	"github.com/Andres39128/codeowl/backend/internal/vcs"
 )
 
 // Server agrupa las dependencias de los handlers HTTP.
 type Server struct {
 	store   *store.Store
 	cfg     *config.Config
-	limiter *limiter      // backoff de login por usuario (§3.4), en memoria
-	github  http.Handler  // webhook de GitHub (firma HMAC, sin cookie ni CSRF)
-	gitlab  http.Handler  // webhook de GitLab (Standard Webhooks, sin cookie ni CSRF)
-	queue   jobs.JobQueue // encola ReconcileJob en la reconexión de repos (§3.5); nunca procesa
-	llm     LLMTester     // solo la prueba de conexión de settings (§3.5)
+	limiter *limiter // backoff de login por usuario (§3.4), en memoria
+
+	// Adapters VCS completos (mapa: backend.api.nota — depende de vcs):
+	// montan el webhook (HandleWebhook) y sirven el diff del detalle de PR
+	// (GetDiff, F3). La autenticación del webhook es la firma del payload
+	// (§9.3), no la cookie de sesión.
+	github vcs.VCSProvider // webhook + GetDiff de GitHub
+	gitlab vcs.VCSProvider // webhook + GetDiff de GitLab
+
+	queue jobs.JobQueue // encola ReconcileJob en la reconexión de repos (§3.5); nunca procesa
+	llm   LLMTester     // solo la prueba de conexión de settings (§3.5)
 }
 
 // nopQueue es el default cuando nadie inyecta cola (tests que no tocan repos):
@@ -37,10 +44,10 @@ func (nopQueue) Stop(context.Context) error                             { return
 
 // New arma el Server. El limiter de login vive en el Server (memoria del
 // proceso — §9.6: filosofía single-worker, suficiente para 1-5 usuarios).
-// githubWebhook y gitlabWebhook son los handlers de POST /webhooks/{github,
-// gitlab} (adapters VCS); queue y llm son opcionales (nil → no-op / 503 en
-// la prueba de conexión).
-func New(st *store.Store, cfg *config.Config, githubWebhook, gitlabWebhook http.Handler, queue jobs.JobQueue, llm LLMTester) *Server {
+// github y gitlab son los adapters VCS completos (webhook POST
+// /webhooks/{github, gitlab} + GetDiff del detalle de PR, F3); queue y llm
+// son opcionales (nil → no-op / 503 en la prueba de conexión).
+func New(st *store.Store, cfg *config.Config, github, gitlab vcs.VCSProvider, queue jobs.JobQueue, llm LLMTester) *Server {
 	if queue == nil {
 		queue = nopQueue{}
 	}
@@ -48,16 +55,25 @@ func New(st *store.Store, cfg *config.Config, githubWebhook, gitlabWebhook http.
 		store:   st,
 		cfg:     cfg,
 		limiter: newLimiter(cfg.LoginMaxFails),
-		github:  githubWebhook,
-		gitlab:  gitlabWebhook,
+		github:  github,
+		gitlab:  gitlab,
 		queue:   queue,
 		llm:     llm,
 	}
 }
 
+// webhookHandler adapta un VCSProvider al mux: HandleWebhook recibe el ctx
+// del request explícito (contrato vcs, §9.3), no es un http.Handler.
+func webhookHandler(p vcs.VCSProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.HandleWebhook(r.Context(), w, r)
+	})
+}
+
 // Routes arma el mux con la superficie REST (mapa: rest_endpoints): F0 auth,
-// webhook GitHub de F1 y settings/cola de F1. El encadenado es: logging →
-// recover → (auth → csrf, endpoints de sesión; auth → csrf → admin, settings).
+// webhook GitHub de F1, settings/cola de F1 y detalle de PR de F3. El
+// encadenado es: logging → recover → (auth → csrf, endpoints de sesión;
+// auth → csrf → admin, settings; auth solo lectura, cola y PRs).
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -67,10 +83,10 @@ func (s *Server) Routes() *http.ServeMux {
 	// CSRF (§3.4). El handler valida, filtra y encola: jamás toca el gateway
 	// LLM (§3.5).
 	if s.github != nil {
-		mux.Handle("POST /webhooks/github", s.withLogging(s.withRecover(s.github)))
+		mux.Handle("POST /webhooks/github", s.withLogging(s.withRecover(webhookHandler(s.github))))
 	}
 	if s.gitlab != nil {
-		mux.Handle("POST /webhooks/gitlab", s.withLogging(s.withRecover(s.gitlab)))
+		mux.Handle("POST /webhooks/gitlab", s.withLogging(s.withRecover(webhookHandler(s.gitlab))))
 	}
 
 	// Login es mutante pero no autenticado por cookie: el CSRF de §3.4 no
@@ -104,6 +120,13 @@ func (s *Server) Routes() *http.ServeMux {
 	// el triage y consulta el estado de la cola (§3.4). Solo lectura: auth
 	// sin csrf.
 	mux.Handle("GET /api/jobs", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleListJobs)))))
+
+	// Detalle de PR (guía §6 F3): lista, detalle con findings y diff vía
+	// GetDiff del adapter. Solo lectura, member-visible (§3.4: opera el
+	// triage y consulta PRs) — auth sin csrf.
+	mux.Handle("GET /api/prs", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleListPRs)))))
+	mux.Handle("GET /api/prs/{id}", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePRDetail)))))
+	mux.Handle("GET /api/prs/{id}/diff", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePRDiff)))))
 
 	return mux
 }

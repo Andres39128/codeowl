@@ -350,10 +350,7 @@ func TestGitLabWebhookToChat(t *testing.T) {
 	// (logging + recover + POST /webhooks/gitlab).
 	q := newCapturedQueue()
 	glAdapter := gitlab.New(st, cfg, q)
-	gitlabWebhook := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		glAdapter.HandleWebhook(r.Context(), w, r)
-	})
-	apiSrv := httptest.NewServer(api.New(st, cfg, nil, gitlabWebhook, q, nil).Routes())
+	apiSrv := httptest.NewServer(api.New(st, cfg, nil, glAdapter, q, nil).Routes())
 	t.Cleanup(apiSrv.Close)
 
 	gateway := llm.New(st, glMasterKey, llm.Limits{

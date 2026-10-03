@@ -19,6 +19,7 @@ import (
 	"github.com/Andres39128/codeowl/backend/internal/config"
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
+	"github.com/Andres39128/codeowl/backend/internal/vcs"
 	vcsgh "github.com/Andres39128/codeowl/backend/internal/vcs/github"
 	"github.com/Andres39128/codeowl/backend/migrations"
 )
@@ -42,6 +43,12 @@ type testEnv struct {
 // newTestEnv arma api + server TLS con un usuario de prueba fresco.
 // maxFails parametriza el backoff de login para el test de rate limit.
 func newTestEnv(t *testing.T, maxFails int) *testEnv {
+	return newTestEnvVCS(t, maxFails, nil, nil)
+}
+
+// newTestEnvVCS es la variante para los endpoints que consumen adapters VCS
+// (GetDiff del detalle de PR, F3): inyecta stubs como github/gitlab.
+func newTestEnvVCS(t *testing.T, maxFails int, gh, gl vcs.VCSProvider) *testEnv {
 	t.Helper()
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
@@ -72,7 +79,7 @@ func newTestEnv(t *testing.T, maxFails int) *testEnv {
 
 	cfg := &config.Config{SessionTTL: time.Hour, LoginMaxFails: maxFails, MasterKey: make([]byte, 32)}
 	env := &testEnv{st: st, user: user, pass: pass, llm: &stubLLM{}, queue: &stubQueue{}}
-	srv := New(st, cfg, nil, nil, env.queue, env.llm) // webhooks no ejercitados acá (tests propios en internal/vcs/*)
+	srv := New(st, cfg, gh, gl, env.queue, env.llm)
 	env.ts = httptest.NewTLSServer(srv.Routes())
 	t.Cleanup(env.ts.Close)
 	return env
@@ -323,9 +330,7 @@ func TestWebhookGitHubMontadoSinCSRF(t *testing.T) {
 		Stage2:        config.Stage2Config{GitHubWebhookSecret: secret},
 	}
 	gh := vcsgh.New(st, cfg, &stubQueue{})
-	srv := httptest.NewServer(New(st, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gh.HandleWebhook(r.Context(), w, r)
-	}), nil, &stubQueue{}, &stubLLM{}).Routes())
+	srv := httptest.NewServer(New(st, cfg, gh, nil, &stubQueue{}, &stubLLM{}).Routes())
 	t.Cleanup(srv.Close)
 
 	// Ping firmado: evento suscrito por el filtro de descarte — sin BD,

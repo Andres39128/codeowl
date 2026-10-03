@@ -38,3 +38,45 @@ SET state = $2,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: ListPullRequestsWithLatestReview :many
+-- Listado del dashboard (guía §6 F3): TODOS los PRs — los cerrados conservan
+-- valor de auditoría — con su última corrida y el conteo de hallazgos de esa
+-- corrida por severidad. El LATERAL trae la review más reciente (el id es
+-- monotónico: ORDER BY id DESC es estable) y el COUNT con FILTER se resuelve
+-- en la misma query: una sola ida a la BD, sin N+1.
+--
+-- Los COALESCE existen por una limitación de sqlc: no infiere nullabilidad a
+-- través de LEFT JOIN LATERAL y generaría int64/string que revientan al
+-- escanear el NULL real de un PR sin corridas. El sentinel es review_id = 0
+-- (review_id/status/created_at interpolados): el handler lo mapea a
+-- latest_review: null.
+SELECT pr.id,
+       pr.repository_id,
+       pr.number,
+       pr.author,
+       pr.state,
+       pr.head_sha,
+       pr.base_ref,
+       pr.updated_at,
+       repo.owner   AS repo_owner,
+       repo.name    AS repo_name,
+       repo.vcs     AS repo_vcs,
+       COALESCE(r.id, 0)                            AS review_id,
+       COALESCE(r.status, '')                       AS review_status,
+       COALESCE(r.created_at, to_timestamp(0))      AS review_created_at,
+       COUNT(f.id) FILTER (WHERE f.severity = 'high')   AS high,
+       COUNT(f.id) FILTER (WHERE f.severity = 'medium') AS medium,
+       COUNT(f.id) FILTER (WHERE f.severity = 'low')    AS low
+FROM pull_requests pr
+JOIN repositories repo ON repo.id = pr.repository_id
+LEFT JOIN LATERAL (
+    SELECT id, status, created_at
+    FROM reviews
+    WHERE pull_request_id = pr.id
+    ORDER BY id DESC
+    LIMIT 1
+) r ON true
+LEFT JOIN findings f ON f.review_id = r.id
+GROUP BY pr.id, repo.id, r.id, r.status, r.created_at
+ORDER BY pr.updated_at DESC;

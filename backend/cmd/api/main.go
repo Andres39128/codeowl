@@ -80,19 +80,14 @@ func main() {
 	})
 
 	// Routing y middleware (auth, logging, recover) viven en internal/api.
-	// Los webhooks VCS entran como handlers de sus adapters: sin CSRF (§3.4) —
-	// su autenticación es la firma del payload (§9.3).
+	// Los adapters VCS entran completos: montan el webhook (sin CSRF, §3.4 —
+	// su autenticación es la firma del payload, §9.3) y sirven el diff del
+	// detalle de PR (GetDiff, F3).
 	gh := vcsgh.New(st, cfg, jq)
 	gl := vcsgl.New(st, cfg, jq)
 	srv := &http.Server{
-		Addr: cfg.APIAddr,
-		Handler: api.New(st, cfg,
-			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gh.HandleWebhook(r.Context(), w, r)
-			}),
-			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gl.HandleWebhook(r.Context(), w, r)
-			}), jq, gateway).Routes(),
+		Addr:              cfg.APIAddr,
+		Handler:           api.New(st, cfg, gh, gl, jq, gateway).Routes(),
 		ReadHeaderTimeout: shutdownGrace,
 	}
 

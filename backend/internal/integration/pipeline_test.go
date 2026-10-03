@@ -407,15 +407,11 @@ func TestGitHubWebhookToReview(t *testing.T) {
 	}
 
 	// Cadena completa: cola capturadora → adapter GitHub → API con el mux
-	// real (logging + recover + POST /webhooks/github). El wrapper es el
-	// mismo que arma cmd/api: HandleWebhook cuelga del adapter, no de
-	// http.Handler.
+	// real (logging + recover + POST /webhooks/github). El adapter entra
+	// completo: HandleWebhook cuelga de él dentro de la api.
 	q := newCapturedQueue()
 	ghAdapter := vcsgh.New(st, cfg, q)
-	githubWebhook := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ghAdapter.HandleWebhook(r.Context(), w, r)
-	})
-	apiSrv := httptest.NewServer(api.New(st, cfg, githubWebhook, nil, q, nil).Routes())
+	apiSrv := httptest.NewServer(api.New(st, cfg, ghAdapter, nil, q, nil).Routes())
 	t.Cleanup(apiSrv.Close)
 
 	var deliveries []string
