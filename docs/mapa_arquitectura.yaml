@@ -21,7 +21,7 @@
 # ============================================================================
 
 version: 1
-actualizado: "2026-10-01"
+actualizado: "2026-10-03"
 fuente_de_verdad:
   convenciones_y_fases: docs/guia_del_proyecto.md
   referencia_funcional: docs/manual_completo_de_coderabbit_ai.md
@@ -98,6 +98,7 @@ backend:
       - "repos conectados: GET/POST /api/repos, PUT /api/repos/{id} (F1, admin) — conectar = registrar; desconectar = flag enabled, sin delete (guía §3.5)"
       - "usuarios: GET/POST /api/users, PUT /api/users/{id} (F1, admin) — invitación, reset de contraseña, desactivación (guía §3.4)"
       - "cola de jobs: GET /api/jobs (F1) — lectura del panel de cola: pending/running/discarded por tipo (guía §9.9)"
+      - "detalle de PR: GET /api/prs, GET /api/prs/{id}, GET /api/prs/{id}/diff (F3, member) — lista + findings + diff resuelto por el adapter (GetDiff) bajo demanda, sin copia en BD (guía §6 F3)"
     depende_de: [store, vcs, jobs, llm]
     pruebas: backend/internal/api/api_test.go (webhook firmado simulado)
     fase: F0 (auth) / F1 (webhook GitHub) / F2 (webhook GitLab)
