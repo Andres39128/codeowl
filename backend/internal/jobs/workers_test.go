@@ -7,6 +7,7 @@ package jobs
 // VCS (FetchPR graba el workdir, GetDiff sirve un diff fijo).
 
 import (
+	neturl "net/url"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -56,6 +57,53 @@ func wStore(t *testing.T) *store.Store {
 	t.Cleanup(st.Close)
 	if err := store.Migrate(url, migrations.FS); err != nil {
 		t.Fatalf("Migrate: %v", err)
+	}
+	return st
+}
+
+// wStoreScratch abre una BD efímera aislada para tests que mutan filas de
+// forma destructiva (#13): nace vacía y muere con el test, así que nunca
+// tocan el estado real de la BD de desarrollo (el stack puede estar
+// corriendo contra ella). Patrón de jobs_race_test.go, con el nombre de la
+// BD resuelto por URL y no por replace literal del string.
+func wStoreScratch(t *testing.T) *store.Store {
+	t.Helper()
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL no está seteado: saltando tests de integración")
+	}
+	adminURL, err := neturl.Parse(url)
+	if err != nil {
+		t.Fatalf("parseando DATABASE_URL: %v", err)
+	}
+	admin, err := pgx.Connect(context.Background(), func() string {
+		c := *adminURL
+		c.Path = "/postgres"
+		return c.String()
+	}())
+	if err != nil {
+		t.Fatalf("conectando a la BD admin: %v", err)
+	}
+	nombre := fmt.Sprintf("codeowl_scratch_%d", wNano())
+	if _, err := admin.Exec(context.Background(), "CREATE DATABASE "+nombre); err != nil {
+		t.Fatalf("creando BD scratch: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "DROP DATABASE "+nombre)
+		_ = admin.Close(context.Background())
+	})
+	scratch := func() string {
+		c := *adminURL
+		c.Path = "/" + nombre
+		return c.String()
+	}()
+	st, err := store.Open(context.Background(), scratch)
+	if err != nil {
+		t.Fatalf("Open scratch: %v", err)
+	}
+	t.Cleanup(st.Close)
+	if err := store.Migrate(scratch, migrations.FS); err != nil {
+		t.Fatalf("Migrate scratch: %v", err)
 	}
 	return st
 }
@@ -752,20 +800,15 @@ func TestCleanupJobWorkerRetencion(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRotationJobWorkerRecifrado(t *testing.T) {
-	st := wStore(t)
+	// BD scratch aislada (#13): el job re-cifra TODAS las filas de
+	// llm_providers y repositories — contra la BD compartida destruiría
+	// providers reales del stack que esté corriendo. Nace vacía: no hay
+	// junk ajeno que reparar.
+	st := wStoreScratch(t)
 	ctx := context.Background()
 
 	oldKey := bytes.Repeat([]byte{0xA1}, 32) // claves de prueba de 32 bytes
 	newKey := bytes.Repeat([]byte{0xB2}, 32)
-
-	// La BD compartida acumula filas de corridas anteriores cuyas columnas
-	// "cifradas" son plaintext de otros tests (el invariante de producción
-	// es: columna cifrada = salida de store.Encrypt). El re-cifrado aborta
-	// ante un valor indescifrable (§9.2: correcto en producción), así que
-	// acá se repara la basura ANTES del job: solo filas anteriores al
-	// arranque de esta corrida — las de tests corriendo en paralelo son
-	// nuevas y no se tocan.
-	reparaJunkCifrado(t, st, oldKey, time.Now().Add(-time.Second))
 
 	apiKeyCifrada, err := store.Encrypt(oldKey, []byte("sk-prueba-llm"))
 	if err != nil {
@@ -1003,89 +1046,6 @@ func TestReviewJobArgsJSON(t *testing.T) {
 	}
 }
 
-// reparaJunkCifrado restaura el invariante de producción en la BD compartida
-// (columna cifrada = salida de store.Encrypt) sobre filas anteriores a
-// inicio: un valor no vacío que no descifra con la clave vieja de prueba se
-// re-envuelve como ciphertext de esa clave. Sin esto, el RotationJob aborta
-// ante plaintext heredado de otros tests (comportamiento correcto en
-// producción, §9.2).
-func reparaJunkCifrado(t *testing.T, st *store.Store, oldKey []byte, inicio time.Time) {
-	t.Helper()
-	ctx := context.Background()
-
-	descifrable := func(s string) bool {
-		if s == "" {
-			return true
-		}
-		_, err := store.Decrypt(oldKey, s)
-		return err == nil
-	}
-	repara := func(table, col string, ids []int64, vals []pgtype.Text) {
-		for i, v := range vals {
-			if !v.Valid || descifrable(v.String) {
-				continue
-			}
-			fixed, err := store.Encrypt(oldKey, []byte(v.String))
-			if err != nil {
-				t.Fatalf("reparando %s.%d.%s: %v", table, ids[i], col, err)
-			}
-			if _, err := st.Pool.Exec(ctx,
-				fmt.Sprintf("UPDATE %s SET %s = $1 WHERE id = $2", table, col),
-				fixed, ids[i]); err != nil {
-				t.Fatalf("reparando %s.%d.%s: %v", table, ids[i], col, err)
-			}
-		}
-	}
-
-	rows, err := st.Pool.Query(ctx, `SELECT id, webhook_secret, secret_token, api_token, deploy_key
-		FROM repositories WHERE created_at < $1`, inicio)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var ids []int64
-	var wh, stTok, api, dk []pgtype.Text
-	for rows.Next() {
-		var id int64
-		var a, b, c, d pgtype.Text
-		if err := rows.Scan(&id, &a, &b, &c, &d); err != nil {
-			t.Fatal(err)
-		}
-		ids = append(ids, id)
-		wh = append(wh, a)
-		stTok = append(stTok, b)
-		api = append(api, c)
-		dk = append(dk, d)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	repara("repositories", "webhook_secret", ids, wh)
-	repara("repositories", "secret_token", ids, stTok)
-	repara("repositories", "api_token", ids, api)
-	repara("repositories", "deploy_key", ids, dk)
-
-	prows, err := st.Pool.Query(ctx, `SELECT id, api_key FROM llm_providers WHERE created_at < $1`, inicio)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer prows.Close()
-	var pids []int64
-	var keys []pgtype.Text
-	for prows.Next() {
-		var id int64
-		var k pgtype.Text
-		if err := prows.Scan(&id, &k); err != nil {
-			t.Fatal(err)
-		}
-		pids = append(pids, id)
-		keys = append(keys, k)
-	}
-	if err := prows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	repara("llm_providers", "api_key", pids, keys)
-}
 
 // ---------------------------------------------------------------------------
 // indexRetriever — adaptador review.Retriever → index.Retrieve (§6 F4)
