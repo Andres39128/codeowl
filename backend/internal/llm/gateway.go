@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,10 +131,27 @@ func (g *Gateway) Complete(ctx context.Context, role, systemPrompt, userPrompt s
 			continue
 		}
 		g.logUsage(ctx, role, p, resp.Usage)
-		return content, nil
+		return stripThink(content), nil
 	}
 	return "", fmt.Errorf("failover agotado para el rol %s (%d proveedores): %w",
 		role, len(providers), errors.Join(errs...))
+}
+
+// thinkRe matchea los bloques <think>...</think> (incluidos saltos de línea).
+var thinkRe = regexp.MustCompile(`(?s)<think>.*?</think>`)
+
+// stripThink normaliza la salida de modelos de razonamiento (#11): algunos
+// (MiniMax M3 y familia) devuelven el pensamiento inline en content al
+// principio de la respuesta en vez de en reasoning_content. El gateway es el
+// único punto por donde pasa toda salida — agentes y chat reciben contenido
+// limpio sin conocer la querencia del proveedor. Un <think> sin cerrar es
+// razonamiento truncado: se descarta el resto.
+func stripThink(s string) string {
+	s = thinkRe.ReplaceAllString(s, "")
+	if i := strings.Index(s, "<think>"); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 // TestConnection hace una llamada mínima para el botón "probar conexión" de
