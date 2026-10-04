@@ -708,3 +708,45 @@ func TestTestConnectionEmbeddingUsaEmbeddings(t *testing.T) {
 		t.Errorf("el rol embedding no debe hablar chat: %s", path)
 	}
 }
+
+// stripThink normaliza la salida de modelos de razonamiento (#11): bloques
+// <think> inline, múltiples, sin cerrar, o ausentes.
+func TestStripThink(t *testing.T) {
+	casos := []struct {
+		nombre string
+		entra  string
+		quiere string
+	}{
+		{"sin think", `[{"a":1}]`, `[{"a":1}]`},
+		{"think al inicio", "<think>razonando...</think>\n[{\"a\":1}]", `[{"a":1}]`},
+		{"think multilínea", "<think>paso 1\npaso 2\n</think>\n```json\n[{}]\n```", "```json\n[{}]\n```"},
+		{"dos bloques think", "<think>a</think>uno<think>b</think>dos", "unodos"},
+		{"think sin cerrar (truncado)", `[{"a":1}]<think>se cortó`, `[{"a":1}]`},
+		{"solo think", "<think>nada más</think>", ""},
+		{"espacios alrededor", "  <think>x</think>  respuesta  ", "respuesta"},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if got := stripThink(c.entra); got != c.quiere {
+				t.Errorf("stripThink(%q) = %q, quiere %q", c.entra, got, c.quiere)
+			}
+		})
+	}
+}
+
+// El gateway entrega el contenido ya normalizado: un proveedor que piensa
+// inline no rompe el contrato JSON de los agentes (#11).
+func TestCompleteStripThinkTags(t *testing.T) {
+	srv := newStub(t, stubOK("<think>analizo el diff línea por línea...</think>\n[{\"file\":\"main.go\",\"line\":2}]", 10, 5))
+
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "review", 1)}}
+	g := newGateway(t, fs, testLimits())
+
+	out, err := g.Complete(context.Background(), "review", "sys", "user")
+	if err != nil {
+		t.Fatalf("Complete(): %v", err)
+	}
+	if quiere := `[{"file":"main.go","line":2}]`; out != quiere {
+		t.Errorf("content normalizado: got %q want %q", out, quiere)
+	}
+}
