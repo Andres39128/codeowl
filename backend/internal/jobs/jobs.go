@@ -17,6 +17,7 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -426,6 +427,56 @@ func (q *RiverQueue) Start(ctx context.Context) error {
 	slog.Info("cola River procesando jobs",
 		"review_concurrency", q.opts.ReviewConcurrency, "chat_concurrency", q.opts.ChatConcurrency)
 	return nil
+}
+
+// Ventana e intervalo del reintento de arranque: una ventana mayor es
+// asunto de la unidad systemd (reinicia el servicio), no de config.
+const (
+	startupRaceVentana = 60 * time.Second
+	startupRaceCada    = 2 * time.Second
+
+	// pgCodeUndefinedTable: la tabla que River quiere todavía no existe —
+	// la firma de la carrera contra la migración (#9).
+	pgCodeUndefinedTable = "42P01"
+)
+
+// esCarreraDeArranque dice si el error de Start es "tabla de River ausente"
+// (42P01 envuelto a cualquier profundidad): la única clase que se reintenta.
+func esCarreraDeArranque(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgCodeUndefinedTable
+}
+
+// StartConReintentos arranca la cola tolerando la carrera de arranque contra
+// la migración de la API (#9): si River tropieza con 42P01 (undefined_table —
+// el schema todavía no llegó), reintenta dentro de la ventana. Cualquier otro
+// error falla inmediato como hoy: reintento de otra clase solo escondería el
+// problema real.
+func (q *RiverQueue) StartConReintentos(ctx context.Context) error {
+	return q.startConReintentos(ctx, startupRaceVentana, startupRaceCada)
+}
+
+func (q *RiverQueue) startConReintentos(ctx context.Context, ventana, cada time.Duration) error {
+	deadline := time.Now().Add(ventana)
+	for intento := 1; ; intento++ {
+		err := q.Start(ctx)
+		if err == nil {
+			return nil
+		}
+		if !esCarreraDeArranque(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("el schema de River no apareció en %s (¿corrió la migración de la API?): %w", ventana, err)
+		}
+		slog.Warn("cola: schema de River ausente, reintento (carrera contra la migración de la API)",
+			"intento", intento, "espera", cada.String())
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(cada):
+		}
+	}
 }
 
 // Stop drena el cliente que procesa (§9.12: deja de tomar jobs nuevos y

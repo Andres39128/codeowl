@@ -126,7 +126,7 @@ func main() {
 	q.RegisterPeriodic(jobs.CleanupPeriodic())
 
 	defer func() { _ = q.Stop(ctx) }()
-	if err := q.Start(ctx); err != nil {
+	if err := q.StartConReintentos(ctx); err != nil {
 		slog.Error("arrancando la cola", "err", err)
 		os.Exit(1)
 	}
