@@ -93,7 +93,7 @@ func newGateway(t *testing.T, s Store, lim Limits) *Gateway {
 
 // testLimits son topes chicos por defecto para los tests.
 func testLimits() Limits {
-	return Limits{MaxPerReview: 2, MaxGlobal: 2, Timeout: 2 * time.Second, MaxRetries: 3}
+	return Limits{MaxPerReview: 2, MaxGlobal: 2, Timeout: 2 * time.Second, MaxRetries: 3, MaxTokens: 512}
 }
 
 func TestCompleteExitosoRegistraUsage(t *testing.T) {
@@ -748,5 +748,38 @@ func TestCompleteStripThinkTags(t *testing.T) {
 	}
 	if quiere := `[{"file":"main.go","line":2}]`; out != quiere {
 		t.Errorf("content normalizado: got %q want %q", out, quiere)
+	}
+}
+
+
+// El chat lleva max_tokens explícito: los modelos de razonamiento queman el
+// presupuesto pensando y devuelven content vacío si el default del proveedor
+// es chico. El valor viaja desde Limits hasta el body del request.
+func TestChatCompletionLlevaMaxTokens(t *testing.T) {
+	var recibido struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	srv := newStub(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&recibido)
+		stubOK("ok", 1, 1)(w, r)
+	})
+
+	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "review", 1)}}
+	g := newGateway(t, fs, testLimits())
+
+	if _, err := g.Complete(context.Background(), "review", "sys", "user"); err != nil {
+		t.Fatalf("Complete(): %v", err)
+	}
+	if recibido.MaxTokens != 512 {
+		t.Errorf("max_tokens del request: got %d, quiere 512", recibido.MaxTokens)
+	}
+
+	// Sin valor en Limits: el default del gateway (4096) cubre razonamiento.
+	g2 := newGateway(t, fs, Limits{})
+	if _, err := g2.Complete(context.Background(), "review", "sys", "user"); err != nil {
+		t.Fatalf("Complete(): %v", err)
+	}
+	if recibido.MaxTokens != 4096 {
+		t.Errorf("max_tokens default: got %d, quiere 4096", recibido.MaxTokens)
 	}
 }

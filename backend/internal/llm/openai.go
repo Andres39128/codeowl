@@ -32,6 +32,11 @@ type chatMessage struct {
 type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
+	// MaxTokens cubre razonamiento + respuesta: los modelos de razonamiento
+	// (MiniMax M3 y familia) queman el presupuesto del proveedor pensando y
+	// devuelven content vacío si el default implícito es chico. omitempty
+	// conserva el comportamiento previo cuando el gateway no lo configura.
+	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
 type usage struct {
@@ -94,13 +99,14 @@ func parseRetryAfter(v string) time.Duration {
 // chatCompletion hace un POST {baseURL}/v1/chat/completions con Bearer
 // api_key y extrae content de choices[0].message.content y los tokens de
 // usage. El timeout del intento lo fija el caller vía ctx.
-func chatCompletion(ctx context.Context, client *http.Client, baseURL, apiKey, model, systemPrompt, userPrompt string) (chatResponse, error) {
+func chatCompletion(ctx context.Context, client *http.Client, baseURL, apiKey, model, systemPrompt, userPrompt string, maxTokens int) (chatResponse, error) {
 	reqBody, err := json.Marshal(chatRequest{
 		Model: model,
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
+		MaxTokens: maxTokens,
 	})
 	if err != nil {
 		return chatResponse{}, fmt.Errorf("serializando request: %w", err)

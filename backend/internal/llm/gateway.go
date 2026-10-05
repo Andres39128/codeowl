@@ -37,11 +37,13 @@ type Limits struct {
 	Timeout        time.Duration // timeout por llamada HTTP (default 120s)
 	MaxRetries     int           // reintentos por proveedor ante 429/5xx (default 3)
 	EmbedBatchSize int           // textos máximos por llamada /v1/embeddings (default 64)
+	MaxTokens      int           // max_tokens del chat: razonamiento + respuesta (default 4096)
 }
 
 const (
 	defaultBackoff        = 500 * time.Millisecond
 	defaultEmbedBatchSize = 64
+	defaultMaxTokens      = 4096
 )
 
 // Gateway enruta llamadas LLM por rol con failover por priority. Seguro para
@@ -85,6 +87,9 @@ func New(s Store, masterKey []byte, lim Limits) *Gateway {
 	}
 	if lim.EmbedBatchSize < 1 {
 		lim.EmbedBatchSize = defaultEmbedBatchSize
+	}
+	if lim.MaxTokens < 1 {
+		lim.MaxTokens = defaultMaxTokens
 	}
 	return &Gateway{
 		store:     s,
@@ -174,7 +179,7 @@ func (g *Gateway) TestConnection(ctx context.Context, role, baseURL, apiKey, mod
 	callCtx, cancel := context.WithTimeout(ctx, g.limits.Timeout)
 	defer cancel()
 	if _, err := chatCompletion(callCtx, g.http, baseURL, apiKey, model,
-		"responde únicamente: ok", "ping"); err != nil {
+		"responde únicamente: ok", "ping", g.limits.MaxTokens); err != nil {
 		return fmt.Errorf("prueba de conexión falló (rol %s, %s): %w", role, baseURL, err)
 	}
 	return nil
@@ -390,7 +395,7 @@ func (g *Gateway) attempt(ctx context.Context, apiKey string, p store.LlmProvide
 	callCtx, cancel := context.WithTimeout(ctx, g.limits.Timeout)
 	defer cancel()
 
-	resp, err := chatCompletion(callCtx, g.http, p.BaseUrl, apiKey, p.Model, systemPrompt, userPrompt)
+	resp, err := chatCompletion(callCtx, g.http, p.BaseUrl, apiKey, p.Model, systemPrompt, userPrompt, g.limits.MaxTokens)
 	if err == nil {
 		return resp, false, 0, nil
 	}
