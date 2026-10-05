@@ -64,6 +64,7 @@ func main() {
 		MaxPerReview:   cfg.Stage2.LLMMaxPerReview,
 		MaxGlobal:      cfg.Stage2.LLMMaxGlobal,
 		Timeout:        cfg.Stage2.LLMTimeout,
+		MaxTokens:      cfg.Stage2.LLMMaxTokens,
 		MaxRetries:     cfg.Stage2.LLMMaxRetries,
 		EmbedBatchSize: cfg.Stage2.EmbedBatchSize,
 	})

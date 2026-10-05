@@ -39,6 +39,7 @@ const (
 	// = lista vacía = sin bonus de sensibles.
 	DefaultRiskSensitivePaths    = "auth/**,*secret*,**/credentials*,**/migrations/**,.github/workflows/**,.gitlab-ci.yml,deploy/**"
 	DefaultLLMMaxPerReview       = 4                 // §9.6: llamadas LLM simultáneas por review
+	DefaultLLMMaxTokens          = 4096              // §9.6: max_tokens del chat — razonamiento + respuesta (modelos de razonamiento devuelven content vacío si es chico)
 	DefaultLLMMaxGlobal          = 8                 // §9.6: llamadas LLM simultáneas del gateway
 	DefaultLLMTimeout            = 120 * time.Second // §9.7: timeout por llamada LLM
 	DefaultLLMMaxRetries         = 3                 // §9.7: reintentos por proveedor ante 429/5xx
@@ -108,6 +109,7 @@ type Stage2Config struct {
 	RiskSensitivePaths []string // patrones glob de archivos sensibles; no seteada → defaults, vacía → sin bonus
 	// Topes del gateway LLM (§9.6/§9.7): los consumen internal/llm.
 	LLMMaxPerReview int
+	LLMMaxTokens    int
 	LLMMaxGlobal    int
 	LLMTimeout      time.Duration
 	LLMMaxRetries   int
@@ -322,6 +324,14 @@ func Load() (*Config, error) {
 		errs = append(errs, "LLM_MAX_GLOBAL debe ser mayor o igual a 1")
 	}
 	s2.LLMMaxGlobal = maxGlobal
+
+	maxTokens, err := loadInt("LLM_MAX_TOKENS", DefaultLLMMaxTokens)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if maxTokens < 256 {
+		errs = append(errs, "LLM_MAX_TOKENS debe ser mayor o igual a 256")
+	}
+	s2.LLMMaxTokens = maxTokens
 
 	llmTimeout, err := loadDuration("LLM_TIMEOUT", DefaultLLMTimeout)
 	if err != nil {
