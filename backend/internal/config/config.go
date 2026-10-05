@@ -40,6 +40,7 @@ const (
 	DefaultRiskSensitivePaths    = "auth/**,*secret*,**/credentials*,**/migrations/**,.github/workflows/**,.gitlab-ci.yml,deploy/**"
 	DefaultLLMMaxPerReview       = 4                 // §9.6: llamadas LLM simultáneas por review
 	DefaultLLMMaxTokens          = 4096              // §9.6: max_tokens del chat — razonamiento + respuesta (modelos de razonamiento devuelven content vacío si es chico)
+	DefaultJobTimeout            = 20 * time.Minute  // §9.6/§9.7: techo por intento de job — el default de River (1m) mata toda review con LLM real
 	DefaultLLMMaxGlobal          = 8                 // §9.6: llamadas LLM simultáneas del gateway
 	DefaultLLMTimeout            = 120 * time.Second // §9.7: timeout por llamada LLM
 	DefaultLLMMaxRetries         = 3                 // §9.7: reintentos por proveedor ante 429/5xx
@@ -110,6 +111,7 @@ type Stage2Config struct {
 	// Topes del gateway LLM (§9.6/§9.7): los consumen internal/llm.
 	LLMMaxPerReview int
 	LLMMaxTokens    int
+	JobTimeout      time.Duration
 	LLMMaxGlobal    int
 	LLMTimeout      time.Duration
 	LLMMaxRetries   int
@@ -338,6 +340,14 @@ func Load() (*Config, error) {
 		errs = append(errs, err.Error())
 	}
 	s2.LLMTimeout = llmTimeout
+
+	jobTimeout, err := loadDuration("JOB_TIMEOUT", DefaultJobTimeout)
+	if err != nil {
+		errs = append(errs, err.Error())
+	} else if jobTimeout < time.Minute {
+		errs = append(errs, "JOB_TIMEOUT debe ser mayor o igual a 1m (una review con LLM real lo excede siempre)")
+	}
+	s2.JobTimeout = jobTimeout
 
 	maxRetries, err := loadInt("LLM_MAX_RETRIES", DefaultLLMMaxRetries)
 	if err != nil {

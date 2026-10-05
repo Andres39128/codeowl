@@ -418,3 +418,30 @@ func TestEnqueueMetricsJobOps(t *testing.T) {
 		t.Errorf("el MetricsJob va a ops con %d intentos: cola=%q intentos=%d", metricsMaxAttempts, cola, intentos)
 	}
 }
+
+// El bug que este fix cierra: sin river.Config.JobTimeout, River aplica su
+// JobTimeoutDefault de 1 minuto y cancela el ctx de toda review con LLM real
+// a mitad de corrida (todo lo colgado del mismo ctx muere con "context
+// deadline exceeded", incluidas queries del store).
+func TestNewRiverQueueJobTimeoutPorDefecto(t *testing.T) {
+	q, _ := testQueue(t)
+	if q.opts.JobTimeout != 20*time.Minute {
+		t.Errorf("JobTimeout por defecto: got %v, quiere 20m", q.opts.JobTimeout)
+	}
+	// Un valor explícito se respeta.
+	q3, err := New(context.Background(), q.pool, Options{JobTimeout: 42 * time.Minute})
+	if err != nil {
+		t.Fatalf("New con JobTimeout: %v", err)
+	}
+	if q3.opts.JobTimeout != 42*time.Minute {
+		t.Errorf("JobTimeout explícito: got %v, quiere 42m", q3.opts.JobTimeout)
+	}
+	// Invalido (≤0) cae al default, nunca al de River.
+	q4, err := New(context.Background(), q.pool, Options{JobTimeout: -time.Second})
+	if err != nil {
+		t.Fatalf("New con JobTimeout inválido: %v", err)
+	}
+	if q4.opts.JobTimeout != 20*time.Minute {
+		t.Errorf("JobTimeout inválido debe caer al default: got %v", q4.opts.JobTimeout)
+	}
+}

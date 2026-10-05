@@ -53,6 +53,12 @@ const (
 // ponytail: constante, no config — subirla a Stage2 si ops pide afinarla.
 const reviewMaxAttempts = 5
 
+// defaultJobTimeout: River cancela el ctx del job a los 60s si no se
+// configura JobTimeout (su JobTimeoutDefault es 1 minuto). Un review con
+// llamadas LLM reales (reviewer por archivo + summarizer + pre-merge) lo
+// excede siempre; 20m cubre el peor caso con el presupuesto de §9.6.
+const defaultJobTimeout = 20 * time.Minute
+
 // metricsMaxAttempts es el tope del MetricsJob (§6 F5): sin LLM, cada
 // intento es barato — 3 intentos bastan y el fallo persistente queda
 // discarded (visible en el panel de cola, §9.9).
@@ -168,6 +174,11 @@ type JobQueue interface {
 type Options struct {
 	ReviewConcurrency int // MaxWorkers de la cola review (default 2)
 	ChatConcurrency   int // MaxWorkers de la cola chat (default 2)
+	// JobTimeout: techo de corrida por intento de job. El default de River
+	// (1 minuto) cancela el contexto de cualquier review con llamadas LLM
+	// reales antes del resumen de §6 — el timeout va acá, no en el código
+	// de cada agente (default 20m).
+	JobTimeout time.Duration
 }
 
 // RiverQueue implementa JobQueue sobre River + pgxv5. Mantiene dos clientes:
@@ -207,6 +218,9 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Options) (*RiverQueue,
 	}
 	if o.ChatConcurrency < 1 {
 		o.ChatConcurrency = 2
+	}
+	if o.JobTimeout <= 0 {
+		o.JobTimeout = defaultJobTimeout
 	}
 	return &RiverQueue{pool: pool, client: client, opts: o, workers: river.NewWorkers()}, nil
 }
@@ -415,6 +429,11 @@ func (q *RiverQueue) Start(ctx context.Context) error {
 		// Un review > 1h no debe ser "rescatado" en vuelo (duplicaría la
 		// corrida): techo generoso por encima de los timeouts del pipeline.
 		RescueStuckJobsAfter: 4 * time.Hour,
+		// Sin esto River cancela el ctx del job a los 3 minutos (su
+		// JobTimeoutDefault es 1 minuto) y toda review con LLM real muere
+		// con "context deadline exceeded" — incluso queries del store que
+		// cuelgan del mismo ctx.
+		JobTimeout: q.opts.JobTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("construyendo el cliente de River con workers: %w", err)

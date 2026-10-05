@@ -52,6 +52,7 @@ func main() {
 	q, err := jobs.New(ctx, st.Pool, jobs.Options{
 		ReviewConcurrency: cfg.Stage2.ReviewConcurrency,
 		ChatConcurrency:   cfg.Stage2.ChatConcurrency,
+		JobTimeout:        cfg.Stage2.JobTimeout,
 	})
 	if err != nil {
 		slog.Error("cola de jobs", "err", err)
