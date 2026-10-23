@@ -2,7 +2,13 @@
  * filtros de estado (server) y de severidad/repo (client-side), mensajes de
  * vacío y navegación a la fila del detalle (mapa: dashboard.features.triage). */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MetricsView, PrView } from "../../lib/types";
 import { createWrapper } from "../../test/createWrapper";
@@ -114,7 +120,9 @@ it("muestra las columnas de esfuerzo e impacto (F6)", async () => {
 	expect(await screen.findByText("Esfuerzo")).toBeTruthy();
 	expect(screen.getByText("Impacto")).toBeTruthy();
 	// 70 → Alta (esfuerzo); 50 (riesgo default) y 45 (impacto) → Media.
-	expect((await screen.findAllByText("● Alta")).length).toBeGreaterThanOrEqual(1);
+	expect((await screen.findAllByText("● Alta")).length).toBeGreaterThanOrEqual(
+		1,
+	);
 	expect(screen.getAllByText("● Media").length).toBeGreaterThanOrEqual(2);
 });
 

@@ -119,6 +119,69 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+// Filtros de hallazgos (visualización para revisar código): con cientos de
+// hallazgos, el revisor filtra por severidad, origen, archivo y texto libre.
+describe("filtros de hallazgos", () => {
+	it("filtra por severidad y por texto libre", async () => {
+		mockApi({ detail, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		expect(await screen.findByText("Cuerpo alto")).toBeTruthy();
+		expect(screen.getByText("Cuerpo medio")).toBeTruthy();
+		expect(screen.getByText("Cuerpo bajo")).toBeTruthy();
+
+		// Severidad: solo quedan los altos.
+		fireEvent.input(screen.getByLabelText("Severidad"), {
+			target: { value: "high" },
+		});
+		expect(screen.getByText("Cuerpo alto")).toBeTruthy();
+		expect(screen.queryByText("Cuerpo medio")).toBeNull();
+
+		// Texto libre: busca en el cuerpo del hallazgo.
+		fireEvent.input(screen.getByLabelText("Severidad"), {
+			target: { value: "" },
+		});
+		fireEvent.input(screen.getByLabelText("Buscar"), {
+			target: { value: "medio" },
+		});
+		expect(screen.getByText("Cuerpo medio")).toBeTruthy();
+		expect(screen.queryByText("Cuerpo alto")).toBeNull();
+	});
+
+	it("filtra por origen y por archivo", async () => {
+		mockApi({ detail, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo alto");
+		fireEvent.input(screen.getByLabelText("Origen"), {
+			target: { value: "sast" },
+		});
+		expect(screen.getByText("Cuerpo medio")).toBeTruthy();
+		expect(screen.queryByText("Cuerpo alto")).toBeNull();
+
+		fireEvent.input(screen.getByLabelText("Origen"), {
+			target: { value: "" },
+		});
+		fireEvent.input(screen.getByLabelText("Archivo"), {
+			target: { value: "src/baz.go" },
+		});
+		expect(screen.getByText("Cuerpo bajo")).toBeTruthy();
+		expect(screen.queryByText("Cuerpo alto")).toBeNull();
+	});
+
+	it("muestra cuántos hallazgos quedan del total", async () => {
+		mockApi({ detail, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo alto");
+		expect(screen.getByText("Hallazgos (3)")).toBeTruthy();
+		fireEvent.input(screen.getByLabelText("Severidad"), {
+			target: { value: "low" },
+		});
+		expect(screen.getByText("Hallazgos (1 de 3)")).toBeTruthy();
+	});
+});
+
 describe("PrDetail", () => {
 	it("renderiza header, resumen y walkthrough; el mermaid queda como TEXTO", async () => {
 		mockApi({});
@@ -154,9 +217,11 @@ describe("PrDetail", () => {
 		expect(screen.getByText(/● Alta/)).toBeTruthy();
 		expect(screen.getByText(/● Media/)).toBeTruthy();
 		expect(screen.getByText(/● Baja/)).toBeTruthy();
-		expect(screen.getByText("SAST")).toBeTruthy();
-		// LLM aparece en los dos findings de origen llm.
-		expect(screen.getAllByText("LLM")).toHaveLength(2);
+		// El badge de origen: el filtro de origen tiene una opción con el
+		// mismo texto, así que se toma el badge (no el <option>).
+		expect(screen.getAllByText("SAST").length).toBeGreaterThanOrEqual(1);
+		// LLM aparece en los dos findings de origen llm (badge + opción).
+		expect(screen.getAllByText("LLM").length).toBeGreaterThanOrEqual(2);
 		expect(screen.getByText("✔ Verificado")).toBeTruthy();
 		expect(screen.getByText("✖ Falso positivo (no publicado)")).toBeTruthy();
 		expect(screen.getByText("— Sin verificar")).toBeTruthy();

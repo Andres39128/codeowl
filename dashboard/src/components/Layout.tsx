@@ -120,7 +120,9 @@ export function Layout({
 				</div>
 			</aside>
 
-			<main class="flex-1 p-6">{children}</main>
+			{/* min-w-0: sin él, un hijo ancho (el diff con líneas largas) estira
+			 * el main y la página scrollea en horizontal (§5.2). */}
+			<main class="flex-1 min-w-0 p-6">{children}</main>
 		</div>
 	);
 }

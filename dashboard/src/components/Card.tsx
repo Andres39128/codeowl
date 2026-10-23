@@ -17,7 +17,7 @@ export function Card({
 }: CardProps) {
 	return (
 		<section
-			class={`rounded-lg border border-border-subtle bg-bg-surface p-4 ${className ?? ""}`}
+			class={`min-w-0 rounded-lg border border-border-subtle bg-bg-surface p-4 ${className ?? ""}`}
 			{...rest}
 		>
 			{(title !== undefined || actions !== undefined) && (

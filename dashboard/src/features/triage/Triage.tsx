@@ -204,7 +204,9 @@ export function Triage() {
 	const prs = useQuery({
 		queryKey: ["prs", orden, estado],
 		queryFn: () =>
-			api<PrView[]>(`/api/prs?sort=${ORDEN_PARAM[orden]}${ESTADO_PARAM[estado]}`),
+			api<PrView[]>(
+				`/api/prs?sort=${ORDEN_PARAM[orden]}${ESTADO_PARAM[estado]}`,
+			),
 	});
 	const metrics = useQuery({
 		queryKey: ["metrics", 30],
@@ -258,9 +260,7 @@ export function Triage() {
 						// onInput y no onChange: convención de Preact — el change del
 						// select se quiebra bajo jsdom (ver ProviderModal).
 						onInput={(event) =>
-							setOrden(
-								(event.target as HTMLSelectElement).value as Orden,
-							)
+							setOrden((event.target as HTMLSelectElement).value as Orden)
 						}
 					>
 						<option value="riesgo">Riesgo</option>
