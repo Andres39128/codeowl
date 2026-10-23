@@ -26,6 +26,15 @@ SELECT DISTINCT file, file_hash, embedding_model
 FROM repo_index
 WHERE repository_id = $1;
 
+-- name: ListRepoIndexImports :many
+-- Un renglón por archivo con sus imports (nivel archivo, repetidos por fila
+-- de símbolo — §3.3): insumo del grafo de reachability inversa de F6
+-- (impact_score y change stack). DISTINCT porque las filas de símbolo
+-- repiten la misma lista de imports del archivo.
+SELECT DISTINCT file, imports
+FROM repo_index
+WHERE repository_id = $1;
+
 -- name: CountRepoIndexByRepo :one
 -- Chequeo de vacuidad del índice (retrieval: índice vacío → sin contexto).
 SELECT COUNT(1) FROM repo_index WHERE repository_id = $1;

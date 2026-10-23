@@ -12,7 +12,7 @@ import (
 )
 
 const getPullRequest = `-- name: GetPullRequest :one
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score FROM pull_requests WHERE id = $1
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score FROM pull_requests WHERE id = $1
 `
 
 // Por ID: el pipeline de review resuelve la fila desde el job (§3.6.1.3 —
@@ -33,12 +33,14 @@ func (q *Queries) GetPullRequest(ctx context.Context, id int64) (PullRequest, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RiskScore,
+		&i.EffortScore,
+		&i.ImpactScore,
 	)
 	return i, err
 }
 
 const getPullRequestByRepoNumber = `-- name: GetPullRequestByRepoNumber :one
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score FROM pull_requests WHERE repository_id = $1 AND number = $2
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score FROM pull_requests WHERE repository_id = $1 AND number = $2
 `
 
 type GetPullRequestByRepoNumberParams struct {
@@ -62,12 +64,14 @@ func (q *Queries) GetPullRequestByRepoNumber(ctx context.Context, arg GetPullReq
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RiskScore,
+		&i.EffortScore,
+		&i.ImpactScore,
 	)
 	return i, err
 }
 
 const listOpenPullRequestsByRepo = `-- name: ListOpenPullRequestsByRepo :many
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score FROM pull_requests
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score FROM pull_requests
 WHERE repository_id = $1 AND state = 'open'
 ORDER BY number DESC
 `
@@ -94,6 +98,8 @@ func (q *Queries) ListOpenPullRequestsByRepo(ctx context.Context, repositoryID i
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.RiskScore,
+			&i.EffortScore,
+			&i.ImpactScore,
 		); err != nil {
 			return nil, err
 		}
@@ -115,6 +121,8 @@ SELECT pr.id,
        pr.base_ref,
        pr.updated_at,
        pr.risk_score,
+       pr.effort_score,
+       pr.impact_score,
        repo.owner   AS repo_owner,
        repo.name    AS repo_name,
        repo.vcs     AS repo_vcs,
@@ -148,6 +156,8 @@ type ListPullRequestsWithLatestReviewRow struct {
 	BaseRef         string
 	UpdatedAt       pgtype.Timestamptz
 	RiskScore       pgtype.Int4
+	EffortScore     pgtype.Int4
+	ImpactScore     pgtype.Int4
 	RepoOwner       string
 	RepoName        string
 	RepoVcs         string
@@ -189,6 +199,8 @@ func (q *Queries) ListPullRequestsWithLatestReview(ctx context.Context) ([]ListP
 			&i.BaseRef,
 			&i.UpdatedAt,
 			&i.RiskScore,
+			&i.EffortScore,
+			&i.ImpactScore,
 			&i.RepoOwner,
 			&i.RepoName,
 			&i.RepoVcs,
@@ -235,7 +247,7 @@ SET state = $2,
     merged_at = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score
+RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score
 `
 
 type UpdatePullRequestStateParams struct {
@@ -262,8 +274,32 @@ func (q *Queries) UpdatePullRequestState(ctx context.Context, arg UpdatePullRequ
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RiskScore,
+		&i.EffortScore,
+		&i.ImpactScore,
 	)
 	return i, err
+}
+
+const updatePullRequestTriageScores = `-- name: UpdatePullRequestTriageScores :exec
+UPDATE pull_requests
+SET effort_score = $2,
+    impact_score = $3,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdatePullRequestTriageScoresParams struct {
+	ID          int64
+	EffortScore pgtype.Int4
+	ImpactScore pgtype.Int4
+}
+
+// Triage extendido F6 (§6): effort_score (siempre computable del diff) e
+// impact_score (NULL sin índice del repo — degrada visible). Se pisa en cada
+// corrida, mismo régimen best-effort que risk_score; toca updated_at igual.
+func (q *Queries) UpdatePullRequestTriageScores(ctx context.Context, arg UpdatePullRequestTriageScoresParams) error {
+	_, err := q.db.Exec(ctx, updatePullRequestTriageScores, arg.ID, arg.EffortScore, arg.ImpactScore)
+	return err
 }
 
 const upsertPullRequest = `-- name: UpsertPullRequest :one
@@ -278,7 +314,7 @@ SET author = EXCLUDED.author,
     base_sha = EXCLUDED.base_sha,
     merged_at = COALESCE(EXCLUDED.merged_at, pull_requests.merged_at),
     updated_at = now()
-RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score
+RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score
 `
 
 type UpsertPullRequestParams struct {
@@ -323,6 +359,8 @@ func (q *Queries) UpsertPullRequest(ctx context.Context, arg UpsertPullRequestPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RiskScore,
+		&i.EffortScore,
+		&i.ImpactScore,
 	)
 	return i, err
 }

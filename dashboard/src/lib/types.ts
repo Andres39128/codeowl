@@ -83,8 +83,13 @@ export interface PrView {
 	head_sha: string;
 	base_ref: string;
 	updated_at: string;
-	/** Score 0-100 de la última corrida (F5): null si aún no corrió ninguna. */
-	risk_score: number | null;
+		/** Score 0-100 de la última corrida (F5): null si aún no corrió ninguna. */
+		risk_score: number | null;
+		/** Triage extendido (F6): esfuerzo 0-100 — siempre computable del diff. */
+		effort_score: number | null;
+		/** Impacto 0-100 (reachability inversa del grafo de imports): null sin
+		 * índice del repo — degrada visible. */
+		impact_score: number | null;
 	latest_review: LatestReviewView | null;
 }
 

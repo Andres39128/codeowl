@@ -69,8 +69,9 @@ type ReviewJobWorker struct {
 	Gateway   review.Gateway  // *llm.Gateway la satisface
 	Analyzer  review.Analyzer // *analyze.Runner la satisface
 	Provider  vcs.VCSProvider
-	Retriever review.Retriever // contexto simbólico del repo (§6 F4); nil → sin bloque
-	Queue     JobQueue         // encola el IndexJob tras la corrida (§6 F4)
+	Retriever review.Retriever   // contexto simbólico del repo (§6 F4); nil → sin bloque
+	Impact    review.ImpactProvider // dependientes del grafo de imports (§6 F6); nil → impact null
+	Queue     JobQueue           // encola el IndexJob tras la corrida (§6 F4)
 	Config    review.Config
 
 	WorkdirRoot string // default /var/tmp (los tests usan un tmp propio)
@@ -105,7 +106,7 @@ func (w *ReviewJobWorker) Work(ctx context.Context, job *river.Job[ReviewJobArgs
 		return w.failFinal(ctx, job, fmt.Errorf("clonando el PR %d: %w", pr.Number, err))
 	}
 
-	res, err := review.Run(ctx, w.Config, w.Store, w.Gateway, w.Analyzer, w.Provider, w.Retriever, review.ReviewInput{
+	res, err := review.Run(ctx, w.Config, w.Store, w.Gateway, w.Analyzer, w.Provider, w.Retriever, w.Impact, review.ReviewInput{
 		PullRequestID: args.PullRequestID,
 		RepositoryID:  repoID,
 		HeadSHA:       args.HeadSha,
@@ -266,6 +267,24 @@ func (r indexRetriever) RetrieveRelated(ctx context.Context, repoID int64, file,
 // consume el IndexJobWorker.
 func NewIndexRetriever(st index.RetrieveStore, gw index.Gateway, topK int) review.Retriever {
 	return indexRetriever{st: st, gw: gw, topK: topK}
+}
+
+// indexImpact adapta index.Dependents al contrato review.ImpactProvider
+// (§6 F6, T3 — mismo borde que indexRetriever: review solo conoce su
+// contrato, el wiring cablea el índice real).
+type indexImpact struct {
+	st index.ImpactStore
+}
+
+// Dependents delega en la reachability inversa del grafo de imports.
+func (i indexImpact) Dependents(ctx context.Context, repoID int64, files []string) ([]string, error) {
+	return index.Dependents(ctx, i.st, repoID, files)
+}
+
+// NewIndexImpact arma el provider de impacto del triage sobre el índice
+// RAG del repo (§6 F6): misma store que consume el IndexJobWorker.
+func NewIndexImpact(st index.ImpactStore) review.ImpactProvider {
+	return indexImpact{st: st}
 }
 
 // ---------------------------------------------------------------------------
@@ -891,6 +910,7 @@ var (
 	_ review.Gateway                 = (*llm.Gateway)(nil)
 	_ review.Analyzer                = (*analyze.Runner)(nil)
 	_ review.Retriever               = indexRetriever{}
+	_ review.ImpactProvider          = indexImpact{}
 	_ index.Gateway                  = (*llm.Gateway)(nil)
 	_ index.Extractor                = (*analyze.Runner)(nil)
 )

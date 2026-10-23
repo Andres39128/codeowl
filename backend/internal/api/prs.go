@@ -48,7 +48,9 @@ type latestReviewView struct {
 // pull_requests no la persiste (solo author/number — la guía §3.3 guarda lo
 // mínimo; si el dashboard quiere título, es trabajo del VCS, no de la BD).
 // RiskScore es el proxy del tail de Run (§6 F5): nil = sin corrida que lo
-// haya calculado (columna NULL en la BD).
+// haya calculado (columna NULL en la BD). EffortScore/ImpactScore son el
+// triage extendido (§6 F6): effort siempre computable del diff, impact
+// null sin índice del repo (degradación visible).
 type prView struct {
 	ID           int64             `json:"id"`
 	Number       int64             `json:"number"`
@@ -59,6 +61,8 @@ type prView struct {
 	BaseRef      string            `json:"base_ref"`
 	UpdatedAt    time.Time         `json:"updated_at"`
 	RiskScore    *int              `json:"risk_score"`
+	EffortScore  *int              `json:"effort_score"`
+	ImpactScore  *int              `json:"impact_score"`
 	LatestReview *latestReviewView `json:"latest_review"`
 }
 
@@ -82,6 +86,12 @@ func prViewOf(row store.ListPullRequestsWithLatestReviewRow) prView {
 	}
 	if row.RiskScore.Valid {
 		v.RiskScore = intPtr(int(row.RiskScore.Int32))
+	}
+	if row.EffortScore.Valid {
+		v.EffortScore = intPtr(int(row.EffortScore.Int32))
+	}
+	if row.ImpactScore.Valid {
+		v.ImpactScore = intPtr(int(row.ImpactScore.Int32))
 	}
 	if row.ReviewID != 0 {
 		v.LatestReview = &latestReviewView{
@@ -112,8 +122,9 @@ func queryChoice(val string, allowed ...string) (string, bool) {
 // handleListPRs: GET /api/prs — todos los PRs (los cerrados quedan: conservan
 // valor de auditoría) con la última corrida. Primer query params de la API
 // (decisión 8 de F5, el triage es su primer consumidor):
-//   - sort=updated (default) | risk: el default conserva el ORDER BY
-//     updated_at DESC del SQL; risk reordena en el handler.
+//   - sort=updated (default) | risk | effort | impact (F6 §6): el default
+//     conserva el ORDER BY updated_at DESC del SQL; los scores reordenan
+//     en el handler (mismo patrón nulls-last).
 //   - state=open|closed, repo={id}, severity=high|medium|low: filtran.
 //
 // El sort/filter vive en Go, no en SQL dinámico (decisión del brief): un solo
@@ -122,9 +133,9 @@ func queryChoice(val string, allowed ...string) (string, bool) {
 // de PRs; mover a SQL dinámico solo si el dataset llega a millones.
 func (s *Server) handleListPRs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	sortBy, ok := queryChoice(q.Get("sort"), "updated", "risk")
+	sortBy, ok := queryChoice(q.Get("sort"), "updated", "risk", "effort", "impact")
 	if !ok {
-		writeError(w, http.StatusBadRequest, `valor inválido para "sort": esperado updated|risk`)
+		writeError(w, http.StatusBadRequest, `valor inválido para "sort": esperado updated|risk|effort|impact`)
 		return
 	}
 	state, ok := queryChoice(q.Get("state"), "open", "closed")
@@ -182,22 +193,37 @@ func (s *Server) handleListPRs(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
-	if sortBy == "risk" {
-		// risk_score DESC, sin score al final, empate → el orden base del
-		// SQL (updated_at DESC) sobrevive gracias al sort estable.
-		sort.SliceStable(views, func(i, j int) bool {
-			ri, rj := views[i].RiskScore, views[j].RiskScore
-			switch {
-			case ri == nil:
-				return false
-			case rj == nil:
-				return true
-			default:
-				return *ri > *rj
-			}
-		})
+	if sortBy != "updated" {
+		// score DESC, sin score al final, empate → el orden base del SQL
+		// (updated_at DESC) sobrevive gracias al sort estable. Los tres
+		// scores del triage comparten el patrón (§6 F5/F6).
+		switch sortBy {
+		case "risk":
+			sortByScoreDesc(views, func(v prView) *int { return v.RiskScore })
+		case "effort":
+			sortByScoreDesc(views, func(v prView) *int { return v.EffortScore })
+		case "impact":
+			sortByScoreDesc(views, func(v prView) *int { return v.ImpactScore })
+		}
 	}
 	writeJSON(w, http.StatusOK, views)
+}
+
+// sortByScoreDesc reordena las vistas por el score elegido DESC con los
+// nulls al final y sort estable (el orden base del SQL sobrevive en los
+// empates) — el patrón único de los tres scores del triage (§6 F5/F6).
+func sortByScoreDesc(views []prView, pick func(prView) *int) {
+	sort.SliceStable(views, func(i, j int) bool {
+		vi, vj := pick(views[i]), pick(views[j])
+		switch {
+		case vi == nil:
+			return false
+		case vj == nil:
+			return true
+		default:
+			return *vi > *vj
+		}
+	})
 }
 
 // reviewView es la corrida completa para el detalle: los textos que completó
@@ -273,9 +299,16 @@ func (s *Server) handlePRDetail(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: pr.UpdatedAt.Time,
 	}, Findings: []findingView{}}
 	// Misma forma que el listado: el score viaja en el bloque pr (o null si
-	// aún no corrió una review que lo calculara).
+	// aún no corrió una review que lo calculara). El triage extendido
+	// (§6 F6) espeja effort/impact igual que risk.
 	if pr.RiskScore.Valid {
 		out.PR.RiskScore = intPtr(int(pr.RiskScore.Int32))
+	}
+	if pr.EffortScore.Valid {
+		out.PR.EffortScore = intPtr(int(pr.EffortScore.Int32))
+	}
+	if pr.ImpactScore.Valid {
+		out.PR.ImpactScore = intPtr(int(pr.ImpactScore.Int32))
 	}
 
 	review, err := s.store.GetLatestReviewByPR(r.Context(), id)

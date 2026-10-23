@@ -640,6 +640,81 @@ func TestPRsFiltrosStateRepoSeverity(t *testing.T) {
 	}
 }
 
+// Triage extendido (§6 F6, T3): effort_score/impact_score viajan en el
+// JSON del listado y del detalle, y ordenan con el MISMO patrón que risk
+// (score DESC, nulls al final, empate estable por updated_at). Los toques
+// de score pisan updated_at, así que el orden base tras las puntuaciones es
+// top → fast → slow → cerrado → otro → none (se puntuaron en ese orden).
+func TestPRsTriageScoresSortYJson(t *testing.T) {
+	e := newTestEnv(t, 5)
+	fx := seedTriage(t, e)
+	ctx := context.Background()
+	puntuar := func(nombre string, effort, impact pgtype.Int4) {
+		t.Helper()
+		if err := e.st.UpdatePullRequestTriageScores(ctx, store.UpdatePullRequestTriageScoresParams{
+			ID: fx.prs[nombre].ID, EffortScore: effort, ImpactScore: impact,
+		}); err != nil {
+			t.Fatalf("UpdatePullRequestTriageScores(%s): %v", nombre, err)
+		}
+	}
+	puntuar("slow", pgtype.Int4{Int32: 30, Valid: true}, pgtype.Int4{}) // impact null: sin índice
+	puntuar("fast", pgtype.Int4{Int32: 80, Valid: true}, pgtype.Int4{Int32: 65, Valid: true})
+	puntuar("top", pgtype.Int4{Int32: 30, Valid: true}, pgtype.Int4{})
+
+	porNombre := func(nombres ...string) []int64 {
+		out := make([]int64, 0, len(nombres))
+		for _, n := range nombres {
+			out = append(out, fx.prs[n].ID)
+		}
+		return out
+	}
+
+	// JSON: fast trae ambos scores; top trae effort con impact null; none
+	// (sin corridas ni puntuaciones) trae ambos null.
+	list := listarPRs(t, e, "")
+	buscar := func(id int64) *prView {
+		for i := range list {
+			if list[i].ID == id {
+				return &list[i]
+			}
+		}
+		return nil
+	}
+	if v := buscar(fx.prs["fast"].ID); v == nil || v.EffortScore == nil || *v.EffortScore != 80 ||
+		v.ImpactScore == nil || *v.ImpactScore != 65 {
+		t.Errorf("fast debe traer effort 80 / impact 65: %+v", v)
+	}
+	if v := buscar(fx.prs["top"].ID); v == nil || v.EffortScore == nil || *v.EffortScore != 30 || v.ImpactScore != nil {
+		t.Errorf("top debe traer effort 30 con impact null (sin índice): %+v", v)
+	}
+	if v := buscar(fx.prs["none"].ID); v == nil || v.EffortScore != nil || v.ImpactScore != nil {
+		t.Errorf("none debe traer ambos scores null: %+v", v)
+	}
+
+	// sort=effort: 80 (fast) → empate 30/30 estable (top antes de slow en el
+	// orden base) → nulls (cerrado, otro, none).
+	if got := ids(listarPRs(t, e, "?sort=effort"), fx); !mismos(got, porNombre("fast", "top", "slow", "cerrado", "otro", "none")) {
+		t.Errorf("sort=effort debe ser score DESC con nil al final, fue %v", got)
+	}
+	// sort=impact: 65 (fast) → 10 (cerrado) → nulls en orden base.
+	if got := ids(listarPRs(t, e, "?sort=impact"), fx); !mismos(got, porNombre("fast", "cerrado", "top", "slow", "otro", "none")) {
+		t.Errorf("sort=impact debe ser score DESC con nil al final, fue %v", got)
+	}
+
+	// El detalle espeja los scores en el bloque pr (mismo consumidor que risk).
+	resp := e.do(t, http.MethodGet, fmt.Sprintf("/api/prs/%d", fx.prs["fast"].ID), e.admin(t).cookie, e.admin(t).csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET detalle debe ser 200, fue %d", resp.StatusCode)
+	}
+	var out prDetailView
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.PR.EffortScore == nil || *out.PR.EffortScore != 80 || out.PR.ImpactScore == nil || *out.PR.ImpactScore != 65 {
+		t.Errorf("detalle debe espejar effort 80 / impact 65: %+v", out.PR)
+	}
+}
+
 // Parámetros desconocidos → 400 con mensaje, jamás ignore silencioso
 // (decisión 8: fail closed).
 func TestPRsQueryInvalidos400(t *testing.T) {

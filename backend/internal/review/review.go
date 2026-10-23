@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
+	"github.com/Andres39128/codeowl/backend/internal/index"
 	"github.com/Andres39128/codeowl/backend/internal/llm"
 	"github.com/Andres39128/codeowl/backend/internal/repoconfig"
 	"github.com/Andres39128/codeowl/backend/internal/store"
@@ -89,6 +90,7 @@ type Store interface {
 	CreateCommentSent(ctx context.Context, arg store.CreateCommentSentParams) (store.CommentsSent, error)
 	UpdateCommentSentCommentID(ctx context.Context, arg store.UpdateCommentSentCommentIDParams) (store.CommentsSent, error)
 	UpdatePullRequestRiskScore(ctx context.Context, arg store.UpdatePullRequestRiskScoreParams) error
+	UpdatePullRequestTriageScores(ctx context.Context, arg store.UpdatePullRequestTriageScoresParams) error
 }
 
 // Gateway es lo único que el pipeline le pide al LLM (mapa: los agentes
@@ -122,6 +124,17 @@ type RelatedSymbol struct {
 // la implementación es dueña de su K vía config (§9.6).
 type Retriever interface {
 	RetrieveRelated(ctx context.Context, repoID int64, file, code string) ([]RelatedSymbol, error)
+}
+
+// ImpactProvider trae los dependientes de los archivos cambiados (§6 F6,
+// T3): reachability inversa del grafo de imports del índice del repo (F4,
+// blast radius). El pipeline lo trata nil-safe como retr: nil → impact
+// null (degradación visible en el dashboard); un fallo del provider jamás
+// degrada la corrida (§9.6 — best-effort de métrica, igual que el risk
+// score). Los errores se distinguen por sentinel: index.ErrNoIndex (vía el
+// adapter del worker) es ausencia de índice, no fallo.
+type ImpactProvider interface {
+	Dependents(ctx context.Context, repoID int64, files []string) ([]string, error)
 }
 
 // Config son los topes del pipeline — todos config (§9.6/§9.8). El wiring
@@ -237,7 +250,11 @@ type Finding struct {
 // retr (§6 F4) aporta el contexto simbólico del repo al Reviewer; nil →
 // sin bloque y el prompt queda como siempre. Un fallo del retriever JAMÁS
 // degrada la revisión (§9.6): degrada el bloque, no la corrida.
-func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyzer, provider vcs.VCSProvider, retr Retriever, input ReviewInput) (*ReviewResult, error) {
+//
+// impact (§6 F6, T3) aporta los dependientes del grafo de imports para el
+// impact_score del triage; nil → impact null. Un fallo tampoco degrada:
+// degrada el score, no la corrida.
+func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyzer, provider vcs.VCSProvider, retr Retriever, impact ImpactProvider, input ReviewInput) (*ReviewResult, error) {
 	cfg = cfg.normalized()
 	results.configure(cfg.CacheTTL, cfg.CacheMaxEntries)
 
@@ -612,6 +629,40 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		RiskScore: pgtype.Int4{Int32: int32(score), Valid: true},
 	}); err != nil {
 		slog.Warn("review: persistiendo el risk score falló (la corrida sigue)", "error", err, "review", rev.ID)
+	}
+
+	// Triage extendido (§6 F6, T3): effort siempre computable del diff;
+	// impact usa reachability inversa del grafo de imports del índice (F4)
+	// y queda null sin índice (degradación visible, §9.6 — logs y null, sin
+	// nota de coverage: la ausencia del índice es estado del repo, no un
+	// recorte de la corrida). Best-effort como el risk score: un fallo
+	// JAMÁS degrada la corrida.
+	effort := ComputeEffort(EffortInput{ChangedLines: total, Files: len(files)})
+	impactScore := pgtype.Int4{} // null sin índice, sin provider o ante fallo
+	if impact != nil {
+		deps, ierr := impact.Dependents(ctx, input.RepositoryID, files)
+		switch {
+		case errors.Is(ierr, index.ErrNoIndex):
+			slog.Debug("review: sin índice del repo, impact queda null (§6 F6)", "review", rev.ID)
+		case ierr != nil:
+			slog.Warn("review: dependientes del impacto fallaron, impact queda null (la corrida sigue)", "error", ierr, "review", rev.ID)
+		default:
+			impactScore = pgtype.Int4{
+				Int32: int32(ComputeImpact(ImpactInput{
+					Dependents:    len(deps),
+					SensitiveHits: SensitiveHits(files, cfg.RiskSensitivePaths),
+					Counts:        counts,
+				})),
+				Valid: true,
+			}
+		}
+	}
+	if err := st.UpdatePullRequestTriageScores(ctx, store.UpdatePullRequestTriageScoresParams{
+		ID:          input.PullRequestID,
+		EffortScore: pgtype.Int4{Int32: int32(effort), Valid: true},
+		ImpactScore:  impactScore,
+	}); err != nil {
+		slog.Warn("review: persistiendo los scores de triage falló (la corrida sigue)", "error", err, "review", rev.ID)
 	}
 
 	// Veredicto advisory pre-merge (§6 F5, T4): UNA llamada más con las

@@ -81,3 +81,56 @@ func TestSensitiveHits(t *testing.T) {
 		t.Errorf("SensitiveHits sin patrones = %d, querés 0", got)
 	}
 }
+
+// Esfuerzo del triage extendido (§6 F6, T3): bandas de tamaño + aporte
+// lineal por archivo. Misma forma de tabla que ComputeRisk.
+func TestComputeEffort(t *testing.T) {
+	tests := []struct {
+		name string
+		in   EffortInput
+		want int
+	}{
+		{"diff vacío (zero-value)", EffortInput{}, 0},
+		{"banda quirúrgica al borde", EffortInput{ChangedLines: 50}, 10},
+		{"banda chica al borde", EffortInput{ChangedLines: 200}, 25},
+		{"banda media al borde", EffortInput{ChangedLines: 600}, 45},
+		{"banda grande al borde", EffortInput{ChangedLines: 1500}, 60},
+		{"diff enorme", EffortInput{ChangedLines: 9000}, 70},
+		{"archivos suman", EffortInput{ChangedLines: 30, Files: 3}, 16}, // 10 + 6
+		{"archivos saturan en 15", EffortInput{ChangedLines: 30, Files: 40}, 40}, // 10 + 30
+		{"máximo natural exacto", EffortInput{ChangedLines: 9000, Files: 40}, 100}, // 70 + 30
+		{"negativos clampan a 0", EffortInput{ChangedLines: -5, Files: -3}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ComputeEffort(tt.in); got != tt.want {
+				t.Errorf("ComputeEffort(%+v) = %d, querés %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// Impacto del triage extendido (§6 F6, T3): blast radius (dependientes del
+// grafo de imports) + superficie sensible + hallazgos altos publicados.
+func TestComputeImpact(t *testing.T) {
+	tests := []struct {
+		name string
+		in   ImpactInput
+		want int
+	}{
+		{"zero-value", ImpactInput{}, 0},
+		{"dependientes directos", ImpactInput{Dependents: 4}, 20},
+		{"dependientes saturan el tope", ImpactInput{Dependents: 25}, 50},
+		{"sensibles saturan el tope", ImpactInput{SensitiveHits: 9}, 30},
+		{"highs publicados saturan el tope", ImpactInput{Counts: map[string]int{"high": 8}}, 20},
+		{"mixto", ImpactInput{Dependents: 3, SensitiveHits: 2, Counts: map[string]int{"high": 2}}, 35}, // 15+10+10
+		{"negativos clampan a 0", ImpactInput{Dependents: -2, SensitiveHits: -1, Counts: map[string]int{"high": -3}}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ComputeImpact(tt.in); got != tt.want {
+				t.Errorf("ComputeImpact(%+v) = %d, querés %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}

@@ -145,3 +145,93 @@ func SensitiveHits(files, patterns []string) int {
 	}
 	return n
 }
+
+// ---------------------------------------------------------------------------
+// Triage extendido (§6 F6, T3): esfuerzo e impacto junto al risk score.
+// Misma forma que ComputeRisk: fórmulas transparentes de aportes clampeadas
+// a [0, 100], pesos como consts documentadas en un solo lugar. Alimentan el
+// ORDEN del dashboard, jamás un veredicto bloqueante (§1.1).
+// ---------------------------------------------------------------------------
+
+// Pesos y bandas del esfuerzo: cuánto cuesta revisar el cambio. Máximo
+// natural 70 + 30 = 100.
+const (
+	// Bandas de tamaño (líneas +/- cambiadas): < = límite → puntaje.
+	effortSizeTinyMax   = 50
+	effortSizeSmallMax  = 200
+	effortSizeMediumMax = 600
+	effortSizeLargeMax  = 1500
+
+	effortSizeTiny   = 10 // 1-50 líneas: toque quirúrgico
+	effortSizeSmall  = 25 // 51-200
+	effortSizeMedium = 45 // 201-600
+	effortSizeLarge  = 60 // 601-1500
+	effortSizeHuge   = 70 // > 1500: reescriba
+
+	effortFilesEach = 2  // puntos por archivo del diff (muchos archivos = mucho contexto)
+	effortFilesCap  = 15 // 15 archivos saturan (+30)
+)
+
+// EffortInput es el insumo del esfuerzo, todo disponible en el tail de Run.
+type EffortInput struct {
+	ChangedLines int // líneas +/- del diff (splitDiffByFile)
+	Files        int // archivos que la corrida examinó
+}
+
+// ComputeEffort estima el costo de revisión: banda de tamaño + aporte
+// lineal por archivo. Zero-value y negativos clampan a 0 (mismo criterio
+// que ComputeRisk: datos podridos jamás producen un score inválido).
+func ComputeEffort(in EffortInput) int {
+	score := effortSizeScore(in.ChangedLines) + min(max(0, in.Files), effortFilesCap)*effortFilesEach
+	return min(100, max(0, score))
+}
+
+// effortSizeScore puntúa el tamaño por bandas simples y documentadas:
+// 0 → 0; 1-50 → 10; 51-200 → 25; 201-600 → 45; 601-1500 → 60; > 1500 → 70.
+func effortSizeScore(lines int) int {
+	switch {
+	case lines <= 0:
+		return 0
+	case lines <= effortSizeTinyMax:
+		return effortSizeTiny
+	case lines <= effortSizeSmallMax:
+		return effortSizeSmall
+	case lines <= effortSizeMediumMax:
+		return effortSizeMedium
+	case lines <= effortSizeLargeMax:
+		return effortSizeLarge
+	default:
+		return effortSizeHuge
+	}
+}
+
+// Pesos del impacto: blast radius del cambio. Máximo natural
+// 50 + 30 + 20 = 100.
+const (
+	impactDependentsEach = 5  // puntos por archivo dependiente (reachability inversa, §6 F6)
+	impactDependentsCap  = 10 // 10 dependientes saturan (50)
+
+	impactSensitiveEach = 5 // puntos por archivo sensible distinto tocado
+	impactSensitiveCap  = 6 // 6 hits saturan (30)
+
+	impactFindingsEach = 5 // puntos por hallazgo high PUBLICADO
+	impactFindingsCap  = 4 // 4 highs saturan (20)
+)
+
+// ImpactInput es el insumo del impacto: dependientes del grafo de imports,
+// superficie sensible y hallazgos publicados de la corrida.
+type ImpactInput struct {
+	Dependents    int            // archivos que dependen del cambio (index.Dependents)
+	SensitiveHits int            // archivos sensibles distintos tocados
+	Counts        map[string]int // hallazgos publicados por severidad (high/medium/low)
+}
+
+// ComputeImpact aplica la fórmula documentada arriba: dependientes del
+// cambio + superficie sensible + hallazgos altos, cada aporte con su tope.
+// Negativos clampan a 0.
+func ComputeImpact(in ImpactInput) int {
+	score := min(max(0, in.Dependents), impactDependentsCap)*impactDependentsEach +
+		min(max(0, in.SensitiveHits), impactSensitiveCap)*impactSensitiveEach +
+		min(max(0, in.Counts["high"]), impactFindingsCap)*impactFindingsEach
+	return min(100, max(0, score))
+}

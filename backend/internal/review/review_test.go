@@ -91,9 +91,10 @@ type stubStore struct {
 	findings       []store.CreateFindingParams
 	comments       map[string][]store.CommentsSent // indexadas por type
 	nextCmt        int64
-	cheapProviders []store.LlmProvider                      // cola del rol cheap (verifier)
-	riskScores     []store.UpdatePullRequestRiskScoreParams // captura del score (F5 §6)
-	failRisk       bool                                     // fuerza el error de persistencia del score
+	cheapProviders []store.LlmProvider                            // cola del rol cheap (verifier)
+	riskScores     []store.UpdatePullRequestRiskScoreParams        // captura del score (F5 §6)
+	triageScores   []store.UpdatePullRequestTriageScoresParams     // captura effort/impact (F6 §6)
+	failRisk       bool                                            // fuerza el error de persistencia del score
 }
 
 func newStubStore() *stubStore {
@@ -238,6 +239,13 @@ func (s *stubStore) UpdatePullRequestRiskScore(_ context.Context, arg store.Upda
 		return fmt.Errorf("BD caída (stub)")
 	}
 	s.riskScores = append(s.riskScores, arg)
+	return nil
+}
+
+func (s *stubStore) UpdatePullRequestTriageScores(_ context.Context, arg store.UpdatePullRequestTriageScoresParams) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.triageScores = append(s.triageScores, arg)
 	return nil
 }
 
@@ -428,12 +436,13 @@ func resetCache() {
 
 // run es el harness: arma los deps por defecto y corre el pipeline.
 type deps struct {
-	st   *stubStore
-	gw   *stubGateway
-	az   *stubAnalyzer
-	vcs  *stubVCS
-	retr Retriever // contexto simbólico (§6 F4); nil por defecto
-	cfg  Config
+	st     *stubStore
+	gw     *stubGateway
+	az     *stubAnalyzer
+	vcs    *stubVCS
+	retr   Retriever      // contexto simbólico (§6 F4); nil por defecto
+	impact ImpactProvider // dependientes del grafo de imports (§6 F6); nil → impact null
+	cfg    Config
 }
 
 func newDeps() *deps {
@@ -449,7 +458,7 @@ func newDeps() *deps {
 // run ejecuta Run con los stubs armados (el VCS y el analyzer son el mismo).
 func (d *deps) run(t *testing.T) (*ReviewResult, error) {
 	t.Helper()
-	return Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, testInput())
+	return Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, d.impact, testInput())
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +758,115 @@ func TestRunRiskScoreFalloNoDegrada(t *testing.T) {
 	if res.Status != StatusSuccess {
 		t.Errorf("status = %q, querés success", res.Status)
 	}
+}
+
+// stubImpact devuelve los dependientes fijos del grafo de imports (§6 F6) y
+// graba las llamadas recibidas para afirmar el contrato.
+type stubImpact struct {
+	deps    []string
+	err     error
+	calls   int
+	repoIDs []int64
+	files   [][]string
+}
+
+func (s *stubImpact) Dependents(_ context.Context, repoID int64, files []string) ([]string, error) {
+	s.calls++
+	s.repoIDs = append(s.repoIDs, repoID)
+	s.files = append(s.files, files)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.deps, nil
+}
+
+// Triage extendido (§6 F6, T3): la corrida exitosa persiste effort (siempre
+// computable del diff) e impact (reachability inversa). El fixture cambia 4
+// líneas en main.go con 1 high publicado → effort = 10 (banda) + 2 (1
+// archivo) = 12; con 1 dependiente → impact = 5 + 0 + 5 = 10.
+func TestRunTriageScoresPersistido(t *testing.T) {
+	t.Run("con dependientes del índice", func(t *testing.T) {
+		d := newDeps()
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		imp := &stubImpact{deps: []string{"cmd/tool.go"}}
+		d.impact = imp
+
+		res, err := d.run(t)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Status != StatusSuccess {
+			t.Fatalf("status = %q, querés success", res.Status)
+		}
+		if imp.calls != 1 {
+			t.Fatalf("Dependents llamado %d veces, querés 1", imp.calls)
+		}
+		if len(imp.repoIDs) != 1 || imp.repoIDs[0] != testRepoID {
+			t.Errorf("repoID = %v, querés [%d]", imp.repoIDs, testRepoID)
+		}
+		if len(imp.files) != 1 || len(imp.files[0]) != 1 || imp.files[0][0] != "main.go" {
+			t.Errorf("Dependents recibió %v, querés [main.go]", imp.files)
+		}
+		if len(d.st.triageScores) != 1 {
+			t.Fatalf("UpdatePullRequestTriageScores llamado %d veces, querés 1", len(d.st.triageScores))
+		}
+		call := d.st.triageScores[0]
+		if call.ID != testPRID {
+			t.Errorf("ID = %d, querés %d", call.ID, testPRID)
+		}
+		wantEffort := ComputeEffort(EffortInput{ChangedLines: 4, Files: 1})
+		if !call.EffortScore.Valid || int(call.EffortScore.Int32) != wantEffort {
+			t.Errorf("effort_score = %+v, querés %d válido", call.EffortScore, wantEffort)
+		}
+		wantImpact := ComputeImpact(ImpactInput{Dependents: 1, Counts: map[string]int{"high": 1, "medium": 0, "low": 0}})
+		if !call.ImpactScore.Valid || int(call.ImpactScore.Int32) != wantImpact {
+			t.Errorf("impact_score = %+v, querés %d válido", call.ImpactScore, wantImpact)
+		}
+	})
+
+	t.Run("sin provider el impact queda null y el effort persiste", func(t *testing.T) {
+		d := newDeps()
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		// d.impact nil: sin índice cableado (§9.6 degradación visible)
+
+		res, err := d.run(t)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Status != StatusSuccess {
+			t.Fatalf("status = %q, querés success", res.Status)
+		}
+		if len(d.st.triageScores) != 1 {
+			t.Fatalf("UpdatePullRequestTriageScores llamado %d veces, querés 1", len(d.st.triageScores))
+		}
+		call := d.st.triageScores[0]
+		if !call.EffortScore.Valid || int(call.EffortScore.Int32) <= 0 {
+			t.Errorf("effort_score = %+v, querés > 0 válido", call.EffortScore)
+		}
+		if call.ImpactScore.Valid {
+			t.Errorf("impact_score = %+v, querés null sin provider", call.ImpactScore)
+		}
+	})
+
+	t.Run("fallo del provider no degrada la corrida", func(t *testing.T) {
+		d := newDeps()
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		d.impact = &stubImpact{err: errors.New("índice caído")}
+
+		res, err := d.run(t)
+		if err != nil {
+			t.Fatalf("un fallo del impact no debe fallar la corrida: %v", err)
+		}
+		if res.Status != StatusSuccess {
+			t.Errorf("status = %q, querés success (§9.6: best-effort de métrica)", res.Status)
+		}
+		if len(d.st.triageScores) != 1 || d.st.triageScores[0].ImpactScore.Valid {
+			t.Errorf("impact tras fallo = %+v, querés null", d.st.triageScores)
+		}
+	})
 }
 
 // Dedup (§3.6.3): huella file+categoría+ancla contra comments_sent con drift
@@ -1225,7 +1343,7 @@ func runConConfig(t *testing.T, cfgYAML string, setup func(d *deps)) (*ReviewRes
 	if setup != nil {
 		setup(d)
 	}
-	res, err := Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, input)
+	res, err := Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, d.impact, input)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -126,6 +126,8 @@ type PullRequest struct {
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 	RiskScore    pgtype.Int4
+	EffortScore  pgtype.Int4
+	ImpactScore  pgtype.Int4
 }
 
 type RepoIndex struct {

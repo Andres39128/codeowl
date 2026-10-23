@@ -21,6 +21,15 @@ import { riskBandOf } from "./view";
  * parámetro — la API trata la ausencia como sin filtro. */
 type EstadoFiltro = "abiertos" | "cerrados" | "todos";
 
+// Orden del triage (F6): server-side como el riesgo — sort=risk|effort|impact.
+type Orden = "riesgo" | "esfuerzo" | "impacto";
+
+const ORDEN_PARAM: Record<Orden, string> = {
+	riesgo: "risk",
+	esfuerzo: "effort",
+	impacto: "impact",
+};
+
 /** Severidad: filtra client-side sobre los counts de la última review. */
 type SeveridadFiltro = "todas" | "high" | "medium" | "low";
 
@@ -115,8 +124,8 @@ function countsOf(pr: PrView): ComponentChildren {
 	return <span class="flex gap-2">{parts}</span>;
 }
 
-function riskCell(pr: PrView): ComponentChildren {
-	const band = riskBandOf(pr.risk_score);
+function scoreCell(score: number | null): ComponentChildren {
+	const band = riskBandOf(score);
 	if (band === null) return <span class="text-text-muted">—</span>;
 	// String único: ícono + texto en un solo nodo (§5.2.3).
 	return <Badge tone={band.tone}>{`● ${band.label}`}</Badge>;
@@ -146,7 +155,17 @@ const columns: Column<PrView>[] = [
 	{
 		key: "risk",
 		header: "Riesgo",
-		render: riskCell,
+		render: (pr) => scoreCell(pr.risk_score),
+	},
+	{
+		key: "effort",
+		header: "Esfuerzo",
+		render: (pr) => scoreCell(pr.effort_score),
+	},
+	{
+		key: "impact",
+		header: "Impacto",
+		render: (pr) => scoreCell(pr.impact_score),
 	},
 	{
 		key: "latest_review",
@@ -180,12 +199,14 @@ const columns: Column<PrView>[] = [
 
 export function Triage() {
 	const [estado, setEstado] = useState<EstadoFiltro>("abiertos");
+	const [orden, setOrden] = useState<Orden>("riesgo");
 	const [severidad, setSeveridad] = useState<SeveridadFiltro>("todas");
 	const [repo, setRepo] = useState("todos");
 
 	const prs = useQuery({
-		queryKey: ["prs", "risk", estado],
-		queryFn: () => api<PrView[]>(`/api/prs?sort=risk${ESTADO_PARAM[estado]}`),
+		queryKey: ["prs", orden, estado],
+		queryFn: () =>
+			api<PrView[]>(`/api/prs?sort=${ORDEN_PARAM[orden]}${ESTADO_PARAM[estado]}`),
 	});
 	const metrics = useQuery({
 		queryKey: ["metrics", 30],
@@ -194,7 +215,7 @@ export function Triage() {
 	});
 
 	// Filtros de severidad y repo son client-side (decisión 9): el server ya
-	// hizo sort=risk y state; acá solo se descartan filas del listado traído.
+	// hizo sort=orden y state; acá solo se descartan filas del listado traído.
 	const rows = (prs.data ?? []).filter(
 		(pr) =>
 			(severidad === "todas" ||
@@ -228,6 +249,27 @@ export function Triage() {
 			)}
 
 			<div class="mb-4 flex flex-wrap items-end gap-3">
+				<div class="flex flex-col gap-1">
+					<label class="text-xs text-text-muted" for="triage-orden">
+						Orden
+					</label>
+					<select
+						id="triage-orden"
+						class={filterClass}
+						value={orden}
+						// onInput y no onChange: convención de Preact — el change del
+						// select se quiebra bajo jsdom (ver ProviderModal).
+						onInput={(event) =>
+							setOrden(
+								(event.target as HTMLSelectElement).value as Orden,
+							)
+						}
+					>
+						<option value="riesgo">Riesgo</option>
+						<option value="esfuerzo">Esfuerzo</option>
+						<option value="impacto">Impacto</option>
+					</select>
+				</div>
 				<div class="flex flex-col gap-1">
 					<label class="text-xs text-text-muted" for="triage-estado">
 						Estado
@@ -306,7 +348,7 @@ export function Triage() {
 				</Banner>
 			) : (
 				<Table
-					caption="PRs ordenados por riesgo con hallazgos y última review"
+					caption="PRs ordenados por el criterio elegido con hallazgos y última review"
 					columns={columns}
 					rows={rows}
 					getRowKey={(pr) => String(pr.id)}

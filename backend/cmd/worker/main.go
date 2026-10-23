@@ -94,6 +94,7 @@ func main() {
 		&jobs.ReviewJobWorker{
 			Store: st, Gateway: gateway, Analyzer: analyzer, Provider: provider, Queue: q, Config: reviewCfg,
 			Retriever: jobs.NewIndexRetriever(st, gateway, cfg.Stage2.RetrievalTopK),
+			Impact:    jobs.NewIndexImpact(st),
 		},
 		&jobs.ChatJobWorker{
 			Store: st, Gateway: gateway, Provider: provider, Queue: q,

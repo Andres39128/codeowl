@@ -11,7 +11,9 @@ interface RiskBand {
 }
 
 /** Bandas: 0-39 baja, 40-69 media, 70-100 alta. Un score fuera de rango cae
- * en la banda contigua (defensivo, mismo criterio que los mapas de prs/view). */
+ * en la banda contigua (defensivo, mismo criterio que los mapas de prs/view).
+ * Los tres scores del triage (riesgo, esfuerzo, impacto — F6) comparten
+ * estos cortes. */
 export function riskBandOf(score: number | null): RiskBand | null {
 	if (score === null) return null;
 	if (score < 40) return { label: "Baja", tone: "baja" };

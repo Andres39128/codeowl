@@ -131,7 +131,7 @@ func (a *stubSymbolAnalyzer) ExtractSymbols(_ context.Context, _ string) ([]anal
 // happy path de un archivo (el harness deps.az es del tipo concreto).
 func runWithAnalyzer(t *testing.T, d *deps, az Analyzer) (*ReviewResult, error) {
 	t.Helper()
-	return Run(context.Background(), d.cfg, d.st, d.gw, az, d.vcs, d.retr, testInput())
+	return Run(context.Background(), d.cfg, d.st, d.gw, az, d.vcs, d.retr, d.impact, testInput())
 }
 
 // symbolAnalyzer arma el stub con capacidad F4 y un resultado SAST válido.

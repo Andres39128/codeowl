@@ -2,7 +2,7 @@
  * filtros de estado (server) y de severidad/repo (client-side), mensajes de
  * vacío y navegación a la fila del detalle (mapa: dashboard.features.triage). */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MetricsView, PrView } from "../../lib/types";
 import { createWrapper } from "../../test/createWrapper";
@@ -26,6 +26,8 @@ function makePr(overrides: Partial<PrView> = {}): PrView {
 		base_ref: "main",
 		updated_at: "2026-10-01T12:00:00Z",
 		risk_score: 50,
+		effort_score: 20,
+		impact_score: null,
 		latest_review: {
 			id: 1,
 			status: "success",
@@ -98,6 +100,36 @@ beforeEach(() => {
 	location.hash = "";
 });
 
+// Columnas esfuerzo/impacto del triage extendido (F6): mismas bandas que el
+// riesgo (0-100 → Baja/Media/Alta); null → "—", nunca banda falsa.
+it("muestra las columnas de esfuerzo e impacto (F6)", async () => {
+	mockApi(
+		[
+			makePr({ effort_score: 70, impact_score: 45 }),
+			makePr({ id: 102, number: 102, effort_score: null, impact_score: null }),
+		],
+		metrics,
+	);
+	render(<Triage />, { wrapper: createWrapper() });
+	expect(await screen.findByText("Esfuerzo")).toBeTruthy();
+	expect(screen.getByText("Impacto")).toBeTruthy();
+	// 70 → Alta (esfuerzo); 50 (riesgo default) y 45 (impacto) → Media.
+	expect((await screen.findAllByText("● Alta")).length).toBeGreaterThanOrEqual(1);
+	expect(screen.getAllByText("● Media").length).toBeGreaterThanOrEqual(2);
+});
+
+// El selector de orden viaja al server (F6): riesgo (default), esfuerzo o
+// impacto → sort=risk|effort|impact en /api/prs.
+it("cambia el orden del listado vía server (F6)", async () => {
+	mockApi([], metrics);
+	render(<Triage />, { wrapper: createWrapper() });
+	const orden = await screen.findByLabelText("Orden");
+	fireEvent.input(orden, { target: { value: "esfuerzo" } });
+	await waitFor(() =>
+		expect(apiMock).toHaveBeenCalledWith("/api/prs?sort=effort&state=open"),
+	);
+});
+
 afterEach(cleanup);
 
 describe("Triage", () => {
@@ -133,9 +165,11 @@ describe("Triage", () => {
 		render(<Triage />, { wrapper: createWrapper() });
 
 		await screen.findByText("Métricas (últimos 30 días)");
-		expect(screen.getByText("● Alta")).toBeTruthy();
-		expect(screen.getByText("● Media")).toBeTruthy();
-		expect(screen.getByText("● Baja")).toBeTruthy();
+		// Con las columnas F6 (esfuerzo/impacto) puede haber varias celdas con
+		// la misma banda — el riesgo trae las tres, el esfuerzo default 20 (Baja).
+		expect(screen.getAllByText("● Alta").length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText("● Media").length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText("● Baja").length).toBeGreaterThanOrEqual(1);
 		// El server ya sirvió sort=risk: la tabla respeta ese orden.
 		const rows = screen.getAllByRole("row");
 		expect(rows[1]?.textContent).toContain("#101");

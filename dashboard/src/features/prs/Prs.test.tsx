@@ -25,6 +25,8 @@ function makePr(overrides: Partial<PrView> = {}): PrView {
 		base_ref: "main",
 		updated_at: "2026-10-01T12:00:00Z",
 		risk_score: null,
+		effort_score: null,
+		impact_score: null,
 		latest_review: {
 			id: 1,
 			status: "success",

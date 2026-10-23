@@ -227,6 +227,41 @@ func (q *Queries) ListRepoIndexFiles(ctx context.Context, repositoryID int64) ([
 	return items, nil
 }
 
+const listRepoIndexImports = `-- name: ListRepoIndexImports :many
+SELECT DISTINCT file, imports
+FROM repo_index
+WHERE repository_id = $1
+`
+
+type ListRepoIndexImportsRow struct {
+	File    string
+	Imports []string
+}
+
+// Un renglón por archivo con sus imports (nivel archivo, repetidos por fila
+// de símbolo — §3.3): insumo del grafo de reachability inversa de F6
+// (impact_score y change stack). DISTINCT porque las filas de símbolo
+// repiten la misma lista de imports del archivo.
+func (q *Queries) ListRepoIndexImports(ctx context.Context, repositoryID int64) ([]ListRepoIndexImportsRow, error) {
+	rows, err := q.db.Query(ctx, listRepoIndexImports, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRepoIndexImportsRow
+	for rows.Next() {
+		var i ListRepoIndexImportsRow
+		if err := rows.Scan(&i.File, &i.Imports); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const searchRepoIndexBySimilarity = `-- name: SearchRepoIndexBySimilarity :many
 SELECT file, symbol, kind, start_line, end_line, imports
 FROM repo_index

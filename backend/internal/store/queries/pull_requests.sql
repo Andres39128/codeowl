@@ -48,6 +48,16 @@ SET risk_score = $2,
     updated_at = now()
 WHERE id = $1;
 
+-- name: UpdatePullRequestTriageScores :exec
+-- Triage extendido F6 (§6): effort_score (siempre computable del diff) e
+-- impact_score (NULL sin índice del repo — degrada visible). Se pisa en cada
+-- corrida, mismo régimen best-effort que risk_score; toca updated_at igual.
+UPDATE pull_requests
+SET effort_score = $2,
+    impact_score = $3,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: ListPullRequestsWithLatestReview :many
 -- Listado del dashboard (guía §6 F3): TODOS los PRs — los cerrados conservan
 -- valor de auditoría — con su última corrida y el conteo de hallazgos de esa
@@ -69,6 +79,8 @@ SELECT pr.id,
        pr.base_ref,
        pr.updated_at,
        pr.risk_score,
+       pr.effort_score,
+       pr.impact_score,
        repo.owner   AS repo_owner,
        repo.name    AS repo_name,
        repo.vcs     AS repo_vcs,
