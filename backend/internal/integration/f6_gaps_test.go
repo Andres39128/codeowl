@@ -264,8 +264,8 @@ func TestF6SlopOmitidoSinCheap(t *testing.T) {
 	if !strings.Contains(final, "Detección de slop omitida (sin proveedor del rol cheap)") {
 		t.Errorf("la re-edición final debe declarar la omisión del slop:\n%s", final)
 	}
-	if strings.Contains(final, "Notas de lanzamiento") {
-		t.Errorf("sin proveedor cheap el summarizer igual corrió: las release notes deben estar:\n%s", final)
+	if !strings.Contains(final, "Notas de lanzamiento") {
+		t.Errorf("el summarizer corre con rol review (el cheap solo gatea slop/verifier): las release notes deben estar:\n%s", final)
 	}
 
 	findings, err := st.ListFindingsByPR(ctx, pr.ID)

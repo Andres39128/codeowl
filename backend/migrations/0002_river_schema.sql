@@ -2,20 +2,20 @@
 -- propio de River entra por su migración oficial, nunca escrito a mano.
 -- Copiado verbatim de riverdriver/riverpgxv5/migration/main (001..008, up) del
 -- módulo github.com/riverqueue/river/riverdriver/riverpgxv5 v0.48.0. Los
--- comentarios /* TEMPLATE: schema */ del original son inertes como SQL
+-- comentarios  del original son inertes como SQL
 -- (River los sustituye al aplicar con su propio migrator); acá quedan como
 -- comentarios y las tablas se crean en el schema público.
 
-CREATE TABLE /* TEMPLATE: schema */river_migration(
+CREATE TABLE river_migration(
   id bigserial PRIMARY KEY,
   created_at timestamptz NOT NULL DEFAULT NOW(),
   version bigint NOT NULL,
   CONSTRAINT version CHECK (version >= 1)
 );
 
-CREATE UNIQUE INDEX ON /* TEMPLATE: schema */river_migration USING btree(version);
+CREATE UNIQUE INDEX ON river_migration USING btree(version);
 
-CREATE TYPE /* TEMPLATE: schema */river_job_state AS ENUM(
+CREATE TYPE river_job_state AS ENUM(
   'available',
   'cancelled',
   'completed',
@@ -25,7 +25,7 @@ CREATE TYPE /* TEMPLATE: schema */river_job_state AS ENUM(
   'scheduled'
 );
 
-CREATE TABLE /* TEMPLATE: schema */river_job(
+CREATE TABLE river_job(
   -- 8 bytes
   id bigserial PRIMARY KEY,
 
@@ -35,7 +35,7 @@ CREATE TABLE /* TEMPLATE: schema */river_job(
   -- looking at jobs with `SELECT *` it'll appear first after ID. The other two
   -- fields aren't as important but are kept adjacent to `state` for alignment
   -- to get an 8-byte block.
-  state /* TEMPLATE: schema */river_job_state NOT NULL DEFAULT 'available',
+  state river_job_state NOT NULL DEFAULT 'available',
   attempt smallint NOT NULL DEFAULT 0,
   max_attempts smallint NOT NULL,
 
@@ -66,17 +66,17 @@ CREATE TABLE /* TEMPLATE: schema */river_job(
 
 -- We may want to consider adding another property here after `kind` if it seems
 -- like it'd be useful for something.
-CREATE INDEX river_job_kind ON /* TEMPLATE: schema */river_job USING btree(kind);
+CREATE INDEX river_job_kind ON river_job USING btree(kind);
 
-CREATE INDEX river_job_state_and_finalized_at_index ON /* TEMPLATE: schema */river_job USING btree(state, finalized_at) WHERE finalized_at IS NOT NULL;
+CREATE INDEX river_job_state_and_finalized_at_index ON river_job USING btree(state, finalized_at) WHERE finalized_at IS NOT NULL;
 
-CREATE INDEX river_job_prioritized_fetching_index ON /* TEMPLATE: schema */river_job USING btree(state, queue, priority, scheduled_at, id);
+CREATE INDEX river_job_prioritized_fetching_index ON river_job USING btree(state, queue, priority, scheduled_at, id);
 
-CREATE INDEX river_job_args_index ON /* TEMPLATE: schema */river_job USING GIN(args);
+CREATE INDEX river_job_args_index ON river_job USING GIN(args);
 
-CREATE INDEX river_job_metadata_index ON /* TEMPLATE: schema */river_job USING GIN(metadata);
+CREATE INDEX river_job_metadata_index ON river_job USING GIN(metadata);
 
-CREATE OR REPLACE FUNCTION /* TEMPLATE: schema */river_job_notify()
+CREATE OR REPLACE FUNCTION river_job_notify()
   RETURNS TRIGGER
   AS $$
 DECLARE
@@ -95,11 +95,11 @@ $$
 LANGUAGE plpgsql;
 
 CREATE TRIGGER river_notify
-  AFTER INSERT ON /* TEMPLATE: schema */river_job
+  AFTER INSERT ON river_job
   FOR EACH ROW
-  EXECUTE PROCEDURE /* TEMPLATE: schema */river_job_notify();
+  EXECUTE PROCEDURE river_job_notify();
 
-CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_leader(
+CREATE UNLOGGED TABLE river_leader(
     -- 8 bytes each (no alignment needed)
     elected_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,
@@ -113,41 +113,48 @@ CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_leader(
 );
 
 
-ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN tags SET DEFAULT '{}';
-UPDATE /* TEMPLATE: schema */river_job SET tags = '{}' WHERE tags IS NULL;
-ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN tags SET NOT NULL;
+ALTER TABLE river_job ALTER COLUMN tags SET DEFAULT '{}';
+UPDATE river_job SET tags = '{}' WHERE tags IS NULL;
+ALTER TABLE river_job ALTER COLUMN tags SET NOT NULL;
 
 
 -- The args column never had a NOT NULL constraint or default value at the
 -- database level, though we tried to ensure one at the application level.
-ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN args SET DEFAULT '{}';
-UPDATE /* TEMPLATE: schema */river_job SET args = '{}' WHERE args IS NULL;
-ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN args SET NOT NULL;
-ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN args DROP DEFAULT;
+ALTER TABLE river_job ALTER COLUMN args SET DEFAULT '{}';
+UPDATE river_job SET args = '{}' WHERE args IS NULL;
+ALTER TABLE river_job ALTER COLUMN args SET NOT NULL;
+ALTER TABLE river_job ALTER COLUMN args DROP DEFAULT;
 
 -- The metadata column never had a NOT NULL constraint or default value at the
 -- database level, though we tried to ensure one at the application level.
-ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN metadata SET DEFAULT '{}';
-UPDATE /* TEMPLATE: schema */river_job SET metadata = '{}' WHERE metadata IS NULL;
-ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN metadata SET NOT NULL;
+ALTER TABLE river_job ALTER COLUMN metadata SET DEFAULT '{}';
+UPDATE river_job SET metadata = '{}' WHERE metadata IS NULL;
+ALTER TABLE river_job ALTER COLUMN metadata SET NOT NULL;
 
 -- The 'pending' job state will be used for upcoming functionality:
-ALTER TYPE /* TEMPLATE: schema */river_job_state ADD VALUE IF NOT EXISTS 'pending' AFTER 'discarded';
+ALTER TYPE river_job_state ADD VALUE IF NOT EXISTS 'pending' AFTER 'discarded';
+-- COMMIT explícito: golang-migrate corre el archivo como UNA transacción
+-- implícita (simple protocol, multi-statement) y Postgres prohíbe evaluar
+-- un valor de enum agregado en la misma transacción (SQLSTATE 55P04 — lo
+-- evalúa el DO block de verificación de abajo, línea ~257). El migrator
+-- propio de River no sufre esto porque aplica cada versión en su propia
+-- transacción; este COMMIT reproduce esa frontera acá (§3.3).
+COMMIT;
 
-ALTER TABLE /* TEMPLATE: schema */river_job DROP CONSTRAINT finalized_or_finalized_at_null;
-ALTER TABLE /* TEMPLATE: schema */river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
+ALTER TABLE river_job DROP CONSTRAINT finalized_or_finalized_at_null;
+ALTER TABLE river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
     (finalized_at IS NULL AND state NOT IN ('cancelled', 'completed', 'discarded')) OR
     (finalized_at IS NOT NULL AND state IN ('cancelled', 'completed', 'discarded'))
 );
 
-DROP TRIGGER river_notify ON /* TEMPLATE: schema */river_job;
-DROP FUNCTION /* TEMPLATE: schema */river_job_notify;
+DROP TRIGGER river_notify ON river_job;
+DROP FUNCTION river_job_notify;
 
 --
 -- Create table `river_queue`.
 --
 
-CREATE TABLE /* TEMPLATE: schema */river_queue (
+CREATE TABLE river_queue (
     name text PRIMARY KEY NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
@@ -159,7 +166,7 @@ CREATE TABLE /* TEMPLATE: schema */river_queue (
 -- Alter `river_leader` to add a default value of 'default` to `name`.
 --
 
-ALTER TABLE /* TEMPLATE: schema */river_leader
+ALTER TABLE river_leader
     ALTER COLUMN name SET DEFAULT 'default',
     DROP CONSTRAINT name_length,
     ADD CONSTRAINT name_length CHECK (name = 'default');
@@ -174,11 +181,11 @@ BEGIN
     -- Tolerate users who may be using their own migration system rather than
     -- River's. If they are, they will have skipped version 001 containing
     -- `CREATE TABLE river_migration`, so this table won't exist.
-    IF (SELECT to_regclass('/* TEMPLATE: schema */river_migration') IS NOT NULL) THEN
-        ALTER TABLE /* TEMPLATE: schema */river_migration
+    IF (SELECT to_regclass('river_migration') IS NOT NULL) THEN
+        ALTER TABLE river_migration
             RENAME TO river_migration_old;
 
-        CREATE TABLE /* TEMPLATE: schema */river_migration(
+        CREATE TABLE river_migration(
             line TEXT NOT NULL,
             version bigint NOT NULL,
             created_at timestamptz NOT NULL DEFAULT NOW(),
@@ -187,12 +194,12 @@ BEGIN
             PRIMARY KEY (line, version)
         );
 
-        INSERT INTO /* TEMPLATE: schema */river_migration
+        INSERT INTO river_migration
             (created_at, line, version)
         SELECT created_at, 'main', version
-        FROM /* TEMPLATE: schema */river_migration_old;
+        FROM river_migration_old;
 
-        DROP TABLE /* TEMPLATE: schema */river_migration_old;
+        DROP TABLE river_migration_old;
     END IF;
 END;
 $body$
@@ -205,10 +212,10 @@ LANGUAGE 'plpgsql';
 -- These statements use `IF NOT EXISTS` to allow users with a `river_job` table
 -- of non-trivial size to build the index `CONCURRENTLY` out of band of this
 -- migration, then follow by completing the migration.
-ALTER TABLE /* TEMPLATE: schema */river_job
+ALTER TABLE river_job
     ADD COLUMN IF NOT EXISTS unique_key bytea;
 
-CREATE UNIQUE INDEX IF NOT EXISTS river_job_kind_unique_key_idx ON /* TEMPLATE: schema */river_job (kind, unique_key) WHERE unique_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS river_job_kind_unique_key_idx ON river_job (kind, unique_key) WHERE unique_key IS NOT NULL;
 
 --
 -- Create `river_client` and derivative.
@@ -218,7 +225,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS river_job_kind_unique_key_idx ON /* TEMPLATE: 
 -- additional migration.
 --
 
-CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_client (
+CREATE UNLOGGED TABLE river_client (
     id text PRIMARY KEY NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     metadata jsonb NOT NULL DEFAULT '{}',
@@ -229,8 +236,8 @@ CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_client (
 
 -- Differs from `river_queue` in that it tracks the queue state for a particular
 -- active client.
-CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_client_queue (
-    river_client_id text NOT NULL REFERENCES /* TEMPLATE: schema */river_client (id) ON DELETE CASCADE,
+CREATE UNLOGGED TABLE river_client_queue (
+    river_client_id text NOT NULL REFERENCES river_client (id) ON DELETE CASCADE,
     name text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     max_workers bigint NOT NULL DEFAULT 0,
@@ -244,7 +251,7 @@ CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_client_queue (
     CONSTRAINT num_jobs_running_zero_or_positive CHECK (num_jobs_running >= 0)
 );
 
-CREATE OR REPLACE FUNCTION /* TEMPLATE: schema */river_job_state_in_bitmask(bitmask BIT(8), state /* TEMPLATE: schema */river_job_state)
+CREATE OR REPLACE FUNCTION river_job_state_in_bitmask(bitmask BIT(8), state river_job_state)
 RETURNS boolean
 LANGUAGE SQL
 IMMUTABLE
@@ -268,29 +275,29 @@ $$;
 -- This column may exist already if users manually created the column and index
 -- as instructed in the changelog so the index could be created `CONCURRENTLY`.
 --
-ALTER TABLE /* TEMPLATE: schema */river_job ADD COLUMN IF NOT EXISTS unique_states BIT(8);
+ALTER TABLE river_job ADD COLUMN IF NOT EXISTS unique_states BIT(8);
 
 -- This statement uses `IF NOT EXISTS` to allow users with a `river_job` table
 -- of non-trivial size to build the index `CONCURRENTLY` out of band of this
 -- migration, then follow by completing the migration.
-CREATE UNIQUE INDEX IF NOT EXISTS river_job_unique_idx ON /* TEMPLATE: schema */river_job (unique_key)
+CREATE UNIQUE INDEX IF NOT EXISTS river_job_unique_idx ON river_job (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
-      AND /* TEMPLATE: schema */river_job_state_in_bitmask(unique_states, state);
+      AND river_job_state_in_bitmask(unique_states, state);
 
 -- Remove the old unique index. Users who are actively using the unique jobs
 -- feature and who wish to avoid deploy downtime may want od drop this in a
 -- subsequent migration once all jobs using the old unique system have been
 -- completed (i.e. no more rows with non-null unique_key and null
 -- unique_states).
-DROP INDEX /* TEMPLATE: schema */river_job_kind_unique_key_idx;
+DROP INDEX river_job_kind_unique_key_idx;
 
 
 --
 -- Notification outbox.
 --
 
-CREATE TABLE /* TEMPLATE: schema */river_notification (
+CREATE TABLE river_notification (
     id bigserial PRIMARY KEY,
     created_at timestamptz NOT NULL DEFAULT now(),
     payload text NOT NULL,
@@ -298,8 +305,8 @@ CREATE TABLE /* TEMPLATE: schema */river_notification (
     CONSTRAINT topic_length CHECK (length(topic) > 0 AND length(topic) < 128)
 );
 
-CREATE INDEX river_notification_created_at_idx ON /* TEMPLATE: schema */river_notification (created_at);
-CREATE INDEX river_notification_topic_id_idx ON /* TEMPLATE: schema */river_notification (topic, id);
+CREATE INDEX river_notification_created_at_idx ON river_notification (created_at);
+CREATE INDEX river_notification_topic_id_idx ON river_notification (topic, id);
 
 --
 -- SQLite JSONB conversion.
@@ -314,21 +321,21 @@ CREATE INDEX river_notification_topic_id_idx ON /* TEMPLATE: schema */river_noti
 -- Drop unused tables `river_client` and `river_client_queue`.
 --
 
-DROP TABLE /* TEMPLATE: schema */river_client_queue;
-DROP TABLE /* TEMPLATE: schema */river_client;
+DROP TABLE river_client_queue;
+DROP TABLE river_client;
 
 --
 -- Adds `DEFAULT 25` to `river_job.max_attempts`.
 --
 
-ALTER TABLE /* TEMPLATE: schema */river_job
+ALTER TABLE river_job
     ALTER COLUMN max_attempts SET DEFAULT 25;
 
 --
 -- Changes `river_queue.updated_at` to have a default of `CURRENT_TIMESTAMP`.
 --
 
-ALTER TABLE /* TEMPLATE: schema */river_queue
+ALTER TABLE river_queue
     ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
 
 
