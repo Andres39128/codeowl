@@ -6,10 +6,15 @@
 useDefault = true
 
 [allowlist]
-description = "dependencias y artefactos de build"
+description = "dependencias, artefactos de build y fixtures de test"
 paths = [
     '''(?:^|/)vendor/''',
     '''(?:^|/)node_modules/''',
     '''(?:^|/)target/''',
     '''(?:^|/)dist/''',
+    '''(?:^|/)testdata/''',
+    '''(?:^|/)__tests__/''',
+    '''_test\.go$''',
+    '''\.test\.[tj]sx?$''',
+    '''\.spec\.[tj]sx?$''',
 ]

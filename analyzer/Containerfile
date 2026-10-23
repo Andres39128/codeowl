@@ -56,6 +56,7 @@ RUN npm init -y >/dev/null \
     && npm install --no-audit --no-fund \
         eslint@${ESLINT_VERSION} @eslint/js@${ESLINT_JS_VERSION} \
         @typescript-eslint/parser@${TS_PARSER_VERSION} \
+        @typescript-eslint/eslint-plugin@${TS_PARSER_VERSION} \
     && npm cache clean --force
 ENV PATH="/opt/linters/node_modules/.bin:${PATH}"
 

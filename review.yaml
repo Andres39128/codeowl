@@ -1,0 +1,6 @@
+# review.yaml — config de revisión del propio codeowl (§9.5). El CLI la lee
+# de la rama base. path_filters delimita qué examina la corrida: los fixtures
+# de test (testdata/) contienen código mal hecho a propósito y lintearlos solo
+# genera ruido que sepulta los hallazgos reales.
+path_filters:
+  - "**/testdata/**"
