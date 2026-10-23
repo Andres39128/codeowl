@@ -28,6 +28,7 @@ const review = {
 const findings: FindingView[] = [
 	{
 		id: 1,
+		review_id: 1,
 		file: "src/foo.go",
 		line: 2,
 		severity: "high",
@@ -39,6 +40,7 @@ const findings: FindingView[] = [
 	},
 	{
 		id: 2,
+		review_id: 1,
 		file: "src/bar.go",
 		line: 5,
 		severity: "medium",
@@ -50,6 +52,7 @@ const findings: FindingView[] = [
 	},
 	{
 		id: 3,
+		review_id: 1,
 		file: "src/baz.go",
 		line: 9,
 		severity: "low",
@@ -179,6 +182,37 @@ describe("filtros de hallazgos", () => {
 			target: { value: "low" },
 		});
 		expect(screen.getByText("Hallazgos (1 de 3)")).toBeTruthy();
+	});
+
+	it("muestra por defecto solo la última corrida y abre el histórico", async () => {
+		const viejo: FindingView = {
+			id: 99,
+			review_id: 999,
+			file: "src/foo.go",
+			line: 2,
+			severity: "high",
+			category: "logic",
+			body: "Hallazgo de una corrida vieja",
+			suggestion: null,
+			source: "llm",
+			verified: null,
+		};
+		const dosCorridas: PrDetailView = {
+			...detail,
+			findings: [...findings, viejo],
+		};
+		mockApi({ detail: dosCorridas, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		// Por defecto: solo los de la última corrida (review_id 1).
+		await screen.findByText("Cuerpo alto");
+		expect(screen.getByText("Hallazgos (3)")).toBeTruthy();
+		expect(screen.queryByText("Hallazgo de una corrida vieja")).toBeNull();
+
+		// El toggle abre el histórico completo.
+		fireEvent.click(screen.getByLabelText("Corrida"));
+		expect(screen.getByText("Hallazgos (4)")).toBeTruthy();
+		expect(screen.getByText("Hallazgo de una corrida vieja")).toBeTruthy();
 	});
 });
 

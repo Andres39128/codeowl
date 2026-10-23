@@ -50,21 +50,34 @@ export function PrDetail({ prId }: { prId: number }) {
 	const [source, setSource] = useState("");
 	const [file, setFile] = useState("");
 	const [query, setQuery] = useState("");
+	// El detalle trae los hallazgos de TODAS las corridas del PR (§3.3: la
+	// atribución por corrida). Por defecto se ve solo la última — la que
+	// résumé el comentario publicado — con un toggle para auditar el
+	// histórico completo.
+	const [onlyLatest, setOnlyLatest] = useState(true);
+	const latestReviewID = review?.id ?? null;
 
 	const fileOptions = useMemo(
 		() => [...new Set(findings.map((f) => f.file))].sort(),
 		[findings],
 	);
+	const scoped = useMemo(
+		() =>
+			onlyLatest && latestReviewID !== null
+				? findings.filter((f) => f.review_id === latestReviewID)
+				: findings,
+		[findings, onlyLatest, latestReviewID],
+	);
 	const visible = useMemo(() => {
 		const q = query.trim().toLowerCase();
-		return findings.filter((f) => {
+		return scoped.filter((f) => {
 			if (severity !== "" && f.severity !== severity) return false;
 			if (source !== "" && f.source !== source) return false;
 			if (file !== "" && f.file !== file) return false;
 			if (q !== "" && !f.body.toLowerCase().includes(q)) return false;
 			return true;
 		});
-	}, [findings, severity, source, file, query]);
+	}, [scoped, severity, source, file, query]);
 
 	if (isLoading) {
 		return <p class="text-text-muted">Cargando…</p>;
@@ -145,14 +158,33 @@ export function PrDetail({ prId }: { prId: number }) {
 				)}
 			</Card>
 
+			{/* El diff va ANTES de los hallazgos: el revisor lee el código
+			 * primero y los hallazgos son el comentario sobre ese código
+			 * (§5.3). Con cientos de hallazgos, el diff al final quedaba
+			 * inalcanzable. */}
+			<Card title="Diff" class="mt-3">
+				{diffError !== null ? (
+					<Banner tone="warning">No se pudo obtener el diff del VCS.</Banner>
+				) : diff === null ? (
+					<p class="text-sm text-text-muted">Cargando diff…</p>
+				) : (
+					<div ref={diffContainer} class="min-w-0 max-w-full">
+						<DiffViewer
+							diff={diff}
+							highlights={visible.map((f) => ({ file: f.file, line: f.line }))}
+						/>
+					</div>
+				)}
+			</Card>
 			<Card
 				title={
-					visible.length === findings.length
-						? `Hallazgos (${findings.length})`
-						: `Hallazgos (${visible.length} de ${findings.length})`
+					visible.length === scoped.length
+						? `Hallazgos (${scoped.length})`
+						: `Hallazgos (${visible.length} de ${scoped.length})`
 				}
 				class="mt-3"
 			>
+				{" "}
 				{findings.length === 0 ? (
 					<p class="text-sm text-text-muted">Sin hallazgos registrados.</p>
 				) : (
@@ -160,6 +192,26 @@ export function PrDetail({ prId }: { prId: number }) {
 						{/* Filtros del revisor: acotan el conjunto sin perder el
 						 * total — el título dice cuántos quedan de cuántos hay. */}
 						<div class="mb-3 flex flex-wrap items-end gap-3">
+							{/* Corrida: por defecto la última (la que se publicó);
+							 * el toggle abre el histórico de todas. */}
+							<div class="flex flex-col gap-1">
+								<label class="text-xs text-text-muted" for="f-latest">
+									Corrida
+								</label>
+								<div class="flex items-center gap-2">
+									<input
+										id="f-latest"
+										type="checkbox"
+										checked={onlyLatest}
+										onInput={(event) =>
+											setOnlyLatest((event.target as HTMLInputElement).checked)
+										}
+									/>
+									<span class="text-xs text-text-muted">
+										{onlyLatest ? "Solo la última" : "Todas las corridas"}
+									</span>
+								</div>
+							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs text-text-muted" for="f-severity">
 									Severidad
@@ -313,21 +365,6 @@ export function PrDetail({ prId }: { prId: number }) {
 					</ul>
 				</Card>
 			)}
-
-			<Card title="Diff" class="mt-3">
-				{diffError !== null ? (
-					<Banner tone="warning">No se pudo obtener el diff del VCS.</Banner>
-				) : diff === null ? (
-					<p class="text-sm text-text-muted">Cargando diff…</p>
-				) : (
-					<div ref={diffContainer} class="min-w-0 max-w-full">
-						<DiffViewer
-							diff={diff}
-							highlights={visible.map((f) => ({ file: f.file, line: f.line }))}
-						/>
-					</div>
-				)}
-			</Card>
 		</section>
 	);
 }

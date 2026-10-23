@@ -243,6 +243,7 @@ type reviewView struct {
 // verified queda null hasta que el Verifier corre (F3) — nil JSON, no false.
 type findingView struct {
 	ID         int64   `json:"id"`
+	ReviewID   int64   `json:"review_id"`
 	File       string  `json:"file"`
 	Line       int32   `json:"line"`
 	Severity   string  `json:"severity"`
@@ -358,6 +359,7 @@ func findingViewsOf(findings []store.Finding) []findingView {
 	for _, f := range findings {
 		v := findingView{
 			ID:       f.ID,
+			ReviewID: f.ReviewID,
 			File:     f.File,
 			Line:     f.Line,
 			Severity: f.Severity,

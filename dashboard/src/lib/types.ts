@@ -83,13 +83,13 @@ export interface PrView {
 	head_sha: string;
 	base_ref: string;
 	updated_at: string;
-		/** Score 0-100 de la última corrida (F5): null si aún no corrió ninguna. */
-		risk_score: number | null;
-		/** Triage extendido (F6): esfuerzo 0-100 — siempre computable del diff. */
-		effort_score: number | null;
-		/** Impacto 0-100 (reachability inversa del grafo de imports): null sin
-		 * índice del repo — degrada visible. */
-		impact_score: number | null;
+	/** Score 0-100 de la última corrida (F5): null si aún no corrió ninguna. */
+	risk_score: number | null;
+	/** Triage extendido (F6): esfuerzo 0-100 — siempre computable del diff. */
+	effort_score: number | null;
+	/** Impacto 0-100 (reachability inversa del grafo de imports): null sin
+	 * índice del repo — degrada visible. */
+	impact_score: number | null;
 	latest_review: LatestReviewView | null;
 }
 
@@ -107,6 +107,9 @@ export interface ReviewView {
  * F3 — verified queda null hasta que corre el Verifier; los SAST no aplican). */
 export interface FindingView {
 	id: number;
+	/** Corrida que produjo el hallazgo: el detalle las agrupa (F6 — la
+	 * atribución por corrida ya vive en el modelo, §3.3). */
+	review_id: number;
 	file: string;
 	line: number;
 	severity: "high" | "medium" | "low";

@@ -265,6 +265,11 @@ func TestPRDetalleConFindingsOrdenados(t *testing.T) {
 		if f.File != q.file || f.Line != q.line || f.Severity != q.severity {
 			t.Errorf("finding %d: esperaba %s:%d (%s), fue %s:%d (%s)", i, q.file, q.line, q.severity, f.File, f.Line, f.Severity)
 		}
+		// La atribución por corrida viaja en el finding (§3.3): el cliente
+		// la usa para mostrar la última corrida y el histórico.
+		if f.ReviewID <= 0 {
+			t.Errorf("finding %d (%s): review_id debe traer la corrida que lo produjo, fue %d", i, q.file, f.ReviewID)
+		}
 		if (f.Verified == nil) != (q.verified == nil) || (f.Verified != nil && *f.Verified != *q.verified) {
 			t.Errorf("finding %d (%s): verified esperaba %v, fue %v", i, q.file, q.verified, f.Verified)
 		}
