@@ -21,7 +21,7 @@
 # ============================================================================
 
 version: 1
-actualizado: "2026-10-03"
+actualizado: "2026-10-23"
 fuente_de_verdad:
   convenciones_y_fases: docs/guia_del_proyecto.md
   referencia_funcional: docs/manual_completo_de_coderabbit_ai.md
@@ -125,10 +125,16 @@ backend:
   review:
     ruta: backend/internal/review
     proposito: pipeline de revisión — orquesta agentes, deduplicación, findings
-    expone: ["Run(ctx, ReviewInput) (ReviewResult, error)", "agentes: Reviewer, Verifier, Summarizer, Chat, PreMerge"]
+    expone:
+      - "Run(ctx, ReviewInput) (ReviewResult, error)"
+      - "agentes: Reviewer, Verifier, Summarizer, Chat, PreMerge, SlopDetector"
+      - "ComputeRisk / ComputeEffort / ComputeImpact"
+      - "ComputeChangeStack"
     depende_de: [store, analyze, index, llm, vcs]
     pruebas: backend/internal/review/review_test.go (contract con stub del gateway en CI; evals con proveedor real fuera de CI)
-    fase: F1 (reviewer, summarizer) / F2 (chat) / F3 (verifier, mermaid) / F5 (pre-merge)
+    fase: F1 (reviewer, summarizer) / F2 (chat) / F3 (verifier, mermaid) /
+      F5 (pre-merge, risk_score) / F6 (slop, release notes, effort/impact,
+      change stack)
     reglas: >
       El loop de agente es código propio (~200 líneas) — sin framework.
       Rol del gateway por agente: Reviewer/Summarizer/Chat/PreMerge →
@@ -155,6 +161,12 @@ backend:
       en el pipeline (tamaño de diff, archivos sensibles — patrones
       RISK_SENSITIVE_PATHS, defaults si no está seteada —, severidad de
       findings, proporción de test files) y se persiste en pull_requests.
+      F6: el SlopDetector (rol cheap) publica findings categoría slop —
+      best-effort como el Verifier; el Summarizer agrega release_notes
+      opcional publicado como sección del resumen; effort_score/impact_score
+      (0-100, consts documentadas; impacto por reachability inversa del
+      grafo de imports) y change_stack (cohortes topológicas del diff) se
+      persisten por corrida junto a risk_score — null sin índice del repo.
   analyze:
     ruta: backend/internal/analyze
     proposito: invoca el analyzer sandbox y normaliza su JSON — findings SAST y extracción de símbolos para indexing
@@ -165,7 +177,9 @@ backend:
   index:
     ruta: backend/internal/index
     proposito: "indexación RAG — chunking simbólico (símbolos del CLI analyzer vía internal/analyze: cgo no sale del contenedor), embeddings, grafo de imports, retrieval; anota embedding_model (+dims) y re-indexa al cambiar proveedor (pgvector fija la dimensión en DDL)"
-    expone: ["Index(ctx, Repo)", "Retrieve(ctx, Query) []Symbol"]
+    expone: ["Index(ctx, Repo)", "Retrieve(ctx, Query) []Symbol",
+             "Dependents(ctx, Repo, Files) — reachability inversa sobre el
+             grafo de imports (F6: impact_score y change stack)"]
     depende_de: [store, llm, analyze]
     pruebas: backend/internal/index/index_test.go
     fase: F4
@@ -317,6 +331,9 @@ flujos:
       - "review (deduplicación LLM vs SAST; F3: el Verifier filtra falsos positivos)"
       - "vcs (publicación fase 2: inline comments al cerrar el análisis y re-edición del resumen con el recuento de findings, SLO 15 min; comments_sent tipo inline)"
       - "review (F5: risk_score → pull_requests; Agente Pre-merge → veredicto como sección del resumen, edit in place)"
+      - "review (F6: SlopDetector → findings slop; effort/impact_score +
+        change_stack → pull_requests; release_notes como sección del resumen
+        en la re-edición final)"
   indexar_repo:
     pasos:
       - worker (IndexJob al conectar el repo, al completar cada review (success o partial) y al fusionar el PR (merge) — job único por repo, ver reglas de jobs)
