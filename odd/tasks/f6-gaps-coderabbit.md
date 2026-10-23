@@ -29,7 +29,7 @@
 ## Resultado
 
 - **Verificado:** go build + vet + go test ./internal/... 12/12 verdes; dashboard tsc + vitest 93/93; integration compila con -tags integration (vet exit 0).
-- **Pendiente (verificador no disponible en esta sesión):** correr los e2e de integración — requieren DATABASE_URL del Postgres de desarrollo (docker, user codeowl; credencial no accesible para el agente). El operador corre: `DATABASE_URL=postgres://codeowl:<pw>@localhost:5432/codeowl?sslmode=disable just test` — testStore aplica migraciones y los tests F6 corren (TestF6GapsEnLaCorrida, TestF6SlopOmitidoSinCheap).
+- **Resuelto:** e2e de integración corridos y verdes — 12/12 tests (F0-F6) contra pgvector/pgvector:pg18 scratch (imagen del deploy, mapa §servicios). Requirió arreglar 0002 (placeholders TEMPLATE + 55P04, commit 8dfceabb3371); scratch limpiado al terminar.
 - **Risk: none** en T1-T4 (aditivo, nullable, cubierto por tests unitarios + wiring best-effort). T5: **Risk: item 6 parcial** — los e2e F6 no corrieron aún (bloqueo de credencial, arriba); la suite taggeada completa queda sin observación directa.
 
 ## Log
