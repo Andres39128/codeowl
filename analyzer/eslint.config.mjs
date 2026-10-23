@@ -11,6 +11,14 @@ import tsParser from "@typescript-eslint/parser";
 // importar el paquete `globals` para no sumar una dependencia transitiva al
 // pinning de la imagen (§9.4: salida reproducible entre rebuilds).
 const jsGlobals = {
+	// Node (CommonJS incluido): un script de repo puede usar require.
+	require: "readonly",
+	module: "readonly",
+	exports: "readonly",
+	__dirname: "readonly",
+	__filename: "readonly",
+	Buffer: "readonly",
+	// Browser + Web API.
 	console: "readonly",
 	document: "readonly",
 	fetch: "readonly",
