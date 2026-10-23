@@ -12,7 +12,7 @@ import (
 )
 
 const getPullRequest = `-- name: GetPullRequest :one
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score FROM pull_requests WHERE id = $1
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score, change_stack FROM pull_requests WHERE id = $1
 `
 
 // Por ID: el pipeline de review resuelve la fila desde el job (§3.6.1.3 —
@@ -35,12 +35,13 @@ func (q *Queries) GetPullRequest(ctx context.Context, id int64) (PullRequest, er
 		&i.RiskScore,
 		&i.EffortScore,
 		&i.ImpactScore,
+		&i.ChangeStack,
 	)
 	return i, err
 }
 
 const getPullRequestByRepoNumber = `-- name: GetPullRequestByRepoNumber :one
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score FROM pull_requests WHERE repository_id = $1 AND number = $2
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score, change_stack FROM pull_requests WHERE repository_id = $1 AND number = $2
 `
 
 type GetPullRequestByRepoNumberParams struct {
@@ -66,12 +67,13 @@ func (q *Queries) GetPullRequestByRepoNumber(ctx context.Context, arg GetPullReq
 		&i.RiskScore,
 		&i.EffortScore,
 		&i.ImpactScore,
+		&i.ChangeStack,
 	)
 	return i, err
 }
 
 const listOpenPullRequestsByRepo = `-- name: ListOpenPullRequestsByRepo :many
-SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score FROM pull_requests
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score, change_stack FROM pull_requests
 WHERE repository_id = $1 AND state = 'open'
 ORDER BY number DESC
 `
@@ -100,6 +102,7 @@ func (q *Queries) ListOpenPullRequestsByRepo(ctx context.Context, repositoryID i
 			&i.RiskScore,
 			&i.EffortScore,
 			&i.ImpactScore,
+			&i.ChangeStack,
 		); err != nil {
 			return nil, err
 		}
@@ -221,6 +224,27 @@ func (q *Queries) ListPullRequestsWithLatestReview(ctx context.Context) ([]ListP
 	return items, nil
 }
 
+const updatePullRequestChangeStack = `-- name: UpdatePullRequestChangeStack :exec
+UPDATE pull_requests
+SET change_stack = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdatePullRequestChangeStackParams struct {
+	ID          int64
+	ChangeStack []byte
+}
+
+// Change stack F6 (§6, T4): cohortes de dependencia de los archivos
+// cambiados serializadas como JSONB ([]byte en Go — nil = NULL). NULL sin
+// índice o sin cohortes: se pisa en cada corrida (última corrida gana),
+// mismo régimen best-effort que risk_score; toca updated_at igual.
+func (q *Queries) UpdatePullRequestChangeStack(ctx context.Context, arg UpdatePullRequestChangeStackParams) error {
+	_, err := q.db.Exec(ctx, updatePullRequestChangeStack, arg.ID, arg.ChangeStack)
+	return err
+}
+
 const updatePullRequestRiskScore = `-- name: UpdatePullRequestRiskScore :exec
 UPDATE pull_requests
 SET risk_score = $2,
@@ -247,7 +271,7 @@ SET state = $2,
     merged_at = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score
+RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score, change_stack
 `
 
 type UpdatePullRequestStateParams struct {
@@ -276,6 +300,7 @@ func (q *Queries) UpdatePullRequestState(ctx context.Context, arg UpdatePullRequ
 		&i.RiskScore,
 		&i.EffortScore,
 		&i.ImpactScore,
+		&i.ChangeStack,
 	)
 	return i, err
 }
@@ -314,7 +339,7 @@ SET author = EXCLUDED.author,
     base_sha = EXCLUDED.base_sha,
     merged_at = COALESCE(EXCLUDED.merged_at, pull_requests.merged_at),
     updated_at = now()
-RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score
+RETURNING id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score, change_stack
 `
 
 type UpsertPullRequestParams struct {
@@ -361,6 +386,7 @@ func (q *Queries) UpsertPullRequest(ctx context.Context, arg UpsertPullRequestPa
 		&i.RiskScore,
 		&i.EffortScore,
 		&i.ImpactScore,
+		&i.ChangeStack,
 	)
 	return i, err
 }

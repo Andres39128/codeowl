@@ -58,6 +58,16 @@ SET effort_score = $2,
     updated_at = now()
 WHERE id = $1;
 
+-- name: UpdatePullRequestChangeStack :exec
+-- Change stack F6 (§6, T4): cohortes de dependencia de los archivos
+-- cambiados serializadas como JSONB ([]byte en Go — nil = NULL). NULL sin
+-- índice o sin cohortes: se pisa en cada corrida (última corrida gana),
+-- mismo régimen best-effort que risk_score; toca updated_at igual.
+UPDATE pull_requests
+SET change_stack = $2,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: ListPullRequestsWithLatestReview :many
 -- Listado del dashboard (guía §6 F3): TODOS los PRs — los cerrados conservan
 -- valor de auditoría — con su última corrida y el conteo de hallazgos de esa

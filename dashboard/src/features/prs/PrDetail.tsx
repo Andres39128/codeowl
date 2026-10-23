@@ -13,7 +13,6 @@ import { ApiError } from "../../lib/apiClient";
 import type { FindingView } from "../../lib/types";
 import { usePR } from "../../lib/usePR";
 import { reviewStatusOf, severityOf, sourceOf, stateOf } from "./view";
-
 /** Estado de verificación del hallazgo (F3 — Verifier): verificado, falso
  * positivo audit-only (no publicado al VCS) o sin verificar. */
 function Verified({ verified }: { verified: FindingView["verified"] }) {
@@ -29,7 +28,7 @@ function Verified({ verified }: { verified: FindingView["verified"] }) {
 }
 
 export function PrDetail({ prId }: { prId: number }) {
-	const { pr, review, findings, diff, isLoading, error, diffError } =
+	const { pr, review, findings, changeStack, diff, isLoading, error, diffError } =
 		usePR(prId);
 	// Contenedor del diff: las filas ancla [data-file][data-line] viven acá.
 	const diffContainer = useRef<HTMLDivElement>(null);
@@ -157,6 +156,37 @@ export function PrDetail({ prId }: { prId: number }) {
 					</ul>
 				)}
 			</Card>
+
+			{/* Change stack (F6 §6): solo existe cuando la última corrida pudo
+			 * calcular cohortes — sin índice del repo el campo no viene y no se
+			 * renderiza nada (degradación visible, sin placeholders vacíos). */}
+			{changeStack !== null && changeStack.length > 0 && (
+				<Card title="Change Stack" class="mt-3">
+					<p class="mb-3 text-sm text-text-muted">
+						Cohortes de dependencia del diff: el nivel 0 es la base (revisalo
+						primero); las pruebas van siempre al final.
+					</p>
+					<ul class="flex flex-col gap-3">
+						{changeStack.map((cohort) => (
+							<li
+								key={`${cohort.kind}-${cohort.level}`}
+								class="rounded-md border border-border-subtle p-3"
+							>
+								<div class="mb-1 flex flex-wrap items-center gap-2">
+									<Badge>{`Nivel ${cohort.level}`}</Badge>
+									{cohort.kind === "tests" && <Badge>Pruebas</Badge>}
+									<span class="text-xs text-text-muted">{`${cohort.files.length} archivo${cohort.files.length === 1 ? "" : "s"}`}</span>
+								</div>
+								<ul class="flex flex-col gap-0.5 font-mono text-xs text-text-muted">
+									{cohort.files.map((file) => (
+										<li key={file}>{file}</li>
+									))}
+								</ul>
+							</li>
+						))}
+					</ul>
+				</Card>
+			)}
 
 			<Card title="Diff" class="mt-3">
 				{diffError !== null ? (

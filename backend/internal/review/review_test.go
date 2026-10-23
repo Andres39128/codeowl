@@ -7,6 +7,7 @@ package review
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Andres39128/codeowl/backend/internal/analyze"
+	"github.com/Andres39128/codeowl/backend/internal/index"
 	"github.com/Andres39128/codeowl/backend/internal/repoconfig"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
@@ -94,6 +96,7 @@ type stubStore struct {
 	cheapProviders []store.LlmProvider                            // cola del rol cheap (verifier)
 	riskScores     []store.UpdatePullRequestRiskScoreParams        // captura del score (F5 §6)
 	triageScores   []store.UpdatePullRequestTriageScoresParams     // captura effort/impact (F6 §6)
+	changeStacks   []store.UpdatePullRequestChangeStackParams      // captura del change stack (F6 §6, T4)
 	failRisk       bool                                            // fuerza el error de persistencia del score
 }
 
@@ -246,6 +249,13 @@ func (s *stubStore) UpdatePullRequestTriageScores(_ context.Context, arg store.U
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.triageScores = append(s.triageScores, arg)
+	return nil
+}
+
+func (s *stubStore) UpdatePullRequestChangeStack(_ context.Context, arg store.UpdatePullRequestChangeStackParams) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.changeStacks = append(s.changeStacks, arg)
 	return nil
 }
 
@@ -760,14 +770,18 @@ func TestRunRiskScoreFalloNoDegrada(t *testing.T) {
 	}
 }
 
-// stubImpact devuelve los dependientes fijos del grafo de imports (§6 F6) y
-// graba las llamadas recibidas para afirmar el contrato.
+// stubImpact devuelve los dependientes y cohortes fijos del grafo de
+// imports (§6 F6) y graba las llamadas recibidas para afirmar el contrato.
 type stubImpact struct {
-	deps    []string
-	err     error
-	calls   int
-	repoIDs []int64
-	files   [][]string
+	deps         []string
+	err          error
+	calls        int
+	repoIDs      []int64
+	files        [][]string
+	cohorts      []index.StackCohort
+	cohortsErr   error
+	cohortsCalls int
+	cohortsFiles [][]string
 }
 
 func (s *stubImpact) Dependents(_ context.Context, repoID int64, files []string) ([]string, error) {
@@ -778,6 +792,15 @@ func (s *stubImpact) Dependents(_ context.Context, repoID int64, files []string)
 		return nil, s.err
 	}
 	return s.deps, nil
+}
+
+func (s *stubImpact) Cohorts(_ context.Context, _ int64, files []string) ([]index.StackCohort, error) {
+	s.cohortsCalls++
+	s.cohortsFiles = append(s.cohortsFiles, files)
+	if s.cohortsErr != nil {
+		return nil, s.cohortsErr
+	}
+	return s.cohorts, nil
 }
 
 // Triage extendido (§6 F6, T3): la corrida exitosa persiste effort (siempre
@@ -850,7 +873,7 @@ func TestRunTriageScoresPersistido(t *testing.T) {
 		}
 	})
 
-	t.Run("fallo del provider no degrada la corrida", func(t *testing.T) {
+		t.Run("fallo del provider no degrada la corrida", func(t *testing.T) {
 		d := newDeps()
 		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
 		d.gw.summarizer = []string{summarizerJSON}
@@ -867,6 +890,140 @@ func TestRunTriageScoresPersistido(t *testing.T) {
 			t.Errorf("impact tras fallo = %+v, querés null", d.st.triageScores)
 		}
 	})
+}
+
+// Change stack (§6 F6, T4): la corrida exitosa persiste las cohortes de
+// dependencia del diff como JSONB (última corrida gana, mismo régimen que
+// risk_score). Nil provider, sin índice o fallo → null, SIN nota de
+// coverage: la ausencia del índice es estado del repo, no un recorte de la
+// corrida (§9.6) — igual que el impact del triage.
+func TestRunChangeStackPersistido(t *testing.T) {
+	t.Run("con cohortes del índice", func(t *testing.T) {
+		d := newDeps()
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		cohorts := []index.StackCohort{
+			{Level: 0, Kind: "code", Files: []string{"pkg/a/a.go"}},
+			{Level: 1, Kind: "tests", Files: []string{"pkg/a/a_test.go"}},
+		}
+		d.impact = &stubImpact{cohorts: cohorts}
+
+		res, err := d.run(t)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Status != StatusSuccess {
+			t.Fatalf("status = %q, querés success", res.Status)
+		}
+		// Sin índice no cubierto por Dependents ni por Cohorts: el provider
+		// recibe el MISMO listado de cambiados que Dependents (files del diff).
+		imp := d.impact.(*stubImpact)
+		if imp.cohortsCalls != 1 {
+			t.Fatalf("Cohorts llamado %d veces, querés 1", imp.cohortsCalls)
+		}
+		if len(imp.cohortsFiles) != 1 || len(imp.cohortsFiles[0]) != 1 || imp.cohortsFiles[0][0] != "main.go" {
+			t.Errorf("Cohorts recibió %v, querés [main.go]", imp.cohortsFiles)
+		}
+		if len(d.st.changeStacks) != 1 {
+			t.Fatalf("UpdatePullRequestChangeStack llamado %d veces, querés 1", len(d.st.changeStacks))
+		}
+		call := d.st.changeStacks[0]
+		if call.ID != testPRID {
+			t.Errorf("ID = %d, querés %d", call.ID, testPRID)
+		}
+		if len(call.ChangeStack) == 0 {
+			t.Fatalf("change_stack persistido vacío, querés el JSON de las cohortes")
+		}
+		var got []index.StackCohort
+		if err := json.Unmarshal(call.ChangeStack, &got); err != nil {
+			t.Fatalf("change_stack no es JSON válido de cohortes: %v\n%s", err, call.ChangeStack)
+		}
+		if !reflectDeepEqualCohorts(got, cohorts) {
+			t.Errorf("change_stack = %+v, querés %+v", got, cohorts)
+		}
+		// El resumen final no declara nada del stack: no es coverage (§9.6).
+		final := d.vcs.summaryBods[len(d.vcs.summaryBods)-1]
+		if strings.Contains(final, "stack") || strings.Contains(final, "Stack") {
+			t.Errorf("el change stack no debe generar nota de coverage:\n%s", final)
+		}
+	})
+
+	t.Run("sin provider queda null", func(t *testing.T) {
+		d := newDeps()
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		// d.impact nil: sin índice cableado (§9.6 degradación visible)
+
+		res, err := d.run(t)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Status != StatusSuccess {
+			t.Fatalf("status = %q, querés success", res.Status)
+		}
+		// Última corrida gana: sin cohortes se persiste NULL (pisa el viejo).
+		if len(d.st.changeStacks) != 1 || d.st.changeStacks[0].ChangeStack != nil {
+			t.Errorf("sin provider change_stack = %+v, querés 1 llamada con null", d.st.changeStacks)
+		}
+	})
+
+	t.Run("ErrNoIndex queda null sin degradar", func(t *testing.T) {
+		d := newDeps()
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		d.impact = &stubImpact{cohortsErr: index.ErrNoIndex}
+
+		res, err := d.run(t)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Status != StatusSuccess {
+			t.Fatalf("status = %q, querés success (sin índice no es recorte)", res.Status)
+		}
+		if len(d.st.changeStacks) != 1 || d.st.changeStacks[0].ChangeStack != nil {
+			t.Errorf("sin índice change_stack = %+v, querés null", d.st.changeStacks)
+		}
+	})
+
+	t.Run("fallo del provider queda null sin degradar", func(t *testing.T) {
+		d := newDeps()
+		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
+		d.gw.summarizer = []string{summarizerJSON}
+		d.impact = &stubImpact{cohortsErr: errors.New("índice caído")}
+
+		res, err := d.run(t)
+		if err != nil {
+			t.Fatalf("un fallo de las cohortes no debe fallar la corrida: %v", err)
+		}
+		if res.Status != StatusSuccess {
+			t.Errorf("status = %q, querés success (§9.6: best-effort)", res.Status)
+		}
+		if len(d.st.changeStacks) != 1 || d.st.changeStacks[0].ChangeStack != nil {
+			t.Errorf("tras fallo change_stack = %+v, querés null", d.st.changeStacks)
+		}
+	})
+}
+
+// reflectDeepEqualCohorts compara cohortes tolerando el nil vs []string{}
+// que el round-trip de JSON introduce.
+func reflectDeepEqualCohorts(a, b []index.StackCohort) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Level != b[i].Level || a[i].Kind != b[i].Kind {
+			return false
+		}
+		if len(a[i].Files) != len(b[i].Files) {
+			return false
+		}
+		for j := range a[i].Files {
+			if a[i].Files[j] != b[i].Files[j] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Dedup (§3.6.3): huella file+categoría+ancla contra comments_sent con drift

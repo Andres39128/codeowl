@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -91,6 +92,7 @@ type Store interface {
 	UpdateCommentSentCommentID(ctx context.Context, arg store.UpdateCommentSentCommentIDParams) (store.CommentsSent, error)
 	UpdatePullRequestRiskScore(ctx context.Context, arg store.UpdatePullRequestRiskScoreParams) error
 	UpdatePullRequestTriageScores(ctx context.Context, arg store.UpdatePullRequestTriageScoresParams) error
+	UpdatePullRequestChangeStack(ctx context.Context, arg store.UpdatePullRequestChangeStackParams) error
 }
 
 // Gateway es lo único que el pipeline le pide al LLM (mapa: los agentes
@@ -127,14 +129,16 @@ type Retriever interface {
 }
 
 // ImpactProvider trae los dependientes de los archivos cambiados (§6 F6,
-// T3): reachability inversa del grafo de imports del índice del repo (F4,
-// blast radius). El pipeline lo trata nil-safe como retr: nil → impact
-// null (degradación visible en el dashboard); un fallo del provider jamás
+// T3) y sus cohortes de dependencia (§6 F6, T4): reachability inversa y
+// orden topológico del grafo de imports del índice del repo (F4). El
+// pipeline lo trata nil-safe como retr: nil → impact y change_stack null
+// (degradación visible en el dashboard); un fallo del provider jamás
 // degrada la corrida (§9.6 — best-effort de métrica, igual que el risk
 // score). Los errores se distinguen por sentinel: index.ErrNoIndex (vía el
 // adapter del worker) es ausencia de índice, no fallo.
 type ImpactProvider interface {
 	Dependents(ctx context.Context, repoID int64, files []string) ([]string, error)
+	Cohorts(ctx context.Context, repoID int64, files []string) ([]index.StackCohort, error)
 }
 
 // Config son los topes del pipeline — todos config (§9.6/§9.8). El wiring
@@ -663,6 +667,36 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		ImpactScore:  impactScore,
 	}); err != nil {
 		slog.Warn("review: persistiendo los scores de triage falló (la corrida sigue)", "error", err, "review", rev.ID)
+	}
+
+	// Change stack (§6 F6, T4): cohortes de dependencia de los mismos
+	// archivos cambiados que alimentan el impacto (orden topológico por
+	// imports, tests al final), serializadas a JSONB — última corrida gana
+	// (mismo régimen que risk_score: siempre se pisa, null lo resetea). Nil
+	// provider, sin índice o fallo → null, SIN nota de coverage: la ausencia
+	// del índice es estado del repo, no un recorte de la corrida (§9.6,
+	// mismo criterio que el impact del triage).
+	var stack []byte
+	if impact != nil {
+		cohorts, serr := impact.Cohorts(ctx, input.RepositoryID, files)
+		switch {
+		case errors.Is(serr, index.ErrNoIndex):
+			slog.Debug("review: sin índice del repo, change_stack queda null (§6 F6)", "review", rev.ID)
+		case serr != nil:
+			slog.Warn("review: cohortes del change stack fallaron, queda null (la corrida sigue)", "error", serr, "review", rev.ID)
+		case len(cohorts) > 0:
+			if b, merr := json.Marshal(cohorts); merr != nil {
+				slog.Warn("review: serializando el change stack falló, queda null (la corrida sigue)", "error", merr, "review", rev.ID)
+			} else {
+				stack = b
+			}
+		}
+	}
+	if err := st.UpdatePullRequestChangeStack(ctx, store.UpdatePullRequestChangeStackParams{
+		ID:          input.PullRequestID,
+		ChangeStack: stack, // nil → NULL
+	}); err != nil {
+		slog.Warn("review: persistiendo el change stack falló (la corrida sigue)", "error", err, "review", rev.ID)
 	}
 
 	// Veredicto advisory pre-merge (§6 F5, T4): UNA llamada más con las

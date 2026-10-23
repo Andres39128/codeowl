@@ -128,6 +128,7 @@ type PullRequest struct {
 	RiskScore    pgtype.Int4
 	EffortScore  pgtype.Int4
 	ImpactScore  pgtype.Int4
+	ChangeStack  []byte
 }
 
 type RepoIndex struct {

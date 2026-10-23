@@ -715,6 +715,75 @@ func TestPRsTriageScoresSortYJson(t *testing.T) {
 	}
 }
 
+// Change stack (§6 F6, T4): el detalle expone las cohortes de dependencia
+// del PR como JSON crudo (json.RawMessage — la api no interpreta cohortes,
+// las produced index); PR sin stack → campo OMITIDO (omitempty), no null
+// disfrazado. OJO: Postgres JSONB normaliza (reordena claves), así que se
+// compara decodificado, no byte a byte.
+func TestPRDetalleChangeStack(t *testing.T) {
+	e := newTestEnv(t, 5)
+	fx := seedPRs(t, e)
+	a := e.admin(t)
+	ctx := context.Background()
+
+	type cohortJSON struct {
+		Level int      `json:"level"`
+		Kind  string   `json:"kind"`
+		Files []string `json:"files"`
+	}
+	want := []cohortJSON{
+		{Level: 0, Kind: "code", Files: []string{"pkg/util/util.go"}},
+		{Level: 1, Kind: "code", Files: []string{"cmd/c.go"}},
+		{Level: 2, Kind: "tests", Files: []string{"cmd/c_test.go"}},
+	}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.UpdatePullRequestChangeStack(ctx, store.UpdatePullRequestChangeStackParams{
+		ID: fx.prs["a"].ID, ChangeStack: raw,
+	}); err != nil {
+		t.Fatalf("UpdatePullRequestChangeStack: %v", err)
+	}
+
+	resp := e.do(t, http.MethodGet, fmt.Sprintf("/api/prs/%d", fx.prs["a"].ID), a.cookie, a.csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET detalle debe ser 200, fue %d", resp.StatusCode)
+	}
+	var out prDetailView
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.ChangeStack) == 0 {
+		t.Fatal("prA sembrado con stack debe traer change_stack")
+	}
+	var got []cohortJSON
+	if err := json.Unmarshal(out.ChangeStack, &got); err != nil {
+		t.Fatalf("change_stack no es JSON válido: %v\n%s", err, out.ChangeStack)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("cohortes = %d, querés %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].Level != want[i].Level || got[i].Kind != want[i].Kind || len(got[i].Files) != len(want[i].Files) || got[i].Files[0] != want[i].Files[0] {
+			t.Errorf("cohorte %d = %+v, querés %+v", i, got[i], want[i])
+		}
+	}
+
+	// prB sin stack: el campo se omite — el dashboard decide si renderiza.
+	respB := e.do(t, http.MethodGet, fmt.Sprintf("/api/prs/%d", fx.prs["b"].ID), a.cookie, a.csrf, nil)
+	if respB.StatusCode != http.StatusOK {
+		t.Fatalf("GET detalle prB debe ser 200, fue %d", respB.StatusCode)
+	}
+	var rawB map[string]json.RawMessage
+	if err := json.NewDecoder(respB.Body).Decode(&rawB); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rawB["change_stack"]; ok {
+		t.Errorf("PR sin stack debe omitir change_stack, llegó: %s", rawB["change_stack"])
+	}
+}
+
 // Parámetros desconocidos → 400 con mensaje, jamás ignore silencioso
 // (decisión 8: fail closed).
 func TestPRsQueryInvalidos400(t *testing.T) {

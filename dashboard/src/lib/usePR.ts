@@ -12,12 +12,14 @@ import type {
 	PrDiffView,
 	PrView,
 	ReviewView,
+	StackCohort,
 } from "./types";
 
 export interface PrDetailState {
 	pr: PrView | null;
 	review: ReviewView | null;
 	findings: FindingView[];
+	changeStack: StackCohort[] | null;
 	diff: string | null;
 	isLoading: boolean;
 	error: unknown;
@@ -41,6 +43,7 @@ export function usePR(prId: number): PrDetailState {
 		pr: detail.data?.pr ?? null,
 		review: detail.data?.review ?? null,
 		findings: detail.data?.findings ?? [],
+		changeStack: detail.data?.change_stack ?? null,
 		diff: diff.data?.diff ?? null,
 		isLoading: detail.isPending,
 		error: detail.error,

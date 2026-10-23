@@ -117,11 +117,23 @@ export interface FindingView {
 	verified: boolean | null;
 }
 
+/** Cohorte de dependencia del change stack (F6 §6): nivel del orden
+ * topológico por imports del repo revisado — 0 es la base (lo primero que
+ * hay que revisar); kind "tests" va SIEMPRE al final (heurística de ruta). */
+export interface StackCohort {
+	level: number;
+	kind: "code" | "tests";
+	files: string[];
+}
+
 /** Cuerpo de GET /api/prs/{id}: PR + última corrida + hallazgos. */
 export interface PrDetailView {
 	pr: PrView;
 	review: ReviewView | null;
 	findings: FindingView[];
+	/** Cohortes de dependencia del diff (F6): ausente o null sin índice del
+	 * repo — degradación visible, la Card no se renderiza. */
+	change_stack?: StackCohort[] | null;
 }
 
 /** Cuerpo de GET /api/prs/{id}/diff (proxy al adapter vía GetDiff, F3). */

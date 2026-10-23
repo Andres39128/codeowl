@@ -5,7 +5,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/apiClient";
-import type { FindingView, PrDetailView } from "../../lib/types";
+import type { FindingView, PrDetailView, StackCohort } from "../../lib/types";
 import { createWrapper } from "../../test/createWrapper";
 import { PrDetail } from "./PrDetail";
 
@@ -206,5 +206,37 @@ describe("PrDetail", () => {
 		);
 		expect(row).not.toBeNull();
 		expect(row?.scrollIntoView).toHaveBeenCalled();
+	});
+
+	// Change Stack (F6 §6): la Card solo existe cuando el detalle trae
+	// cohortes — sin índice del repo el campo viene ausente y no se renderiza
+	// nada (degradación visible, sin placeholders vacíos).
+	const changeStack: StackCohort[] = [
+		{ level: 0, kind: "code", files: ["pkg/util/util.go"] },
+		{ level: 1, kind: "code", files: ["cmd/c.go"] },
+		{ level: 2, kind: "tests", files: ["cmd/c_test.go"] },
+	];
+
+	it("con change_stack renderiza la Card con niveles, Pruebas y archivos", async () => {
+		mockApi({ detail: { ...detail, change_stack: changeStack } });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		expect(await screen.findByText("Change Stack")).toBeTruthy();
+		expect(screen.getByText("Nivel 0")).toBeTruthy();
+		expect(screen.getByText("Nivel 1")).toBeTruthy();
+		expect(screen.getByText("Nivel 2")).toBeTruthy();
+		// kind tests → etiqueta Pruebas (§5.2.3: el estado no vive solo en el color).
+		expect(screen.getByText("Pruebas")).toBeTruthy();
+		// Archivos como lista mono apagada.
+		expect(screen.getByText("pkg/util/util.go")).toBeTruthy();
+		expect(screen.getByText("cmd/c_test.go")).toBeTruthy();
+	});
+
+	it("sin change_stack no renderiza la Card", async () => {
+		mockApi({});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		expect(await screen.findByText("Cuerpo alto")).toBeTruthy();
+		expect(screen.queryByText("Change Stack")).toBeNull();
 	});
 });

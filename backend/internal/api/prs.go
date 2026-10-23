@@ -7,6 +7,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -253,11 +254,16 @@ type findingView struct {
 }
 
 // prDetailView es el cuerpo de GET /api/prs/{id}: PR + última corrida +
-// todos los hallazgos de todas las corridas (atribución por corrida).
+// todos los hallazgos de todas las corridas (atribución por corrida) + el
+// change stack de la última corrida (§6 F6, T4). ChangeStack viaja como
+// JSON crudo (json.RawMessage): la api no interpreta cohortes — las produce
+// index — y omitempty las omite cuando no hay (null/ausente sin índice del
+// repo, degradación visible).
 type prDetailView struct {
-	PR       prView        `json:"pr"`
-	Review   *reviewView   `json:"review"`
-	Findings []findingView `json:"findings"`
+	PR          prView          `json:"pr"`
+	Review      *reviewView     `json:"review"`
+	Findings    []findingView   `json:"findings"`
+	ChangeStack json.RawMessage `json:"change_stack,omitempty"`
 }
 
 // severityRank ordena para el triage: high primero, luego file/line.
@@ -309,6 +315,11 @@ func (s *Server) handlePRDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if pr.ImpactScore.Valid {
 		out.PR.ImpactScore = intPtr(int(pr.ImpactScore.Int32))
+	}
+	// Change stack (§6 F6, T4): []byte de la store ([] vacío = NULL/no
+	// calculado) → JSON crudo o campo omitido.
+	if len(pr.ChangeStack) > 0 {
+		out.ChangeStack = json.RawMessage(pr.ChangeStack)
 	}
 
 	review, err := s.store.GetLatestReviewByPR(r.Context(), id)

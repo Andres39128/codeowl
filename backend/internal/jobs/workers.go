@@ -281,6 +281,12 @@ func (i indexImpact) Dependents(ctx context.Context, repoID int64, files []strin
 	return index.Dependents(ctx, i.st, repoID, files)
 }
 
+// Cohorts delega en las cohortes de dependencia del change stack (§6 F6,
+// T4): misma store/índice que Dependents.
+func (i indexImpact) Cohorts(ctx context.Context, repoID int64, files []string) ([]index.StackCohort, error) {
+	return index.Cohorts(ctx, i.st, repoID, files)
+}
+
 // NewIndexImpact arma el provider de impacto del triage sobre el índice
 // RAG del repo (§6 F6): misma store que consume el IndexJobWorker.
 func NewIndexImpact(st index.ImpactStore) review.ImpactProvider {
