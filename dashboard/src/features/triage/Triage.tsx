@@ -140,17 +140,15 @@ const columns: Column<PrView>[] = [
 				<a
 					href={`#/prs/${pr.id}`}
 					class="font-medium text-action-primary hover:underline"
+					// El número solo no alcanza: varios repos pueden tener un
+					// PR #10 — el link dice de qué repo es (title + texto).
+					title={`${pr.repo.owner}/${pr.repo.name}#${pr.number}`}
 				>
-					{`#${pr.number}`}
+					{`${pr.repo.owner}/${pr.repo.name}#${pr.number}`}
 				</a>
 				<span class="text-xs text-text-muted">{pr.author}</span>
 			</span>
 		),
-	},
-	{
-		key: "repo",
-		header: "Repo",
-		render: (pr) => `${pr.repo.owner}/${pr.repo.name}`,
 	},
 	{
 		key: "risk",

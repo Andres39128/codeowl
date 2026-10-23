@@ -59,9 +59,9 @@ describe("Prs", () => {
 		]);
 		render(<Prs />, { wrapper: createWrapper() });
 
-		expect(await screen.findByText("#42")).toBeTruthy();
+		expect(await screen.findByText("acme/codeowl#42")).toBeTruthy();
 		expect(screen.getByText("ana")).toBeTruthy();
-		expect(screen.getByText("acme/codeowl")).toBeTruthy();
+		expect(screen.getByText("acme/otro-repo#43")).toBeTruthy();
 		expect(screen.getByText(/● Abierto/)).toBeTruthy();
 		expect(screen.getByText(/● Cerrado/)).toBeTruthy();
 		expect(screen.getByText(/● Exitosa/)).toBeTruthy();
@@ -95,7 +95,7 @@ describe("Prs", () => {
 		apiMock.mockResolvedValue([makePr()]);
 		render(<Prs />, { wrapper: createWrapper() });
 
-		const cell = await screen.findByText("#42");
+		const cell = await screen.findByText("acme/codeowl#42");
 		fireEvent.click(cell.closest("tr") as HTMLTableRowElement);
 
 		expect(location.hash).toBe("#/prs/42");

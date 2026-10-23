@@ -184,14 +184,14 @@ describe("Triage", () => {
 		mockApi(prsByRisk, metrics);
 		render(<Triage />, { wrapper: createWrapper() });
 
-		await screen.findByText("#101");
+		await screen.findByText("acme/codeowl#101");
 		fireEvent.change(screen.getByLabelText("Severidad"), {
 			target: { value: "high" },
 		});
 
-		expect(screen.getByText("#101")).toBeTruthy();
-		expect(screen.queryByText("#102")).toBeNull();
-		expect(screen.queryByText("#103")).toBeNull();
+		expect(screen.getByText("acme/codeowl#101")).toBeTruthy();
+		expect(screen.queryByText("acme/codeowl#102")).toBeNull();
+		expect(screen.queryByText("acme/otro-repo#103")).toBeNull();
 		expect(screen.queryByText("#104")).toBeNull();
 	});
 
@@ -199,14 +199,14 @@ describe("Triage", () => {
 		mockApi(prsByRisk, metrics);
 		render(<Triage />, { wrapper: createWrapper() });
 
-		await screen.findByText("#101");
+		await screen.findByText("acme/codeowl#101");
 		// El select ofrece los repos de los datos traídos.
 		fireEvent.change(screen.getByLabelText("Repo"), {
 			target: { value: "2" },
 		});
 
-		expect(screen.getByText("#103")).toBeTruthy();
-		expect(screen.queryByText("#101")).toBeNull();
+		expect(screen.getByText("acme/otro-repo#103")).toBeTruthy();
+		expect(screen.queryByText("acme/codeowl#101")).toBeNull();
 		expect(screen.queryByText("#104")).toBeNull();
 	});
 
@@ -214,11 +214,11 @@ describe("Triage", () => {
 		mockApi(prsByRisk, metrics);
 		render(<Triage />, { wrapper: createWrapper() });
 
-		await screen.findByText("#101");
+		await screen.findByText("acme/codeowl#101");
 		fireEvent.change(screen.getByLabelText("Estado"), {
 			target: { value: "cerrados" },
 		});
-		await screen.findByText("#101");
+		await screen.findByText("acme/codeowl#101");
 
 		expect(apiMock).toHaveBeenCalledWith("/api/prs?sort=risk&state=closed");
 	});
@@ -227,11 +227,11 @@ describe("Triage", () => {
 		mockApi(prsByRisk, metrics);
 		render(<Triage />, { wrapper: createWrapper() });
 
-		await screen.findByText("#101");
+		await screen.findByText("acme/codeowl#101");
 		fireEvent.change(screen.getByLabelText("Estado"), {
 			target: { value: "todos" },
 		});
-		await screen.findByText("#101");
+		await screen.findByText("acme/codeowl#101");
 
 		expect(apiMock).toHaveBeenCalledWith("/api/prs?sort=risk");
 	});
@@ -240,7 +240,7 @@ describe("Triage", () => {
 		mockApi(prsByRisk, metrics);
 		render(<Triage />, { wrapper: createWrapper() });
 
-		const cell = await screen.findByText("#101");
+		const cell = await screen.findByText("acme/codeowl#101");
 		fireEvent.click(cell.closest("tr") as HTMLTableRowElement);
 
 		expect(location.hash).toBe("#/prs/101");
@@ -253,7 +253,7 @@ describe("Triage", () => {
 		);
 		render(<Triage />, { wrapper: createWrapper() });
 
-		await screen.findByText("#101");
+		await screen.findByText("acme/codeowl#101");
 		fireEvent.change(screen.getByLabelText("Severidad"), {
 			target: { value: "high" },
 		});
