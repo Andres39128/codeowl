@@ -23,8 +23,14 @@
 - **T1** [S5] slop: HECHA — commit bccc5791d4aa (302 líneas; slice 1 = T0+T1, 636 desde origin/main). `prompts/slop_system.md` + embed.go (embed+promptFiles) + agents.go (marker, runSlopDetector, validCategory `slop`) + review.go wiring pos-dedup + migration 0006 CHECK categoría + label dashboard — inline — commit `feat(review)`
 - **T2** [S6] release notes: HECHA — commit 4032bc165236 (campo opcional, sección en ambas fases). summarizer_system.md + parseSummary + publication.go sección + finalSummary (ambos call sites) — inline — commit `feat(review)`
 - **T3** [S7] triage scores: risk.go ComputeEffort/ComputeImpact + index dependentsOf (matchImport semantics) + migration 0006 columnas + store query + sqlc regen + review.go persist + api sort/prView + dashboard columnas — inline — commit `feat(api)`+`feat(dashboard)`
-- **T4** [S8] change stack: cohorts (topológico + heurística tests) + persist JSONB + handlePRDetail + Card en PrDetail — inline — commit `feat(review)`+`feat(dashboard)`
-- **T5** [S10] cierre: e2e `f6_gaps_test.go` + suite completa + sqlc/build checks + README estado + mapa final — inline — commit `test(integration)`+`docs`
+- **T4** [S8] change stack: HECHA — commit c4f06008cc4c (Cohorts Kahn + testish, JSONB 0008, API + Card; worker aprobó superficies derivadas workers.go/usePR.ts — opción A). cohorts (topológico + heurística tests) + persist JSONB + handlePRDetail + Card en PrDetail — inline — commit `feat(review)`+`feat(dashboard)`
+- **T5** [S10] cierre: HECHA — e2e f6_gaps_test.go (2 tests, tag integration) + fix de los 6 call sites de review.Run en integration (firma nueva con ImpactProvider) + README estado + mapa F6/F6 markers. e2e `f6_gaps_test.go` + suite completa + sqlc/build checks + README estado + mapa final — inline — commit `test(integration)`+`docs`
+
+## Resultado
+
+- **Verificado:** go build + vet + go test ./internal/... 12/12 verdes; dashboard tsc + vitest 93/93; integration compila con -tags integration (vet exit 0).
+- **Pendiente (verificador no disponible en esta sesión):** correr los e2e de integración — requieren DATABASE_URL del Postgres de desarrollo (docker, user codeowl; credencial no accesible para el agente). El operador corre: `DATABASE_URL=postgres://codeowl:<pw>@localhost:5432/codeowl?sslmode=disable just test` — testStore aplica migraciones y los tests F6 corren (TestF6GapsEnLaCorrida, TestF6SlopOmitidoSinCheap).
+- **Risk: none** en T1-T4 (aditivo, nullable, cubierto por tests unitarios + wiring best-effort). T5: **Risk: item 6 parcial** — los e2e F6 no corrieron aún (bloqueo de credencial, arriba); la suite taggeada completa queda sin observación directa.
 
 ## Log
 

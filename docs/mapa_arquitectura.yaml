@@ -299,9 +299,16 @@ dashboard:
     expone:
       auth: {ruta: dashboard/src/features/auth, proposito: login/sesión, fase: F0}
       settings: {ruta: dashboard/src/features/settings, proposito: "proveedores LLM (BYOK cifrado) — acciones exclusivas del admin, repos conectados, usuarios (invitaciones y reset)", fase: F1}
-      prs: {ruta: dashboard/src/features/prs, proposito: detalle de PR con findings y diff, fase: F3}
+      prs:
+        {ruta: dashboard/src/features/prs,
+         proposito: "detalle de PR con findings, diff y change stack (F6)",
+         fase: F3/F6}
       queue: {ruta: dashboard/src/features/queue, proposito: estado de la cola de jobs (pending/running/discarded por tipo) — guía §9.9, fase: F1}
-      triage: {ruta: dashboard/src/features/triage, proposito: "cola de PRs por riesgo con filtros (estado server-side, repo/severidad client-side) y card de métricas (/api/metrics)", fase: F5}
+      triage:
+        {ruta: dashboard/src/features/triage,
+         proposito: "cola de PRs ordenable por riesgo/esfuerzo/impacto (F6)
+         con filtros y card de métricas (/api/metrics)",
+         fase: F5/F6}
     depende_de: [components, lib]
     pruebas: vitest por feature
     reglas: features NO importan de otras features — lo compartido baja a components/ o lib/.

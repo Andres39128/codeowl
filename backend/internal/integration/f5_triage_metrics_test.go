@@ -246,7 +246,7 @@ func TestF5CierreMetricsOutcome(t *testing.T) {
 		MaxPerReview: 6, MaxGlobal: 6, Timeout: 10 * time.Second, MaxRetries: 1,
 	})
 	vcsStub := &stubVCS{diff: diffFixture}
-	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, stubAnalyzer{}, vcsStub, nil,
+	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, stubAnalyzer{}, vcsStub, nil, nil,
 		review.ReviewInput{
 			PullRequestID: pr.ID, RepositoryID: repo.ID,
 			HeadSHA: headSHA, BaseSHA: fakeBase, Workdir: workdir,
@@ -427,7 +427,7 @@ func TestF5VeredictoPreMerge(t *testing.T) {
 		MaxPerReview: 6, MaxGlobal: 6, Timeout: 10 * time.Second, MaxRetries: 1,
 	})
 	vcsStub := &stubVCS{diff: diffFixture}
-	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, stubAnalyzer{}, vcsStub, nil,
+	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, stubAnalyzer{}, vcsStub, nil, nil,
 		review.ReviewInput{
 			PullRequestID: pr.ID, RepositoryID: repo.ID,
 			HeadSHA: headSHA, BaseSHA: fakeBase, Workdir: workdir,

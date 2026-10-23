@@ -2,7 +2,7 @@
 
 Plataforma **self-hosted, single-org** de revisión automática de código con IA: recibe webhooks de GitHub y GitLab, analiza cada Pull Request con linters en sandbox y agentes LLM, y publica resumen, comentarios inline y diagramas Mermaid directamente en el PR. Incluye un dashboard de triage con cola de PRs priorizada por riesgo.
 
-**Estado:** fase de documentación — la implementación arranca en la Fase 0 de la guía.
+**Estado:** F0–F6 implementadas (pipeline de revisión GitHub/GitLab, chat, sugerencias 1-click, verificación, RAG, triage con riesgo/esfuerzo/impacto, slop detection, release notes y change stack). Los tests de integración requieren `DATABASE_URL` — `just test` con el Postgres de desarrollo.
 
 ## Documentación
 

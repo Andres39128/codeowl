@@ -465,7 +465,7 @@ func TestF4RetrievalReviewContextYAnclas(t *testing.T) {
 		Workdir:       workdir,
 	}
 
-	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, f4Analyzer{}, vcsStub, retr, input)
+	res, err := review.Run(ctx, review.DefaultConfig(), st, gateway, f4Analyzer{}, vcsStub, retr, nil, input)
 	if err != nil {
 		t.Fatalf("review.Run: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestF4RetrievalReviewContextYAnclas(t *testing.T) {
 
 	// 3. Segunda corrida con la misma identidad: el hallazgo deduplica por
 	// el ancla simbólica (§6 F4, el payoff del anclaje) — cero inlines nuevos.
-	res2, err := review.Run(ctx, review.DefaultConfig(), st, gateway, f4Analyzer{}, vcsStub, retr, input)
+	res2, err := review.Run(ctx, review.DefaultConfig(), st, gateway, f4Analyzer{}, vcsStub, retr, nil, input)
 	if err != nil {
 		t.Fatalf("review.Run (corrida 2): %v", err)
 	}
