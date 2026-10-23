@@ -12,20 +12,64 @@ import { DiffViewer } from "../../components/DiffViewer";
 import { ApiError } from "../../lib/apiClient";
 import type { FindingView } from "../../lib/types";
 import { usePR } from "../../lib/usePR";
-import { reviewStatusOf, severityOf, sourceOf, stateOf } from "./view";
+import {
+	categoryHintOf,
+	categoryOf,
+	reviewStatusOf,
+	severityOf,
+	sourceOf,
+	stateOf,
+} from "./view";
 
 /** Estado de verificación del hallazgo (F3 — Verifier): verificado, falso
- * positivo audit-only (no publicado al VCS) o sin verificar. */
-function Verified({ verified }: { verified: FindingView["verified"] }) {
+ * positivo audit-only (no publicado al VCS) o sin verificar. Un hallazgo
+ * SAST no se verifica nunca: el linter es determinista (§3.3) — por eso no
+ * puede llamarse "sin verificar", sino "determinista". */
+function Verified({
+	verified,
+	source,
+}: {
+	verified: FindingView["verified"];
+	source: FindingView["source"];
+}) {
+	if (source === "sast") {
+		return (
+			<span
+				class="text-text-muted"
+				title="Viene de un linter (ESLint, Ruff, golangci-lint, Gitleaks): el hallazgo es determinista, no lo contrasta el Verifier porque no hace falta — el linter ya aplicó la regla."
+			>
+				Determinista (SAST)
+			</span>
+		);
+	}
 	if (verified === true) {
-		return <span class="text-severity-baja">✔ Verificado</span>;
+		return (
+			<span
+				class="text-severity-baja"
+				title="El Verifier contrastó el reclamo contra el código del diff y lo corroboró. Es el estado por defecto: el hallazgo se publica."
+			>
+				✔ Verificado
+			</span>
+		);
 	}
 	if (verified === false) {
 		return (
-			<span class="text-severity-media">✖ Falso positivo (no publicado)</span>
+			<span
+				class="text-severity-media"
+				title="El Verifier confirmó que es un falso positivo: NO se publicó en el PR. Queda acá solo para auditoría (§6 F3)."
+			>
+				✖ Falso positivo (no publicado)
+			</span>
 		);
 	}
-	return <span class="text-text-muted">— Sin verificar</span>;
+	return (
+		<span
+			class="text-text-muted"
+			title="No se pudo contrastar: el Verifier no corrió (falta proveedor del rol cheap) o el lote se descartó tras los reintentos (§9.8). El hallazgo se publica igual, sin confirmar."
+		>
+			— Sin verificar
+		</span>
+	);
 }
 
 export function PrDetail({ prId }: { prId: number }) {
@@ -189,6 +233,22 @@ export function PrDetail({ prId }: { prId: number }) {
 					<p class="text-sm text-text-muted">Sin hallazgos registrados.</p>
 				) : (
 					<>
+						{/* Leyenda: qué significa cada badge. Sin esto, "Sin
+						 * verificar" en un hallazgo de linter se lee como
+						 * "dudoso" cuando en realidad es determinista. */}
+						<p class="mb-3 text-xs text-text-muted">
+							<strong class="text-text-primary">Cómo leer esto:</strong>{" "}
+							<strong>Severidad</strong> (Alta/Media/Baja) y{" "}
+							<strong>Categoría</strong> (dónde cae el problema).{" "}
+							<strong>Origen</strong>: SAST = lo detectó un linter determinista
+							(ESLint, Ruff, golangci-lint, Clippy, Gitleaks); LLM = lo
+							detectaron los agentes que leen el diff.{" "}
+							<strong>Verificación</strong>: el Verifier contrasta los hallazgos
+							del LLM contra el código — "Verificado" = corroborado; "Falso
+							positivo" = no se publicó en el PR (solo auditoría); "Sin
+							verificar" = no se pudo contrastar y se publica igual.{" "}
+							<em>Pasa el mouse sobre cada badge para el detalle.</em>
+						</p>
 						{/* Filtros del revisor: acotan el conjunto sin perder el
 						 * total — el título dice cuántos quedan de cuántos hay. */}
 						<div class="mb-3 flex flex-wrap items-end gap-3">
@@ -298,10 +358,28 @@ export function PrDetail({ prId }: { prId: number }) {
 											class="rounded-md border border-border-subtle p-3"
 										>
 											<div class="mb-1 flex flex-wrap items-center gap-2">
-												<Badge tone={sev.tone}>{`● ${sev.label}`}</Badge>
-												<Badge>{finding.category}</Badge>
-												<Badge>{sourceOf(finding.source)}</Badge>
-												<Verified verified={finding.verified} />
+												<Badge
+													tone={sev.tone}
+													title="Severidad del hallazgo: Alta rompe la corrección, Media la debería, Baja es ajuste menor."
+												>
+													{`● ${sev.label}`}
+												</Badge>
+												<Badge title={categoryHintOf(finding.category)}>
+													{categoryOf(finding.category)}
+												</Badge>
+												<Badge
+													title={
+														finding.source === "sast"
+															? "Lo detectó un linter determinista (ESLint, Ruff, golangci-lint, Clippy, Gitleaks)."
+															: "Lo detectó el modelo de lenguaje (agente Reviewer)."
+													}
+												>
+													{sourceOf(finding.source)}
+												</Badge>
+												<Verified
+													verified={finding.verified}
+													source={finding.source}
+												/>
 												<button
 													type="button"
 													class="ml-auto max-w-full break-all text-left font-mono text-xs text-action-primary underline"

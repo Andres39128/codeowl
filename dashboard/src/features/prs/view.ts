@@ -35,6 +35,29 @@ const sourceLabel: Record<FindingView["source"], string> = {
 	sast: "SAST",
 };
 
+/** Categorías (conjunto cerrado de §3.3) con etiqueta en español: el dato
+ * en la BD es inglés, la UI lo traduce y el title deja el valor crudo. */
+const categoryLabel: Record<string, string> = {
+	security: "Seguridad",
+	logic: "Lógica",
+	performance: "Rendimiento",
+	style: "Estilo",
+	tests: "Pruebas",
+	slop: "Slop",
+	other: "Otro",
+};
+
+/** Qué significa cada categoría (title del badge). */
+const categoryHint: Record<string, string> = {
+	security: "Vulnerabilidad o exposición de datos",
+	logic: "El código no hace lo que dice",
+	performance: "Costo o lentitud evitable",
+	style: "Forma de escribir el código",
+	tests: "Falta o falla una prueba",
+	slop: "Código de relleno generado por IA",
+	other: "No encaja en otra categoría",
+};
+
 /** Estado del PR (open/closed). */
 export function stateOf(state: PrView["state"]): StatusView {
 	return stateView[state] ?? { label: state, tone: "neutral" };
@@ -53,4 +76,14 @@ export function severityOf(severity: FindingView["severity"]): StatusView {
 /** Origen del hallazgo (llm/sast → LLM/SAST). */
 export function sourceOf(source: FindingView["source"]): string {
 	return sourceLabel[source] ?? source;
+}
+
+/** Etiqueta en español de la categoría (dato crudo en inglés, §3.3). */
+export function categoryOf(category: string): string {
+	return categoryLabel[category] ?? category;
+}
+
+/** Qué significa la categoría (title del badge). */
+export function categoryHintOf(category: string): string {
+	return categoryHint[category] ?? "Categoría del hallazgo";
 }

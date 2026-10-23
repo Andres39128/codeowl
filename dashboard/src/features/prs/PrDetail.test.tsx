@@ -25,6 +25,9 @@ const review = {
 	created_at: "2026-10-01T12:00:00Z",
 };
 
+// Findings de la corrida 1 (review_id 1). Reflejan el dominio: los hallazgos
+// del LLM pasan por el Verifier (verificado / falso positivo / sin
+// verificar) y los del linter son deterministas (nunca verificados).
 const findings: FindingView[] = [
 	{
 		id: 1,
@@ -32,7 +35,7 @@ const findings: FindingView[] = [
 		file: "src/foo.go",
 		line: 2,
 		severity: "high",
-		category: "bug",
+		category: "logic",
 		body: "Cuerpo alto",
 		suggestion: "if err != nil {\n\treturn err\n}",
 		source: "llm",
@@ -47,7 +50,7 @@ const findings: FindingView[] = [
 		category: "style",
 		body: "Cuerpo medio",
 		suggestion: null,
-		source: "sast",
+		source: "llm",
 		verified: false,
 	},
 	{
@@ -56,10 +59,22 @@ const findings: FindingView[] = [
 		file: "src/baz.go",
 		line: 9,
 		severity: "low",
-		category: "nit",
+		category: "tests",
 		body: "Cuerpo bajo",
 		suggestion: null,
 		source: "llm",
+		verified: null,
+	},
+	{
+		id: 4,
+		review_id: 1,
+		file: "src/lint.go",
+		line: 1,
+		severity: "high",
+		category: "security",
+		body: "Cuerpo del linter",
+		suggestion: null,
+		source: "sast",
 		verified: null,
 	},
 ];
@@ -124,6 +139,54 @@ afterEach(cleanup);
 
 // Filtros de hallazgos (visualización para revisar código): con cientos de
 // hallazgos, el revisor filtra por severidad, origen, archivo y texto libre.
+// La UI explica la semántica de cada badge: los linters (SAST) son
+// deterministas y no se verifican; los del LLM pasan por el Verifier.
+describe("ayuda de los hallazgos", () => {
+	it("los hallazgos SAST se marcan como deterministas, no como sin verificar", async () => {
+		mockApi({ detail, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo del linter");
+		expect(screen.getByText("Determinista (SAST)")).toBeTruthy();
+		// El hallazgo LLM sin verificar conserva su propio estado: los dos
+		// conviven (uno es determinista, el otro no se pudo contrastar).
+		expect(screen.getByText("— Sin verificar")).toBeTruthy();
+	});
+
+	it("el hallazgo LLM sin verificar explica por qué", async () => {
+		mockApi({ detail, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo bajo");
+		const sinVerificar = screen.getByText("— Sin verificar");
+		expect(sinVerificar).toBeTruthy();
+		expect(sinVerificar.getAttribute("title")).toContain(
+			"No se pudo contrastar",
+		);
+	});
+
+	it("la leyenda explica cómo leer los badges", async () => {
+		mockApi({ detail, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		const leyenda = (await screen.findByText(/Cómo leer esto/)).closest("p");
+		expect(leyenda).toBeTruthy();
+		expect(leyenda?.textContent).toContain("SAST");
+		expect(leyenda?.textContent).toContain("Verificación");
+	});
+
+	it("la categoría se muestra traducida y con su significado", async () => {
+		mockApi({ detail, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo alto");
+		// "logic" → "Lógica", "style" → "Estilo" (el conjunto cerrado es en
+		// inglés; la UI lo traduce y deja el dato crudo a mano).
+		expect(screen.getByText("Lógica")).toBeTruthy();
+		expect(screen.getByText("Estilo")).toBeTruthy();
+	});
+});
+
 describe("filtros de hallazgos", () => {
 	it("filtra por severidad y por texto libre", async () => {
 		mockApi({ detail, diff });
@@ -159,7 +222,7 @@ describe("filtros de hallazgos", () => {
 		fireEvent.input(screen.getByLabelText("Origen"), {
 			target: { value: "sast" },
 		});
-		expect(screen.getByText("Cuerpo medio")).toBeTruthy();
+		expect(screen.getByText("Cuerpo del linter")).toBeTruthy();
 		expect(screen.queryByText("Cuerpo alto")).toBeNull();
 
 		fireEvent.input(screen.getByLabelText("Origen"), {
@@ -177,11 +240,11 @@ describe("filtros de hallazgos", () => {
 		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
 
 		await screen.findByText("Cuerpo alto");
-		expect(screen.getByText("Hallazgos (3)")).toBeTruthy();
+		expect(screen.getByText("Hallazgos (4)")).toBeTruthy();
 		fireEvent.input(screen.getByLabelText("Severidad"), {
 			target: { value: "low" },
 		});
-		expect(screen.getByText("Hallazgos (1 de 3)")).toBeTruthy();
+		expect(screen.getByText("Hallazgos (1 de 4)")).toBeTruthy();
 	});
 
 	it("muestra por defecto solo la última corrida y abre el histórico", async () => {
@@ -206,12 +269,12 @@ describe("filtros de hallazgos", () => {
 
 		// Por defecto: solo los de la última corrida (review_id 1).
 		await screen.findByText("Cuerpo alto");
-		expect(screen.getByText("Hallazgos (3)")).toBeTruthy();
+		expect(screen.getByText("Hallazgos (4)")).toBeTruthy();
 		expect(screen.queryByText("Hallazgo de una corrida vieja")).toBeNull();
 
-		// El toggle abre el histórico completo.
+		// El toggle abre el histórico completo: 4 de la última + 1 viejo.
 		fireEvent.click(screen.getByLabelText("Corrida"));
-		expect(screen.getByText("Hallazgos (4)")).toBeTruthy();
+		expect(screen.getByText("Hallazgos (5)")).toBeTruthy();
 		expect(screen.getByText("Hallazgo de una corrida vieja")).toBeTruthy();
 	});
 });
@@ -248,9 +311,9 @@ describe("PrDetail", () => {
 		});
 
 		expect(await screen.findByText("Cuerpo alto")).toBeTruthy();
-		expect(screen.getByText(/● Alta/)).toBeTruthy();
-		expect(screen.getByText(/● Media/)).toBeTruthy();
-		expect(screen.getByText(/● Baja/)).toBeTruthy();
+		expect(screen.getAllByText(/● Alta/).length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText(/● Media/).length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText(/● Baja/).length).toBeGreaterThanOrEqual(1);
 		// El badge de origen: el filtro de origen tiene una opción con el
 		// mismo texto, así que se toma el badge (no el <option>).
 		expect(screen.getAllByText("SAST").length).toBeGreaterThanOrEqual(1);
@@ -259,6 +322,8 @@ describe("PrDetail", () => {
 		expect(screen.getByText("✔ Verificado")).toBeTruthy();
 		expect(screen.getByText("✖ Falso positivo (no publicado)")).toBeTruthy();
 		expect(screen.getByText("— Sin verificar")).toBeTruthy();
+		// El hallazgo de linter es determinista: no se verifica (§3.3).
+		expect(screen.getByText("Determinista (SAST)")).toBeTruthy();
 
 		// La sugerencia del primer finding viaja en su bloque de código.
 		const codeBlocks = Array.from(container.querySelectorAll("pre code")).map(
@@ -325,7 +390,7 @@ describe("PrDetail", () => {
 		expect(screen.getByText("Nivel 1")).toBeTruthy();
 		expect(screen.getByText("Nivel 2")).toBeTruthy();
 		// kind tests → etiqueta Pruebas (§5.2.3: el estado no vive solo en el color).
-		expect(screen.getByText("Pruebas")).toBeTruthy();
+		expect(screen.getAllByText("Pruebas").length).toBeGreaterThanOrEqual(1);
 		// Archivos como lista mono apagada.
 		expect(screen.getByText("pkg/util/util.go")).toBeTruthy();
 		expect(screen.getByText("cmd/c_test.go")).toBeTruthy();
