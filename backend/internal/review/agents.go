@@ -28,6 +28,7 @@ var (
 	promptTestgen    = prompts.Testgen()
 	promptVerifier   = prompts.Verifier()
 	promptPremerge   = prompts.Premerge()
+	promptSlop       = prompts.Slop()
 )
 
 // roleReview es el rol del gateway para Reviewer y Summarizer (mapa:
@@ -103,6 +104,7 @@ const (
 	testgenUserMarker  = "Hallazgo de la revisión:"
 	verifierUserMarker = "Verificá los siguientes hallazgos."
 	premergeMarker     = "Evaluá el veredicto pre-merge del siguiente pull request."
+	slopMarker         = "Detectá código de relleno (slop) en el siguiente diff."
 )
 
 // SummaryResult es la salida del Summarizer (contrato §9.8).
@@ -455,6 +457,108 @@ func testgenUser(f Finding, hunks, framework string) string {
 	fmt.Fprintf(&b, "\n\nFramework de pruebas: %s.\n\n", framework)
 	b.WriteString("Hunks del diff de " + f.File + ":\n\n```diff\n" + hunks + "```")
 	return b.String()
+}
+
+// slopDiffMaxChars acota el diff que ve el SlopDetector (§9.6, presupuesto
+// por llamada): una sola llamada sobre todo el diff — el slop es patrón
+// entre archivos, no por archivo — recortado en el último archivo que entra
+// completo. Best-effort de calidad: el tramo recortado no se declara como
+// cobertura (no es promesa de análisis), el detector mira lo que entra.
+const slopDiffMaxChars = 100_000
+
+// rawSlopFinding es la salida cruda del SlopDetector: el file SÍ viaja en la
+// salida — el agente vio varios archivos (§6 F6).
+type rawSlopFinding struct {
+	File       string `json:"file"`
+	Line       int    `json:"line"`
+	Severity   string `json:"severity"`
+	Body       string `json:"body"`
+	Suggestion string `json:"suggestion"`
+}
+
+// runSlopDetector detecta código de relleno generado por IA sobre el diff
+// completo (§6 F6, rol cheap): una llamada por corrida. La categoría `slop`
+// la impone el pipeline — el agente no la negocia (§3.3). Salida malformada
+// → reintentos → descarte registrado (§9.8). El fallo del gateway (failover
+// agotado) no se reintenta acá — el gateway ya agotó los suyos (§9.7).
+// Error solo si el contexto se cancela.
+func runSlopDetector(ctx context.Context, gw Gateway, retries int, fileHunks map[string]string) ([]Finding, error) {
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		content, err := gw.Complete(ctx, roleCheap, promptSlop, slopUser(fileHunks))
+		if err != nil {
+			return nil, fmt.Errorf("failover agotado: %w", err)
+		}
+		fs, perr := parseSlopFindings(content)
+		if perr == nil {
+			return fs, nil
+		}
+		lastErr = perr
+		slog.Warn("review: salida malformada del slop detector",
+			"intento", attempt+1, "error", perr)
+	}
+	return nil, fmt.Errorf("salida malformada tras %d reintentos: %w", retries, lastErr)
+}
+
+// slopUser arma el prompt de usuario del SlopDetector: los hunks del diff
+// completo, acotados a slopDiffMaxChars — archivos en orden estable, el
+// resto no entra y se declara dentro del propio prompt.
+func slopUser(fileHunks map[string]string) string {
+	var b strings.Builder
+	b.WriteString(slopMarker + "\n\n")
+	files := make([]string, 0, len(fileHunks))
+	for f := range fileHunks {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	used := 0
+	truncated := false
+	for _, f := range files {
+		h := fileHunks[f]
+		if used+len(h) > slopDiffMaxChars {
+			truncated = true
+			break
+		}
+		fmt.Fprintf(&b, "Archivo: %s\n\n```diff\n%s```\n\n", f, h)
+		used += len(h)
+	}
+	if truncated {
+		b.WriteString("(diff truncado por presupuesto: los archivos restantes no se evaluaron)\n\n")
+	}
+	return b.String()
+}
+
+// parseSlopFindings valida la salida JSON del SlopDetector. Estricta como
+// parseFindings (§9.8): cualquier entry inválido invalida toda la salida →
+// reintento. La categoría la impone el pipeline: siempre `slop` (§3.3).
+func parseSlopFindings(content string) ([]Finding, error) {
+	var raw []rawSlopFinding
+	if err := json.Unmarshal([]byte(stripFences(content)), &raw); err != nil {
+		return nil, fmt.Errorf("JSON inválido: %w", err)
+	}
+	out := make([]Finding, 0, len(raw))
+	for i, r := range raw {
+		switch {
+		case strings.TrimSpace(r.File) == "":
+			return nil, fmt.Errorf("finding %d: file vacío", i)
+		case r.Line <= 0:
+			return nil, fmt.Errorf("finding %d: línea inválida %d", i, r.Line)
+		case !validSeverity[r.Severity]:
+			return nil, fmt.Errorf("finding %d: severity %q fuera del conjunto cerrado", i, r.Severity)
+		case strings.TrimSpace(r.Body) == "":
+			return nil, fmt.Errorf("finding %d: body vacío", i)
+		}
+		out = append(out, Finding{
+			File:       r.File,
+			Line:       int32(r.Line),
+			Severity:   r.Severity,
+			Category:   "slop",
+			Body:       r.Body,
+			Suggestion: r.Suggestion,
+			Source:     SourceLLM,
+		})
+	}
+	return out, nil
 }
 
 // rawVerdict es la salida cruda del Verifier para UN hallazgo (contrato

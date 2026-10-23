@@ -13,7 +13,7 @@ import (
 
 // FS contiene los system prompts versionados.
 //
-//go:embed reviewer_system.md summarizer_system.md chat_system.md testgen_system.md verifier_system.md premerge_system.md
+//go:embed reviewer_system.md summarizer_system.md chat_system.md testgen_system.md verifier_system.md premerge_system.md slop_system.md
 var fs embed.FS
 
 // Reviewer devuelve el system prompt del agente Reviewer (revisión por
@@ -46,8 +46,13 @@ func Verifier() string { return mustRead("verifier_system.md") }
 // repo (§3.3); los valores del veredicto quedan fijos en español.
 func Premerge() string { return mustRead("premerge_system.md") }
 
+// Slop devuelve el system prompt del SlopDetector (rol cheap — F6):
+// detección de código de relleno generado por IA sobre el diff completo;
+// salida JSON de hallazgos — la categoría `slop` la impone el pipeline.
+func Slop() string { return mustRead("slop_system.md") }
+
 // promptFiles son los archivos que componen la versión del prompt.
-var promptFiles = []string{"reviewer_system.md", "summarizer_system.md", "chat_system.md", "testgen_system.md", "verifier_system.md", "premerge_system.md"}
+var promptFiles = []string{"reviewer_system.md", "summarizer_system.md", "chat_system.md", "testgen_system.md", "verifier_system.md", "premerge_system.md", "slop_system.md"}
 
 // Version es el hash del contenido de todos los prompts: es la "versión del
 // prompt" de la clave de cache (§9.6) — cambiar un prompt invalida la cache

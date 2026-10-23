@@ -188,7 +188,7 @@ const summaryHeader = "## 🦉 Revisión automática"
 // provisionalSummary arma el cuerpo de fase 1 (§3.6.2): provisional por
 // diseño — la re-edición final suma recuento y cobertura.
 func provisionalSummary(s *SummaryResult) string {
-	return summaryParts(s, nil, nil, "", "")
+	return summaryParts(s, nil, nil, "", "", "")
 }
 
 // finalSummary arma el cuerpo de la re-edición final (§3.6.2): recuento por
@@ -196,16 +196,16 @@ func provisionalSummary(s *SummaryResult) string {
 // declaración del Verifier si no corrió (§9.6/§6 F3), veredicto advisory
 // pre-merge si corrió (§6 F5) y, en fallo, el estado final (§9.7). La
 // cobertura siempre se declara — completa o parcial, nunca se calla.
-func finalSummary(s *SummaryResult, counts map[string]int, outOfDiff []Finding, coverage []string, failure, verifierNote string, pm *PreMergeResult) string {
+func finalSummary(s *SummaryResult, counts map[string]int, outOfDiff []Finding, coverage []string, failure, verifierNote, slopNote string, pm *PreMergeResult) string {
 	if coverage == nil {
 		coverage = []string{}
 	}
-	return summaryParts(s, outOfDiff, coverage, failure, verifierNote) + premergeSection(pm) + countsSection(counts)
+	return summaryParts(s, outOfDiff, coverage, failure, verifierNote, slopNote) + premergeSection(pm) + countsSection(counts)
 }
 
 // summaryParts arma el cuerpo común: encabezado, resumen, walkthrough y
 // mermaid validado; más las secciones de detalle que correspondan.
-func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, failure, verifierNote string) string {
+func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, failure, verifierNote, slopNote string) string {
 	var b strings.Builder
 	b.WriteString(summaryHeader + "\n\n")
 	b.WriteString(s.Summary)
@@ -231,6 +231,11 @@ func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, fail
 		// fase 2 lo declara — jamás recorte silencioso. No es cobertura
 		// parcial: es best-effort de calidad (§6 F3), no marca la corrida.
 		fmt.Fprintf(&b, "\n\n> %s", verifierNote)
+	}
+	if slopNote != "" {
+		// §6 F6/§9.6: mismo régimen que el verifier — best-effort de calidad
+		// declarado, nunca recorte silencioso.
+		fmt.Fprintf(&b, "\n\n> %s", slopNote)
 	}
 	if coverage != nil {
 		if len(coverage) > 0 {

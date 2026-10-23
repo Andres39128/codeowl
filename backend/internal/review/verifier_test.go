@@ -31,6 +31,7 @@ func verifiedOf(t *testing.T, d *deps, body string) (file string, verifiedOK, ve
 func TestRunVerifierMarksFindings(t *testing.T) {
 	d := newDeps()
 	d.st.cheapProviders = []store.LlmProvider{{ID: 1, Role: roleCheap, Enabled: true}}
+	d.gw.slop = []string{"[]"} // sin slop: estos tests prueban el verifier
 	d.gw.reviewer["main.go"] = []string{
 		"[" + strings.Trim(reviewerFindings(3, "high", "security", "inyección SQL", "db.Query(q, arg)"), "[]") + "," +
 			strings.Trim(reviewerFindings(5, "medium", "logic", "chequeo faltante", ""), "[]") + "]",
@@ -132,6 +133,7 @@ func TestRunVerifierMalformed(t *testing.T) {
 	d := newDeps()
 	d.cfg.AgentRetries = 1
 	d.st.cheapProviders = []store.LlmProvider{{ID: 1, Role: roleCheap, Enabled: true}}
+	d.gw.slop = []string{"[]"} // sin slop: este test prueba el verifier
 	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
 	d.gw.verifier = []string{"no es json", `{"index": 0}`} // malformado en ambos intentos
 	d.gw.summarizer = []string{summarizerJSON}

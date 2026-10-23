@@ -282,6 +282,11 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// best-effort de calidad, no de cobertura (§9.6/§6 F3).
 	var verifierNote string
 
+	// slopNote es la declaración del SlopDetector para la re-edición de fase
+	// 2 (§6 F6): su omisión no marca la corrida partial — best-effort de
+	// calidad (§9.6), igual que el Verifier.
+	var slopNote string
+
 	// pm es el veredicto advisory pre-merge (§6 F5). Se declara acá para que
 	// la re-edición de fallo de fase 2 lo pase a finalSummary: si la corrida
 	// falla ANTES de la zona del veredicto (fase 2 inline), pm sigue nil y la
@@ -364,6 +369,32 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 			coverage = append(coverage, "análisis LLM omitido: "+d)
 		}
 		cacheable = cacheable && len(discarded) == 0
+
+		// SlopDetector (§6 F6, rol cheap): código de relleno generado por IA
+		// sobre el diff completo, una llamada por corrida. Best-effort como
+		// el Verifier: sin proveedor cheap se omite con nota declarada
+		// (§9.6); salida malformada → descarte registrado y corrida no
+		// cacheable (§9.8). Sus hallazgos entran al mismo pipeline: dedup,
+		// perfil, verificación y persistencia — la categoría `slop` ya fue
+		// del conjunto cerrado (§3.3, migración 0006).
+		cheap, cheapErr := st.ListEnabledLlmProvidersByRole(ctx, roleCheap)
+		if cheapErr != nil {
+			// Listar los proveedores no es infraestructura de la corrida:
+			// fallar acá quemaría la review — el slop degrada (§9.6).
+			slog.Warn("review: listando proveedores del rol cheap, el slop no corre", "error", cheapErr)
+		} else if len(cheap) == 0 {
+			slopNote = "⚠️ Detección de slop omitida (sin proveedor del rol cheap)."
+			slog.Info("review: slop omitido, sin proveedor del rol cheap (§9.6)", "review", rev.ID)
+		} else if fs, serr := runSlopDetector(ctx, gw, cfg.AgentRetries, fileHunks); serr != nil {
+			// Best-effort de calidad: la omisión se declara en la re-edición
+			// (slopNote), NO en coverage — un fallo del slop no marca la
+			// corrida partial (§9.6/§6 F6), igual que el Verifier.
+			slopNote = fmt.Sprintf("⚠️ Detección de slop omitida: %v.", serr)
+			slog.Warn("review: slop omitido", "error", serr, "review", rev.ID)
+			cacheable = false
+		} else {
+			llmFindings = append(llmFindings, fs...)
+		}
 	}
 
 	// Dedup: dentro de la corrida por huella exacta y contra comments_sent
@@ -547,7 +578,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 			// solo lo que falta: lo ya publicado deduplica por huella.
 			return failRun(ctx, st, rev.ID, res, fmt.Errorf("publicando el comentario inline de %s: %w", f.File, err),
 				func() {
-					body := finalSummary(sum, counts, append(outOfDiff, f), coverage, err.Error(), verifierNote, pm)
+					body := finalSummary(sum, counts, append(outOfDiff, f), coverage, err.Error(), verifierNote, slopNote, pm)
 					if sumErr := pub.publishSummary(ctx, body); sumErr != nil {
 						slog.Warn("review: re-edición del resumen en fallo también falló", "error", sumErr)
 					}
@@ -621,7 +652,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// es provisional por diseño — este incluye el recuento por severidad, los
 	// hallazgos fuera del diff, la declaración de cobertura y el veredicto
 	// pre-merge si corrió (§9.6/§6 F5).
-	body := finalSummary(sum, counts, outOfDiff, coverage, "", verifierNote, pm)
+	body := finalSummary(sum, counts, outOfDiff, coverage, "", verifierNote, slopNote, pm)
 	if err := pub.publishSummary(ctx, body); err != nil {
 		// El resumen de fase 1 ya está publicado: la re-edición fallida no
 		// invalida la corrida — queda el provisional sin el recuento final.

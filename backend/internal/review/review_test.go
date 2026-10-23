@@ -257,8 +257,10 @@ type stubGateway struct {
 	testgenSeen  []string // prompts de usuario de testgen recibidos
 	verifier     []string // respuestas encoladas para el verifier (rol cheap)
 	verifierSeen []string // prompts de usuario del verifier recibidos
-	premerge     []string // respuestas encoladas para el pre-merge (§6 F5)
-	premergeSeen []string // prompts de usuario del pre-merge recibidos
+premerge     []string // respuestas encoladas para el pre-merge (§6 F5)
+premergeSeen []string // prompts de usuario del pre-merge recibidos
+slop         []string // respuestas encoladas para el SlopDetector (§6 F6)
+slopSeen     []string // prompts de usuario del slop recibidos
 }
 
 func newStubGateway() *stubGateway {
@@ -312,6 +314,15 @@ func (g *stubGateway) Complete(_ context.Context, _, system, user string) (strin
 		}
 		r := g.premerge[0]
 		g.premerge = g.premerge[1:]
+		return r, nil
+	}
+	if strings.HasPrefix(user, slopMarker) {
+		g.slopSeen = append(g.slopSeen, user)
+		if len(g.slop) == 0 {
+			return "", fmt.Errorf("sin respuesta de slop encolada (llamada %d)", g.calls)
+		}
+		r := g.slop[0]
+		g.slop = g.slop[1:]
 		return r, nil
 	}
 	first := strings.SplitN(user, "\n", 2)[0]
@@ -524,6 +535,86 @@ func TestRunHappyPath(t *testing.T) {
 	}
 	if rev.Mermaid == "" {
 		t.Errorf("review mermaid vacío, el fixture trae diagrama válido")
+	}
+}
+
+// Slop (§6 F6): con proveedor cheap, el SlopDetector corre una vez sobre el
+// diff y sus hallazgos entran al pipeline como source llm categoría slop —
+// dedup, verificación, persistencia e inline incluidos.
+func TestRunSlopFindings(t *testing.T) {
+	d := newDeps()
+	d.st.cheapProviders = []store.LlmProvider{{ID: 1, Role: roleCheap, Enabled: true}}
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección SQL", "db.Query(q, arg)")}
+	d.gw.slop = []string{"[{\"file\":\"main.go\",\"line\":6,\"severity\":\"low\",\"body\":\"wrapper que solo delega\",\"suggestion\":\"Usá db.Query directamente.\"}]"}
+	d.gw.summarizer = []string{summarizerJSON}
+	d.az.result.Findings = []analyze.Finding{{
+		File: "main.go", Line: 5, Severity: "low", Category: "style",
+		Body: "nombre corto", Source: "sast", Linter: "revive", Rule: "var-naming",
+	}}
+
+	res, err := d.run(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés %q", res.Status, StatusSuccess)
+	}
+	if len(d.gw.slopSeen) != 1 {
+		t.Fatalf("slop llamado %d veces, querés 1", len(d.gw.slopSeen))
+	}
+	var slopFinding *store.CreateFindingParams
+	for i := range d.st.findings {
+		if d.st.findings[i].Category == "slop" {
+			slopFinding = &d.st.findings[i]
+		}
+	}
+	if slopFinding == nil {
+		t.Fatalf("no se persistió ningún finding categoría slop: %+v", d.st.findings)
+	}
+	if slopFinding.File != "main.go" || slopFinding.Line != 6 || slopFinding.Source != "llm" || slopFinding.Severity != "low" {
+		t.Errorf("finding slop = %s:%d source=%s severity=%s, querés main.go:6 llm low",
+			slopFinding.File, slopFinding.Line, slopFinding.Source, slopFinding.Severity)
+	}
+	// Pasó por el Verifier junto con los demás hallazgos LLM.
+	if len(d.gw.verifierSeen) != 1 || !strings.Contains(d.gw.verifierSeen[0], "wrapper que solo delega") {
+		t.Errorf("el finding slop no llegó al verifier:\n%s", strings.Join(d.gw.verifierSeen, "\n---\n"))
+	}
+	// Recuento del resumen final: 1 alta (LLM) + 2 baja (SAST + slop).
+	final := d.vcs.summaryBods[1]
+	if !strings.Contains(final, "### Hallazgos: 1 alta · 0 media · 2 baja") {
+		t.Errorf("el resumen final no refleja el finding slop:\n%s", final)
+	}
+	// La sugerencia del slop publica inline aplicable, como cualquier LLM.
+	var slopInline bool
+	for _, req := range d.vcs.suggestReqs {
+		if req.Line == 6 {
+			slopInline = true
+		}
+	}
+	if !slopInline {
+		t.Errorf("el slop con sugerencia no publicó inline en la línea 6: %+v", d.vcs.suggestReqs)
+	}
+}
+
+// Slop sin proveedor cheap (§9.6): no corre y la omisión se declara en la
+// re-edición del resumen — nunca ausencia silenciosa.
+func TestRunSlopOmitidoSinCheap(t *testing.T) {
+	d := newDeps()
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección SQL", "db.Query(q, arg)")}
+	d.gw.summarizer = []string{summarizerJSON}
+
+	res, err := d.run(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés %q", res.Status, StatusSuccess)
+	}
+	if len(d.gw.slopSeen) != 0 {
+		t.Errorf("slop corrió sin proveedor cheap: %d llamadas", len(d.gw.slopSeen))
+	}
+	if !strings.Contains(d.vcs.summaryBods[1], "slop") {
+		t.Errorf("la re-edición final no declara la omisión del slop:\n%s", d.vcs.summaryBods[1])
 	}
 }
 
