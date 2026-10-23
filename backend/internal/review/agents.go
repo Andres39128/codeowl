@@ -109,9 +109,10 @@ const (
 
 // SummaryResult es la salida del Summarizer (contrato §9.8).
 type SummaryResult struct {
-	Summary     string `json:"summary"`
-	Walkthrough string `json:"walkthrough"`
-	Mermaid     string `json:"mermaid"`
+	Summary      string `json:"summary"`
+	Walkthrough  string `json:"walkthrough"`
+	Mermaid      string `json:"mermaid"`
+	ReleaseNotes string `json:"release_notes"`
 }
 
 // rawFinding es la salida cruda del Reviewer antes de validar.

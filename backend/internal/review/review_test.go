@@ -618,6 +618,44 @@ func TestRunSlopOmitidoSinCheap(t *testing.T) {
 	}
 }
 
+// Release notes (§6 F6): el campo opcional release_notes del Summarizer
+// se publica como sección del resumen — en ambas fases, porque es contenido
+// del resumen (como el walkthrough), no un agregado final.
+func TestRunReleaseNotes(t *testing.T) {
+	d := newDeps()
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección SQL", "db.Query(q, arg)")}
+	d.gw.summarizer = []string{"{\"summary\":\"Agrega autenticación por token.\",\"release_notes\":\"- Agrega auth por token al endpoint de webhooks.\"}"}
+
+	res, err := d.run(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés %q", res.Status, StatusSuccess)
+	}
+	for i, body := range d.vcs.summaryBods {
+		if !strings.Contains(body, "### Notas de lanzamiento (borrador)") ||
+			!strings.Contains(body, "Agrega auth por token al endpoint de webhooks.") {
+			t.Errorf("la publicación %d no trae la sección de release notes:\n%s", i+1, body)
+		}
+	}
+}
+
+// Sin release_notes (campo opcional §6 F6): la sección no sale — sin
+// encabezados vacíos.
+func TestRunSinReleaseNotes(t *testing.T) {
+	d := newDeps()
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección SQL", "db.Query(q, arg)")}
+	d.gw.summarizer = []string{summarizerJSON}
+
+	if _, err := d.run(t); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(d.vcs.summaryBods[1], "Notas de lanzamiento") {
+		t.Errorf("sin release_notes no debe haber sección:\n%s", d.vcs.summaryBods[1])
+	}
+}
+
 // Stale (§3.6.1.3): identidad distinta → status stale, cero LLM, cero
 // publicación.
 func TestRunStale(t *testing.T) {

@@ -19,8 +19,8 @@
 
 ## Tasks
 
-- **T0** [S9] docs: guía §6 Fase 6 + §3.3 (`slop`, effort/impact/change_stack) + §9.8 (SlopDetector, `release_notes`) + mapa_arquitectura.yaml; commit del doc `docs/resumen_funciones_coderabbit.md` — inline — commit `docs(odd)`
-- **T1** [S5] slop: `prompts/slop_system.md` + embed.go (embed+promptFiles) + agents.go (marker, runSlopDetector, validCategory `slop`) + review.go wiring pos-dedup + migration 0006 CHECK categoría + label dashboard — inline — commit `feat(review)`
+- **T0** [S9] docs: HECHA — commit 55a7aa0a04ba. guía §6 Fase 6 + §3.3 (`slop`, effort/impact/change_stack) + §9.8 (SlopDetector, `release_notes`) + mapa_arquitectura.yaml; commit del doc `docs/resumen_funciones_coderabbit.md` — inline — commit `docs(odd)`
+- **T1** [S5] slop: HECHA — commit bccc5791d4aa (302 líneas; slice 1 = T0+T1, 636 desde origin/main). `prompts/slop_system.md` + embed.go (embed+promptFiles) + agents.go (marker, runSlopDetector, validCategory `slop`) + review.go wiring pos-dedup + migration 0006 CHECK categoría + label dashboard — inline — commit `feat(review)`
 - **T2** [S6] release notes: summarizer_system.md + parseSummary + publication.go sección + finalSummary (ambos call sites) — inline — commit `feat(review)`
 - **T3** [S7] triage scores: risk.go ComputeEffort/ComputeImpact + index dependentsOf (matchImport semantics) + migration 0006 columnas + store query + sqlc regen + review.go persist + api sort/prView + dashboard columnas — inline — commit `feat(api)`+`feat(dashboard)`
 - **T4** [S8] change stack: cohorts (topológico + heurística tests) + persist JSONB + handlePRDetail + Card en PrDetail — inline — commit `feat(review)`+`feat(dashboard)`
@@ -30,4 +30,5 @@
 
 - **L1** (2026-10-23): "Revisa el documento /home/andres/Dev/Dev_Personal/codeowl/docs/resumen_funciones_coderabbit.md y verifica que le falta al desarrollo que estamos haciendo" — reporte entregado: ✅ cubierto (F0-F5), ◐ parciales, ❌ gaps: slop detection, change stack, release notes, Slack/Discord, triage esfuerzo/impacto.
 - **L2** (2026-10-23): "Integremos los gaps faltantes en está sesión" — autorización.
+- **L4** (2026-10-23): T1 cerrada; corte de slice T0+T1 registrado (~636 líneas desde origin/main, incluye 3 fixes previos de fix/river-job-timeout ya en la rama base).
 - **L3** (2026-10-23): Cuestionario: alcance "Los 5 gaps faltantes"; Slack/Discord "No, chat solo en PR" → 4 features. Decisión de rama: `f6-gaps-coderabbit` desde `fix/river-job-timeout` (3 fixes sin mergear; F6 depende del pipeline corregido). Exploración: reverse imports no existe (construir), migración siguiente 0006, filtros /api/prs en Go, `finalSummary` con 2 call sites.

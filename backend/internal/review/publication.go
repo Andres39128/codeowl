@@ -215,6 +215,11 @@ func summaryParts(s *SummaryResult, outOfDiff []Finding, coverage []string, fail
 	if s.Mermaid != "" {
 		b.WriteString("\n\n```mermaid\n" + s.Mermaid + "\n```")
 	}
+	if s.ReleaseNotes != "" {
+		// §6 F6: borrador de notas de lanzamiento — contenido del resumen
+		// (como el walkthrough), sale en ambas fases de publicación.
+		b.WriteString("\n\n### Notas de lanzamiento (borrador)\n\n" + s.ReleaseNotes)
+	}
 	if len(outOfDiff) > 0 {
 		b.WriteString("\n\n### Hallazgos fuera del diff\n\n")
 		b.WriteString("Líneas no visibles en el diff actual (§3.6.5):\n")

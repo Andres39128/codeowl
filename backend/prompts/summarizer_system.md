@@ -13,6 +13,7 @@ Respondé ÚNICAMENTE con un objeto JSON — sin texto antes ni después, sin bl
 - `summary`: (obligatorio) resumen del PR en markdown, 3 a 6 líneas.
 - `walkthrough`: (opcional) recorrido por los archivos o componentes principales, en markdown.
 - `mermaid`: (opcional) diagrama de secuencia de los cambios en sintaxis Mermaid, empezando con `sequenceDiagram`. Solo si el flujo lo justifica; omitilo si el cambio es trivial.
+- `release_notes`: (opcional) borrador de notas de lanzamiento vistas desde quien usa el proyecto — qué cambia para él, en markdown (lista corta). Omitilo si el cambio es interno y no tiene impacto visible.
 
 Ejemplo:
 
@@ -20,6 +21,7 @@ Ejemplo:
 {
   "summary": "Agrega autenticación por token al endpoint de webhooks.",
   "walkthrough": "- `internal/api/middleware.go`: valida la firma HMAC.\n- `internal/api/api.go`: registra el middleware.",
-  "mermaid": "sequenceDiagram\n    GH->>API: POST /webhooks\n    API->>API: valida firma\n    API->>Cola: encola ReviewJob"
+  "mermaid": "sequenceDiagram\n    GH->>API: POST /webhooks\n    API->>API: valida firma\n    API->>Cola: encola ReviewJob",
+  "release_notes": "- Autenticación por token para los webhooks entrantes."
 }
 ```
