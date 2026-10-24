@@ -10,7 +10,8 @@ export type Route =
 	| "prs"
 	| "providers"
 	| "repos"
-	| "users";
+	| "users"
+	| "guia";
 
 const ROUTE_HASH: Record<Route, string> = {
 	queue: "#/queue",
@@ -19,6 +20,7 @@ const ROUTE_HASH: Record<Route, string> = {
 	providers: "#/settings/providers",
 	repos: "#/settings/repos",
 	users: "#/settings/users",
+	guia: "#/guia",
 };
 
 const HASH_ROUTE: Record<string, Route> = {
@@ -28,6 +30,7 @@ const HASH_ROUTE: Record<string, Route> = {
 	"#/settings/providers": "providers",
 	"#/settings/repos": "repos",
 	"#/settings/users": "users",
+	"#/guia": "guia",
 };
 
 /** Pantalla de aterrizaje según rol: admin a proveedores, member a la cola. */
@@ -57,7 +60,8 @@ export function resolveRoute(
 		isAdmin ||
 		route === "queue" ||
 		route === "triage" ||
-		route === "prs"
+		route === "prs" ||
+		route === "guia"
 	) {
 		return { route, redirect: null };
 	}

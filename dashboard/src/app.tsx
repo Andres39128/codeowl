@@ -7,6 +7,7 @@
 import { useEffect } from "preact/hooks";
 import { Layout } from "./components/Layout";
 import { Login } from "./features/auth/Login";
+import { Guia } from "./features/guia/Guia";
 import { PrDetail } from "./features/prs/PrDetail";
 import { Prs } from "./features/prs/Prs";
 import { Queue } from "./features/queue/Queue";
@@ -27,6 +28,7 @@ const PAGES = {
 	providers: Providers,
 	repos: Repos,
 	users: Users,
+	guia: Guia,
 } as const;
 
 export function App() {

@@ -91,4 +91,14 @@ describe("resolveRoute", () => {
 			redirect: "#/prs",
 		});
 	});
+	it("guia es visible a member y admin sin redirect (S2)", () => {
+		expect(resolveRoute("#/guia", false)).toEqual({
+			route: "guia",
+			redirect: null,
+		});
+		expect(resolveRoute("#/guia", true)).toEqual({
+			route: "guia",
+			redirect: null,
+		});
+	});
 });

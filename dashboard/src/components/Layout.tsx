@@ -69,6 +69,14 @@ export function Layout({
 						PRs
 					</a>
 
+					<a
+						href="#/guia"
+						aria-current={ariaCurrent(route === "guia")}
+						class={linkClass(route === "guia")}
+					>
+						Guía
+					</a>
+
 					{isAdmin && (
 						<>
 							<p class="mt-4 px-3 text-xs uppercase tracking-wide text-text-muted">
