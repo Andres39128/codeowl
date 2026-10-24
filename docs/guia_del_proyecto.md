@@ -6,6 +6,10 @@
 
 ## Contenido
 
+> Guía de uso para quien **no programa**: `docs/guia_usuario.md` (espejo de la
+> página Guía del dashboard, `#/guia`). Esta guía es para quien construye y
+> opera codeowl; aquella, para quien lo usa.
+
 1. [Introducción y Cómo Abordar el Proyecto](#1-introducción-y-cómo-abordar-el-proyecto)
 2. [Stack Tecnológico](#2-stack-tecnológico)
 3. [Arquitectura y Estructuras](#3-arquitectura-y-estructuras)
