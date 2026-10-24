@@ -23,6 +23,18 @@ type weeklySeriesPoint struct {
 	Reviews int64  `json:"reviews"`
 }
 
+// resolutionPoint es una semana+repo de la tasa de resolución (S3,
+// resolucion-hallazgos): hallazgos de corridas anteriores que desaparecieron
+// (resolved) vs los que reaparecieron (persistent). La tasa se computa acá
+// (numerador/denominador): cada fila tiene denominador ≥ 1 por construcción.
+type resolutionPoint struct {
+	Week           string  `json:"week"`      // lunes de la semana ISO
+	Repository     string  `json:"repository"` // owner/name
+	Resolved       int64   `json:"resolved"`
+	Persistent     int64   `json:"persistent"`
+	ResolutionRate float64 `json:"resolution_rate"`
+}
+
 // metricsView es la respuesta de GET /api/metrics. Diseño (decisión 8 de F5):
 //   - Las tasas viajan como float 0..1 o null cuando el denominador es 0 —
 //     null honesto, no 0% disfrazado de dato.
@@ -46,6 +58,9 @@ type metricsView struct {
 	// Serie semanal (S3): solo semanas con corridas; el dashboard espacia
 	// los huecos, no los inventa a cero.
 	ReviewsPerWeek []weeklySeriesPoint `json:"reviews_per_week"`
+	// Tasa de resolución por repo/semana (S3): solo pares corrida nueva +
+	// inmediata anterior con hallazgos; huellas dismissadas excluidas.
+	ResolutionPerWeek []resolutionPoint `json:"resolution_per_week"`
 }
 
 // metricsDaysDefault es la ventana por defecto (guía §6: "merged últimos
@@ -138,6 +153,23 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		view.ReviewsPerWeek = append(view.ReviewsPerWeek, weeklySeriesPoint{
 			Week: w.Week.Time.Format("2006-01-02"), Prs: w.Prs, Reviews: w.Reviews,
 		})
+	}
+	resolution, err := s.store.ListResolutionPerWeek(r.Context(), since)
+	if err != nil {
+		slog.Error("calculando la tasa de resolución", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	view.ResolutionPerWeek = make([]resolutionPoint, 0, len(resolution))
+	for _, p := range resolution {
+		point := resolutionPoint{
+			Week: p.Week.Time.Format("2006-01-02"), Repository: p.Repository,
+			Resolved: p.Resolved, Persistent: p.Persistent,
+		}
+		if denom := p.Resolved + p.Persistent; denom > 0 {
+			point.ResolutionRate = float64(p.Resolved) / float64(denom)
+		}
+		view.ResolutionPerWeek = append(view.ResolutionPerWeek, point)
 	}
 	writeJSON(w, http.StatusOK, view)
 }

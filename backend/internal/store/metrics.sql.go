@@ -71,6 +71,89 @@ func (q *Queries) GetMetricsSummary(ctx context.Context, since pgtype.Timestampt
 	return i, err
 }
 
+const listResolutionPerWeek = `-- name: ListResolutionPerWeek :many
+WITH prev AS (
+    SELECT rv2.id AS run_id, rv2.created_at, pr2.repository_id,
+           f.file, f.category
+    FROM reviews rv2
+    JOIN pull_requests pr2 ON pr2.id = rv2.pull_request_id
+    JOIN reviews rv1 ON rv1.pull_request_id = rv2.pull_request_id
+                   AND rv1.id < rv2.id
+    JOIN findings f ON f.review_id = rv1.id
+    WHERE rv2.created_at >= $1
+      -- rv1 es la inmediata anterior: no hay corrida entre rv1 y rv2.
+      AND NOT EXISTS (
+          SELECT 1 FROM reviews rx
+          WHERE rx.pull_request_id = rv2.pull_request_id
+            AND rx.id > rv1.id AND rx.id < rv2.id
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM finding_dismissals fd
+          WHERE fd.repository_id = pr2.repository_id
+            AND fd.file = f.file AND fd.category = f.category
+      )
+)
+SELECT date_trunc('week', p.created_at)::date AS week,
+       p.repository_id,
+       (r.owner || '/' || r.name)::text AS repository,
+       COUNT(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM findings cf
+           WHERE cf.review_id = p.run_id AND cf.file = p.file AND cf.category = p.category
+       ))::bigint AS resolved,
+       COUNT(*) FILTER (WHERE EXISTS (
+           SELECT 1 FROM findings cf
+           WHERE cf.review_id = p.run_id AND cf.file = p.file AND cf.category = p.category
+       ))::bigint AS persistent
+FROM prev p
+JOIN repositories r ON r.id = p.repository_id
+GROUP BY week, p.repository_id, repository
+ORDER BY week
+`
+
+type ListResolutionPerWeekRow struct {
+	Week         pgtype.Date
+	RepositoryID int64
+	Repository   string
+	Resolved     int64
+	Persistent   int64
+}
+
+// Tasa de resolución por repo/semana (resolucion-hallazgos S3): cada corrida
+// con una inmediata anterior en el mismo PR compara huellas (file+category,
+// el MISMO match que dismissals 0010): cada hallazgo de la anterior queda
+// resuelto (huella no reapareció) o persistente (reapareció). Semana =
+// created_at de la corrida NUEVA, cuando la resolución se hizo visible.
+// Huellas dismissadas no cuentan: veredicto humano (S4).
+// Predecesor inmediato por self-join (reviews.id es monótono, §3.3) y no
+// por LAG: el motor de sqlc no rastrea columnas de window functions en
+// CTEs. Solo la corrida NUEVA se filtra a la ventana — la anterior puede
+// quedar fuera y la comparación sigue siendo válida.
+func (q *Queries) ListResolutionPerWeek(ctx context.Context, since pgtype.Timestamptz) ([]ListResolutionPerWeekRow, error) {
+	rows, err := q.db.Query(ctx, listResolutionPerWeek, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListResolutionPerWeekRow
+	for rows.Next() {
+		var i ListResolutionPerWeekRow
+		if err := rows.Scan(
+			&i.Week,
+			&i.RepositoryID,
+			&i.Repository,
+			&i.Resolved,
+			&i.Persistent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReviewsPerWeek = `-- name: ListReviewsPerWeek :many
 SELECT date_trunc('week', rv.created_at)::date AS week,
        COUNT(DISTINCT rv.pull_request_id)::bigint AS prs,
