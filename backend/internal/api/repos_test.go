@@ -286,8 +286,10 @@ func TestRepoSaludYRevisarAhora(t *testing.T) {
 	a := e.admin(t)
 	e.createProvider(t, "review", true)
 
+	// Identidad única por corrida (convención de los fixtures): un external_id
+	// fijo colisiona con la corrida anterior si el cleanup falló a mitad.
 	resp := e.do(t, http.MethodPost, "/api/repos", a.cookie, a.csrf, repoRequest{
-		Vcs: "github", Owner: "acme", Name: "salud", ExternalID: 777,
+		Vcs: "github", Owner: "acme", Name: "salud", ExternalID: time.Now().UnixNano()%1_000_000 + 1,
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("conectando el repo: %d", resp.StatusCode)
