@@ -32,3 +32,12 @@ SELECT COALESCE(SUM(tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(tokens_out), 0)::bigint AS tokens_out
 FROM llm_usage
 WHERE created_at >= $1 AND created_at < $2;
+
+-- name: ListLlmUsageByReview :many
+-- Uso agregado por (role, model) de una corrida: qué proveedor atendió cada
+-- rol y cuántos tokens quemó (detalle de corrida, §9.9).
+SELECT role, model, SUM(tokens_in)::bigint AS tokens_in, SUM(tokens_out)::bigint AS tokens_out
+FROM llm_usage
+WHERE review_id = $1
+GROUP BY role, model
+ORDER BY role;

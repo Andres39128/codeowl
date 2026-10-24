@@ -113,6 +113,8 @@ func (s *Server) Routes() *http.ServeMux {
 	// y encolar la corrida del PR abierto más reciente sin esperar webhook.
 	mux.Handle("GET /api/repos/{id}/health", s.admin(s.handleRepoHealth))
 	mux.Handle("POST /api/repos/{id}/review", s.admin(s.handleRepoReviewNow))
+	// Detalle de una corrida (§9.9): auditoría — roles, tokens, duración.
+	mux.Handle("GET /api/reviews/{id}", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleReviewDetail)))))
 	// Go 1.22 mux: el segmento literal "github" pisa {id} — sin colisión
 	// con GET /api/repos/{id}.
 	mux.Handle("GET /api/repos/github/resolve", s.admin(s.handleResolveRepo))

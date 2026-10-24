@@ -119,6 +119,48 @@ func (q *Queries) ListLlmUsageByJob(ctx context.Context, jobID pgtype.Int8) ([]L
 	return items, nil
 }
 
+const listLlmUsageByReview = `-- name: ListLlmUsageByReview :many
+SELECT role, model, SUM(tokens_in)::bigint AS tokens_in, SUM(tokens_out)::bigint AS tokens_out
+FROM llm_usage
+WHERE review_id = $1
+GROUP BY role, model
+ORDER BY role
+`
+
+type ListLlmUsageByReviewRow struct {
+	Role      string
+	Model     string
+	TokensIn  int64
+	TokensOut int64
+}
+
+// Uso agregado por (role, model) de una corrida: qué proveedor atendió cada
+// rol y cuántos tokens quemó (detalle de corrida, §9.9).
+func (q *Queries) ListLlmUsageByReview(ctx context.Context, reviewID pgtype.Int8) ([]ListLlmUsageByReviewRow, error) {
+	rows, err := q.db.Query(ctx, listLlmUsageByReview, reviewID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLlmUsageByReviewRow
+	for rows.Next() {
+		var i ListLlmUsageByReviewRow
+		if err := rows.Scan(
+			&i.Role,
+			&i.Model,
+			&i.TokensIn,
+			&i.TokensOut,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const sumLlmUsageByDateRange = `-- name: SumLlmUsageByDateRange :one
 SELECT COALESCE(SUM(tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(tokens_out), 0)::bigint AS tokens_out

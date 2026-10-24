@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -820,5 +821,97 @@ func TestPRsQueryInvalidos400(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Error == "" {
 			t.Errorf("%s debe responder {\"error\": \"...\"}: got %q err=%v", query, out.Error, err)
 		}
+	}
+}
+
+// TestReviewDetalle (S2): GET /api/reviews/{id} — la auditoría de una
+// corrida: roles con tokens, duración y recuento por severidad.
+func TestReviewDetalle(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+	ctx := context.Background()
+
+	now := time.Now().UnixNano()
+	repo, err := e.st.CreateRepository(ctx, store.CreateRepositoryParams{
+		Vcs: "github", ExternalID: now, Owner: "test", Name: "detalle",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM llm_usage WHERE review_id = ANY($1)", []int64{0})
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id = $1", repo.ID)
+	})
+	pr, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 1, Author: "ana", State: "open",
+		HeadSha: "h1", BaseRef: "main", BaseSha: "b1",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inicio := time.Now().Add(-3 * time.Minute)
+	rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{
+		PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Duración: updated_at se pisa a mano (el worker la pisa al finalizar).
+	if _, err := e.st.Pool.Exec(ctx,
+		"UPDATE reviews SET created_at=$1, updated_at=$2 WHERE id=$3",
+		inicio, inicio.Add(2*time.Minute), rev.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Uso LLM: review + cheap (dos roles, el modelo de cada uno).
+	if _, err := e.st.Pool.Exec(ctx,
+		`INSERT INTO llm_usage (role, provider, model, tokens_in, tokens_out, review_id)
+		 VALUES ('review','http://stub','modelo-r',1000,2000,$1),
+		        ('cheap','http://stub','modelo-c',300,400,$1)`, rev.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Dos hallazgos high y uno low.
+	for _, sev := range []string{"high", "high", "low"} {
+		if _, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+			ReviewID: rev.ID, File: "a.go", Line: 1, Severity: sev,
+			Category: "logic", Body: "x", Source: "llm",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM river_job WHERE kind='review' AND args->>'pull_request_id' = $1", strconv.FormatInt(pr.ID, 10))
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM findings WHERE review_id=$1", rev.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM llm_usage WHERE review_id=$1", rev.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM reviews WHERE id=$1", rev.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM pull_requests WHERE id=$1", pr.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id=$1", repo.ID)
+	})
+
+	resp := e.do(t, http.MethodGet, fmt.Sprintf("/api/reviews/%d", rev.ID), a.cookie, a.csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var view reviewDetailView
+	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
+		t.Fatal(err)
+	}
+	if view.DurationMS < 119_000 || view.DurationMS > 121_000 {
+		t.Errorf("duration_ms = %d, querés ~120000", view.DurationMS)
+	}
+	if len(view.LlmUsage) != 2 {
+		t.Fatalf("llm_usage con 2 roles, trajo %d", len(view.LlmUsage))
+	}
+	// Orden por rol: cheap primero.
+	if view.LlmUsage[0].Role != "cheap" || view.LlmUsage[0].TokensIn != 300 {
+		t.Errorf("uso cheap = %+v", view.LlmUsage[0])
+	}
+	if view.Findings["high"] != 2 || view.Findings["low"] != 1 {
+		t.Errorf("findings_by_severity = %v, querés 2 high 1 low", view.Findings)
+	}
+
+	// Corrida inexistente: 404.
+	if got := e.do(t, http.MethodGet, "/api/reviews/999999", a.cookie, a.csrf, nil).StatusCode; got != http.StatusNotFound {
+		t.Errorf("corrida inexistente = %d, querés 404", got)
 	}
 }

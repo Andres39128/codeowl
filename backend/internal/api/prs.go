@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
@@ -463,4 +464,73 @@ func (s *Server) handlePRDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"diff": diff})
+}
+
+// reviewDetailView es la respuesta de GET /api/reviews/{id}: la corrida con
+// lo que no se ve en el PR — qué proveedor atendió cada rol, tokens por rol,
+// duración (updated_at − created_at, el ciclo de vida de la fila) y el
+// recuento de hallazgos por severidad (§9.9).
+type reviewDetailView struct {
+	ID         int64            `json:"id"`
+	PRID       int64            `json:"pull_request_id"`
+	Status     string           `json:"status"`
+	CreatedAt  time.Time        `json:"created_at"`
+	DurationMS int64            `json:"duration_ms"`
+	Summary    string           `json:"summary"`
+	LlmUsage   []llmUsageView   `json:"llm_usage"`
+	Findings   map[string]int64 `json:"findings_by_severity"`
+}
+
+// llmUsageView: tokens por (rol, modelo) de la corrida.
+type llmUsageView struct {
+	Role      string `json:"role"`
+	Model     string `json:"model"`
+	TokensIn  int64  `json:"tokens_in"`
+	TokensOut int64  `json:"tokens_out"`
+}
+
+// handleReviewDetail: GET /api/reviews/{id} — auditoría de una corrida.
+func (s *Server) handleReviewDetail(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	review, err := s.store.GetReview(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "corrida inexistente")
+		return
+	} else if err != nil {
+		slog.Error("buscando corrida", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	usage, err := s.store.ListLlmUsageByReview(r.Context(), pgtype.Int8{Int64: id, Valid: true})
+	if err != nil {
+		slog.Error("uso LLM de la corrida", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	findings, err := s.store.ListFindingsByReview(r.Context(), id)
+	if err != nil {
+		slog.Error("hallazgos de la corrida", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	bySeverity := map[string]int64{"high": 0, "medium": 0, "low": 0}
+	for _, f := range findings {
+		bySeverity[f.Severity]++
+	}
+	view := reviewDetailView{
+		ID: review.ID, PRID: review.PullRequestID, Status: review.Status,
+		CreatedAt: review.CreatedAt.Time, Summary: review.Summary,
+		DurationMS: review.UpdatedAt.Time.Sub(review.CreatedAt.Time).Milliseconds(),
+		LlmUsage:   make([]llmUsageView, 0, len(usage)),
+		Findings:   bySeverity,
+	}
+	for _, u := range usage {
+		view.LlmUsage = append(view.LlmUsage, llmUsageView{
+			Role: u.Role, Model: u.Model, TokensIn: u.TokensIn, TokensOut: u.TokensOut,
+		})
+	}
+	writeJSON(w, http.StatusOK, view)
 }
