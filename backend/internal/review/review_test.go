@@ -141,7 +141,7 @@ func (s *stubStore) GetLatestReviewByPR(_ context.Context, prID int64) (store.Re
 	defer s.mu.Unlock()
 	var latest *store.Review
 	for _, r := range s.reviews {
-		if r.PullRequestID == prID && (latest == nil || r.ID > latest.ID) {
+		if r.PullRequestID.Valid && r.PullRequestID.Int64 == prID && (latest == nil || r.ID > latest.ID) {
 			latest = r
 		}
 	}

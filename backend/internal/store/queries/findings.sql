@@ -22,7 +22,7 @@ LEFT JOIN finding_dismissals fd
        ON fd.repository_id = pr.repository_id
       AND fd.file = f.file
       AND fd.category = f.category
-WHERE r.pull_request_id = $1
+WHERE r.pull_request_id = sqlc.arg('pull_request_id')::bigint
 ORDER BY f.id;
 
 -- name: UpdateFindingAccepted :exec

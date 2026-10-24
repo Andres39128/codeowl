@@ -85,8 +85,16 @@ func TestForwardSourceParseaMigracionesReales(t *testing.T) {
 	if tenth != 10 {
 		t.Errorf("décima versión: got %d want 10", tenth)
 	}
-	if _, err := src.Next(tenth); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("no hay undécima versión: esperaba os.ErrNotExist, got %v", err)
+	// 0011_direct_pushes (trazabilidad-merges S6): reviews polimórficas.
+	eleventh, err := src.Next(tenth)
+	if err != nil {
+		t.Fatalf("Next(10): %v", err)
+	}
+	if eleventh != 11 {
+		t.Errorf("undécima versión: got %d want 11", eleventh)
+	}
+	if _, err := src.Next(eleventh); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("no hay duodécima versión: esperaba os.ErrNotExist, got %v", err)
 	}
 
 	rc, id, err := src.ReadUp(1)

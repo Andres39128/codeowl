@@ -591,7 +591,7 @@ func (s *Server) handleReviewDetail(w http.ResponseWriter, r *http.Request) {
 		bySeverity[f.Severity]++
 	}
 	view := reviewDetailView{
-		ID: review.ID, PRID: review.PullRequestID, Status: review.Status,
+		ID: review.ID, PRID: review.PullRequestID.Int64, Status: review.Status,
 		CreatedAt: review.CreatedAt.Time, Summary: review.Summary,
 		DurationMS: review.UpdatedAt.Time.Sub(review.CreatedAt.Time).Milliseconds(),
 		LlmUsage:   make([]llmUsageView, 0, len(usage)),
@@ -630,7 +630,9 @@ func (s *Server) handleDismissFinding(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "error interno")
 		return
 	}
-	pr, err := s.store.GetPullRequest(r.Context(), review.PullRequestID)
+	// Corrida de un PR (este handler es de findings de PR): el target polimórfico
+	// garantiza pull_request_id válido para corridas de PR (migración 0011).
+	pr, err := s.store.GetPullRequest(r.Context(), review.PullRequestID.Int64)
 	if err != nil {
 		slog.Error("buscando el PR del hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
 		writeError(w, http.StatusInternalServerError, "error interno")

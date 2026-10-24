@@ -809,7 +809,7 @@ func findOrCreateReview(ctx context.Context, st Store, input ReviewInput) (store
 		return latest, nil
 	case err == nil || errors.Is(err, pgx.ErrNoRows):
 		rev, cerr := st.CreateReview(ctx, store.CreateReviewParams{
-			PullRequestID: input.PullRequestID,
+			PullRequestID: pgtype.Int8{Int64: input.PullRequestID, Valid: true},
 			HeadSha:       input.HeadSHA,
 			BaseSha:       input.BaseSHA,
 		})

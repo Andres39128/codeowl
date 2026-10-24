@@ -1238,7 +1238,7 @@ func TestMetricsJobWorkerOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rev, err := st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	rev, err := st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h1", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1341,7 +1341,7 @@ func TestMetricsJobWorkerReabiertoSeSalta(t *testing.T) {
 	pr := wPR(t, st, repo.ID, 2) // sigue open: wPR nace open
 	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
 
-	rev, err := st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	rev, err := st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h1", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
