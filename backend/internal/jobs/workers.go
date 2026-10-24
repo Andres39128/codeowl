@@ -69,9 +69,9 @@ type ReviewJobWorker struct {
 	Gateway   review.Gateway  // *llm.Gateway la satisface
 	Analyzer  review.Analyzer // *analyze.Runner la satisface
 	Provider  vcs.VCSProvider
-	Retriever review.Retriever   // contexto simbólico del repo (§6 F4); nil → sin bloque
+	Retriever review.Retriever      // contexto simbólico del repo (§6 F4); nil → sin bloque
 	Impact    review.ImpactProvider // dependientes del grafo de imports (§6 F6); nil → impact null
-	Queue     JobQueue           // encola el IndexJob tras la corrida (§6 F4)
+	Queue     JobQueue              // encola el IndexJob tras la corrida (§6 F4)
 	Config    review.Config
 
 	WorkdirRoot string // default /var/tmp (los tests usan un tmp propio)

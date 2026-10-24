@@ -71,6 +71,7 @@ func TestEnqueueInsertaRiverJob(t *testing.T) {
 	if err := q.Enqueue(ctx, kind, args); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
+	t.Cleanup(func() { limpiaJobs(t, st, []string{kind}, nil, nil) })
 
 	var despues int
 	if err := st.Pool.QueryRow(ctx, "SELECT COUNT(1) FROM river_job WHERE kind = $1", kind).Scan(&despues); err != nil {
@@ -129,6 +130,7 @@ func TestEnqueueReviewJobUnicoPorArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { limpiaJobs(t, st, nil, []int64{prID}, nil) })
 
 	for i := 0; i < 2; i++ {
 		if err := q.Enqueue(ctx, KindReview, args); err != nil {
@@ -331,6 +333,7 @@ func TestCancelPendingByPR(t *testing.T) {
 	ctx := context.Background()
 
 	prA, prB := wNano(), wNano()
+	t.Cleanup(func() { limpiaJobs(t, st, nil, []int64{prA, prB}, nil) })
 	encolar := func(kind string, prID int64, raw json.RawMessage) {
 		t.Helper()
 		if err := q.Enqueue(ctx, kind, raw); err != nil {

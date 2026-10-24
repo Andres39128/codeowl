@@ -77,6 +77,9 @@ func wRepo(t *testing.T, st *store.Store) store.Repository {
 		if err := st.DeleteRepositoryCascade(context.Background(), repo.ID); err != nil {
 			t.Errorf("borrando el repo de test: %v", err)
 		}
+		// Los jobs encolados para este repo (index, metrics) quedan
+		// apuntando a un repo que ya no existe: se van con él.
+		limpiaJobs(t, st, nil, nil, []int64{repo.ID})
 	})
 	return repo
 }
@@ -113,6 +116,8 @@ func wPR(t *testing.T, st *store.Store, repoID, number int64) store.PullRequest 
 	if err != nil {
 		t.Fatalf("UpsertPullRequest: %v", err)
 	}
+	// Los jobs que referencian este PR (metrics, review) se van con él.
+	t.Cleanup(func() { limpiaJobs(t, st, nil, []int64{pr.ID}, nil) })
 	return pr
 }
 
@@ -595,6 +600,7 @@ func TestReviewJobWorkerReencoloTransaccionalInterleaving(t *testing.T) {
 	if err := q.Enqueue(ctx, KindReview, args); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
+	t.Cleanup(func() { limpiaJobs(t, st, nil, []int64{pr.ID}, []int64{repo.ID}) })
 
 	// El job B con la identidad que aterrizó en vuelo debe existir: nació en
 	// la tx que completó al A (§3.6.1.5).
