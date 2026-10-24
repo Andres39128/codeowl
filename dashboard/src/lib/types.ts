@@ -34,6 +34,18 @@ export interface ManagedUser {
 	disabled: boolean;
 }
 
+/** Salud de un repo (GET /api/repos/{id}/health): los checks que explican
+ * "¿por qué no se revisó mi PR?". app_installed null = no aplica (GitLab)
+ * o no se pudo verificar. */
+export interface RepoHealth {
+	app_installed: boolean | null;
+	last_delivery_at: string | null;
+	has_review_provider: boolean;
+	open_prs: number;
+	last_review_at: string | null;
+	latest_open_pr: { number: number; head_sha: string; base_sha: string } | null;
+}
+
 /** Fila de la historia de jobs (GET /api/jobs/history): un job finalizado con
  * duración de ejecución y el último error si lo hubo. */
 export interface JobHistoryRow {

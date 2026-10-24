@@ -10,7 +10,7 @@ import {
 } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/apiClient";
-import type { Provider, Repo } from "../../lib/types";
+import type { Provider, Repo, RepoHealth } from "../../lib/types";
 import { createWrapper } from "../../test/createWrapper";
 import { Repos } from "./Repos";
 
@@ -50,10 +50,18 @@ const repo: Repo = {
 	chat_org_only: false,
 };
 
-function mockBackend(providers: Provider[]) {
+function mockBackend(providers: Provider[], health: RepoHealth | null = null) {
 	mockedApi.mockImplementation((path: string, opts?: { method?: string }) => {
 		if (path === "/api/repos" && opts?.method === "POST") {
 			return Promise.resolve(repo);
+		}
+		if (path.endsWith("/health")) {
+			return health === null
+				? Promise.reject(new Error("sin salud"))
+				: Promise.resolve(health);
+		}
+		if (path.endsWith("/review") && opts?.method === "POST") {
+			return Promise.resolve({ enqueued: true, pr_number: 7 });
 		}
 		if (path.startsWith("/api/repos/")) {
 			return Promise.resolve(repo);
@@ -63,6 +71,19 @@ function mockBackend(providers: Provider[]) {
 		return Promise.reject(new Error(`ruta inesperada: ${path}`));
 	});
 }
+
+const saludVerde: RepoHealth = {
+	app_installed: true,
+	last_delivery_at: "2026-10-23T12:00:00Z",
+	has_review_provider: true,
+	open_prs: 1,
+	last_review_at: "2026-10-23T11:00:00Z",
+	latest_open_pr: {
+		number: 7,
+		head_sha: "abc123",
+		base_sha: "def456",
+	},
+};
 
 describe("Repos", () => {
 	beforeEach(() => {
@@ -125,5 +146,50 @@ describe("Repos", () => {
 				body: { enabled: false },
 			});
 		});
+	});
+	it("muestra los checks de salud del repo con remedios", async () => {
+		mockBackend([reviewProvider], {
+			...saludVerde,
+			app_installed: false,
+			has_review_provider: false,
+			last_delivery_at: null,
+		});
+
+		render(<Repos />, { wrapper: createWrapper() });
+
+		expect(await screen.findByText(/App sin instalar/)).toBeTruthy();
+		expect(screen.getByText(/instalala en el repo/)).toBeTruthy();
+		expect(screen.getByText(/Sin webhook recibido/)).toBeTruthy();
+		expect(screen.getByText(/Sin proveedor review/)).toBeTruthy();
+	});
+
+	it("todo verde muestra ok y el botón revisar ahora encola el PR abierto", async () => {
+		mockBackend([reviewProvider], saludVerde);
+
+		render(<Repos />, { wrapper: createWrapper() });
+
+		const boton = await screen.findByRole("button", { name: /revisar ahora/i });
+		fireEvent.click(boton);
+
+		await waitFor(() => {
+			expect(mockedApi).toHaveBeenCalledWith(
+				"/api/repos/10/review",
+				expect.objectContaining({ method: "POST" }),
+			);
+		});
+	});
+
+	it("sin PR abierto el botón está deshabilitado y lo explica", async () => {
+		mockBackend([reviewProvider], {
+			...saludVerde,
+			open_prs: 0,
+			latest_open_pr: null,
+		});
+
+		render(<Repos />, { wrapper: createWrapper() });
+
+		const boton = await screen.findByRole("button", { name: /revisar ahora/i });
+		expect(boton.hasAttribute("disabled")).toBe(true);
+		expect(screen.getByText(/sin PRs abiertos/i)).toBeTruthy();
 	});
 });
