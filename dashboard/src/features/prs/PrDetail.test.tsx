@@ -595,3 +595,74 @@ describe("triage de hallazgos (S4)", () => {
 		).toBe(true);
 	});
 });
+
+describe("creador de prompts (S1)", () => {
+	it("abre el modal con el prompt de corrección listo para copiar", async () => {
+		apiMock.mockImplementation((path: string) => {
+			if (path === "/api/prs/7") return Promise.resolve(detail);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+		await screen.findByText("Cuerpo alto");
+
+		fireEvent.click(
+			screen.getAllByRole("button", { name: /arreglar con ia/i })[0]!,
+		);
+
+		// El modal trae el prompt con el contexto del hallazgo.
+		const modal = await screen.findByRole("dialog");
+		expect(modal.textContent).toContain("Cuerpo alto");
+		expect(modal.textContent).toContain("src/foo.go");
+		expect(modal.textContent).toContain("return err"); // la sugerencia del fixture
+		expect(modal.textContent).toContain("explicación en lenguaje simple");
+		// El diff del archivo viaja en el prompt.
+		expect(modal.textContent).toContain("+added line");
+	});
+
+	it("el prompt de explicar no pide código", async () => {
+		apiMock.mockImplementation((path: string) => {
+			if (path === "/api/prs/7") return Promise.resolve(detail);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+		await screen.findByText("Cuerpo alto");
+
+		fireEvent.click(
+			screen.getAllByRole("button", { name: /arreglar con ia/i })[0]!,
+		);
+		fireEvent.click(await screen.findByRole("tab", { name: /explicar/i }));
+
+		const modal = screen.getByRole("dialog");
+		expect(modal.textContent).toContain("como si no supiera programar");
+		expect(modal.textContent).not.toContain("listo para reemplazar");
+	});
+
+	it("copiar lleva el prompt al portapapeles", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		vi.stubGlobal("navigator", { clipboard: { writeText } });
+		apiMock.mockImplementation((path: string) => {
+			if (path === "/api/prs/7") return Promise.resolve(detail);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+		await screen.findByText("Cuerpo alto");
+
+		fireEvent.click(
+			screen.getAllByRole("button", { name: /arreglar con ia/i })[0]!,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /^copiar prompt$/i }),
+		);
+
+		await waitFor(() => {
+			expect(writeText).toHaveBeenCalled();
+			const prompt = writeText.mock.calls[0]![0] as string;
+			expect(prompt).toContain("Cuerpo alto");
+			expect(prompt).toContain("src/foo.go");
+		});
+		vi.unstubAllGlobals();
+	});
+});

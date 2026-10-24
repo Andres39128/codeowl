@@ -13,6 +13,7 @@ import { DiffViewer } from "../../components/DiffViewer";
 import { ApiError, api } from "../../lib/apiClient";
 import type { FindingView, ReviewDetail } from "../../lib/types";
 import { usePR } from "../../lib/usePR";
+import { PromptModal } from "./PromptModal";
 import {
 	categoryHintOf,
 	categoryOf,
@@ -233,11 +234,16 @@ function HallazgoItem({
 	finding,
 	onScroll,
 	prURL,
+	diff,
+	repo,
 }: {
 	finding: FindingView;
 	onScroll: (file: string, line: number) => void;
 	prURL: string | null;
+	diff: string;
+	repo: { owner: string; name: string; number: number };
 }) {
+	const [promptAbierto, setPromptAbierto] = useState(false);
 	const queryClient = useQueryClient();
 	const dismiss = useMutation({
 		mutationFn: () =>
@@ -298,6 +304,22 @@ function HallazgoItem({
 					>
 						{dismiss.isPending ? "Marcando…" : "No aplica"}
 					</button>
+				)}
+				<button
+					type="button"
+					class={`rounded border border-border-subtle px-2 py-0.5 text-xs text-action-primary hover:bg-bg-elevated ${finding.dismissed ? "ml-auto" : ""}`}
+					title="Arma un prompt con todo el contexto de este hallazgo para pegar en tu asistente de IA: te ayuda a corregirlo o a entenderlo."
+					onClick={() => setPromptAbierto(true)}
+				>
+					Arreglar con IA
+				</button>
+				{promptAbierto && (
+					<PromptModal
+						finding={finding}
+						repo={repo}
+						diff={diff}
+						onClose={() => setPromptAbierto(false)}
+					/>
 				)}
 			</div>
 			<p class="text-sm break-words whitespace-pre-wrap">{finding.body}</p>
@@ -399,6 +421,14 @@ export function PrDetail({ prId }: { prId: number }) {
 	const state = stateOf(pr.state);
 	const reviewStatus = review !== null ? reviewStatusOf(review.status) : null;
 
+	// Contexto que viaja al creador de prompts (S1): el diff crudo para el
+	// snippet del archivo y la identidad del repo + PR.
+	const diffTexto = diff ?? "";
+	const repoInfo = {
+		owner: pr.repo.owner,
+		name: pr.repo.name,
+		number: pr.number,
+	};
 	// URL del PR en el VCS: el permalink del comentario real (donde el
 	// bloque suggestion de GitHub se aplica con un clic). GitLab usa #note_.
 	const prURL =
@@ -679,6 +709,8 @@ export function PrDetail({ prId }: { prId: number }) {
 													finding={finding}
 													onScroll={scrollToFinding}
 													prURL={prURL}
+													diff={diffTexto}
+													repo={repoInfo}
 												/>
 											))}
 										</ul>
@@ -693,6 +725,8 @@ export function PrDetail({ prId }: { prId: number }) {
 										finding={finding}
 										onScroll={scrollToFinding}
 										prURL={prURL}
+										diff={diffTexto}
+										repo={repoInfo}
 									/>
 								))}
 							</ul>
