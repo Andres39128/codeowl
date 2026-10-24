@@ -57,6 +57,13 @@ export interface JobHistoryRow {
 	error: string | null;
 }
 
+/** Serie semanal de PRs revisados (S3): solo semanas con corridas. */
+export interface ReviewsPerWeekPoint {
+	week: string;
+	prs: number;
+	reviews: number;
+}
+
 /** Detalle de una corrida (GET /api/reviews/{id}): auditoría — roles con
  * tokens, duración, hallazgos por severidad. */
 export interface ReviewDetail {
@@ -206,4 +213,5 @@ export interface MetricsView {
 	false_positive_rate: number | null;
 	reviews_with_cost: number;
 	avg_tokens_per_review: number | null;
+	reviews_per_week: ReviewsPerWeekPoint[];
 }

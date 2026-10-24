@@ -56,6 +56,7 @@ const metrics: MetricsView = {
 	false_positive_rate: 0.2,
 	reviews_with_cost: 5,
 	avg_tokens_per_review: 1500,
+	reviews_per_week: [],
 };
 
 // Filas ya ordenadas por riesgo como las sirve el server (sort=risk): el
@@ -291,5 +292,27 @@ describe("Triage", () => {
 		expect(
 			await screen.findByText("No se pudo cargar la lista de PRs."),
 		).toBeTruthy();
+	});
+	it("muestra la serie semanal de PRs revisados como barras", async () => {
+		mockApi(prsByRisk, {
+			...metrics,
+			reviews_per_week: [
+				{ week: "2026-10-06", prs: 3, reviews: 4 },
+				{ week: "2026-10-13", prs: 1, reviews: 1 },
+				{ week: "2026-10-20", prs: 5, reviews: 8 },
+			],
+		});
+		render(<Triage />, { wrapper: createWrapper() });
+
+		// El eje con la altura máxima y las barras de cada semana con su title.
+		expect(await screen.findByText(/PRs revisados por semana/)).toBeTruthy();
+		const barra = screen.getByTitle(
+			"Semana del 2026-10-20: 5 PRs (8 corridas)",
+		);
+		expect(barra).toBeTruthy();
+		// La barra más alta es la de 5 PRs: altura relativa 100%.
+		expect(barra.getAttribute("style")).toContain("height: 100%");
+		const baja = screen.getByTitle("Semana del 2026-10-13: 1 PR (1 corrida)");
+		expect(baja.getAttribute("style")).toContain("height: 20%");
 	});
 });

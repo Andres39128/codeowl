@@ -13,7 +13,7 @@ import { Banner } from "../../components/Banner";
 import { Card } from "../../components/Card";
 import { type Column, Table } from "../../components/Table";
 import { api } from "../../lib/apiClient";
-import type { MetricsView, PrView } from "../../lib/types";
+import type { MetricsView, PrView, ReviewsPerWeekPoint } from "../../lib/types";
 import { reviewStatusOf } from "../prs/view";
 import { riskBandOf } from "./view";
 
@@ -66,8 +66,45 @@ function metricTokens(value: number | null): ComponentChildren {
 	return value.toLocaleString("es-AR", { maximumFractionDigits: 0 });
 }
 
-/** Strip de métricas (§6 F5): cycle time, % aceptados, tasa FP y costo medio.
- * Solo números — la guía no pide dashboard de métricas con gráficos. */
+/** Serie semanal de PRs revisados (S3): barras CSS sin librería — una barra
+ * por semana con corridas, altura relativa al máximo. El title lleva el
+ * detalle (PRs y corridas) y la etiqueta el día de la semana. */
+function WeeklyBars({ points }: { points: ReviewsPerWeekPoint[] }) {
+	if (points.length === 0) return null;
+	const max = Math.max(...points.map((p) => p.prs), 1);
+	return (
+		<div>
+			<h3 class="mb-2 text-xs font-semibold text-text-muted">
+				PRs revisados por semana
+			</h3>
+			<div class="flex items-end gap-2" style="height: 96px">
+				{points.map((p) => {
+					const h = Math.round((p.prs / max) * 100);
+					return (
+						<div
+							key={p.week}
+							class="flex w-8 flex-col items-center justify-end"
+							style="height: 100%"
+						>
+							<span class="mb-1 text-xs text-text-muted">{p.prs}</span>
+							<div
+								class="w-full rounded-t bg-accent"
+								style={`height: ${h}%`}
+								title={`Semana del ${p.week}: ${p.prs} ${p.prs === 1 ? "PR" : "PRs"} (${p.reviews} ${p.reviews === 1 ? "corrida" : "corridas"})`}
+							/>
+							<span class="mt-1 text-[10px] text-text-muted">
+								{p.week.slice(5)}
+							</span>
+						</div>
+					);
+				})}
+			</div>
+		</div>
+	);
+}
+
+/** Strip de métricas (§6 F5): cycle time, % aceptados, tasa FP, costo medio
+ * y serie semanal de PRs revisados (S3). Solo números y barras CSS. */
 function MetricsCard({ metrics }: { metrics: MetricsView }) {
 	return (
 		<Card title="Métricas (últimos 30 días)" class="mb-4">
@@ -97,6 +134,11 @@ function MetricsCard({ metrics }: { metrics: MetricsView }) {
 					</dd>
 				</div>
 			</dl>
+			{metrics.reviews_per_week.length > 0 && (
+				<div class="mt-4 border-t border-border-subtle pt-3">
+					<WeeklyBars points={metrics.reviews_per_week} />
+				</div>
+			)}
 		</Card>
 	);
 }
