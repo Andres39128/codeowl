@@ -28,7 +28,7 @@ type weeklySeriesPoint struct {
 // (resolved) vs los que reaparecieron (persistent). La tasa se computa acá
 // (numerador/denominador): cada fila tiene denominador ≥ 1 por construcción.
 type resolutionPoint struct {
-	Week           string  `json:"week"`      // lunes de la semana ISO
+	Week           string  `json:"week"`       // lunes de la semana ISO
 	Repository     string  `json:"repository"` // owner/name
 	Resolved       int64   `json:"resolved"`
 	Persistent     int64   `json:"persistent"`

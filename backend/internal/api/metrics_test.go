@@ -512,7 +512,7 @@ func TestMetricsResolucionPorSemana(t *testing.T) {
 	}
 	// Semana ISO (lunes) de la corrida NUEVA: r2 cayó ahora.
 	n := time.Now().UTC()
-	lunes := n.AddDate(0, 0, -((int(n.Weekday())+6)%7)).Format("2006-01-02")
+	lunes := n.AddDate(0, 0, -((int(n.Weekday()) + 6) % 7)).Format("2006-01-02")
 	if fila.Week != lunes {
 		t.Errorf("week = %s, querés %s (lunes de esta semana)", fila.Week, lunes)
 	}

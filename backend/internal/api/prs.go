@@ -278,9 +278,9 @@ type findingView struct {
 // index — y omitempty las omite cuando no hay (null/ausente sin índice del
 // repo, degradación visible).
 type prDetailView struct {
-	PR          prView          `json:"pr"`
-	Review      *reviewView     `json:"review"`
-	Findings    []findingView   `json:"findings"`
+	PR       prView        `json:"pr"`
+	Review   *reviewView   `json:"review"`
+	Findings []findingView `json:"findings"`
 	// Resueltos: hallazgos de la corrida anterior cuya huella desapareció
 	// de la última (S2). Huellas dismissadas no viajan acá: ya tienen
 	// veredicto humano (S4).
