@@ -44,3 +44,9 @@ explique.
   correctos, PromptModal con tabs Corregir/Explicar, archivo y línea del
   hallazgo real en el prompt, pedidos completos; hunk con fallback honesto
   cuando el archivo no está en el diff. Dashboard 121/121.
+- L5: la review del PR #16 destapó que el test de rotación (BD compartida)
+  había dejado los api_key reales irrecuperables (doble cifrado con claves
+  de test). Fix de raíz (BD scratch, 8250b8f4), recuperación de los dos
+  proveedores y api_key placeholder 'local' para Qwen @ localhost:8081 (el
+  servidor no valida la clave). MiniMax requiere reingreso de la clave
+  real por el usuario + red que no corte TLS hacia api.minimax.io.
