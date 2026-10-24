@@ -37,6 +37,13 @@ type timelineStub struct {
 	patches    map[string]string // sha → diff crudo; sha ausente ⇒ 500
 	diffAccept map[string]string // sha → Accept recibido en /commits/{sha}
 
+	// Endpoint compare (GetCommitDiff, trazabilidad S4): path/Accept
+	// grabados para asserts, body crudo y status configurable.
+	comparePath   string
+	compareAccept string
+	compareBody   string
+	compareStatus int
+
 	graphqlStatus int
 	graphqlBody   string
 	graphqlAuth   string
@@ -68,6 +75,15 @@ func (s *timelineStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write([]byte(patch))
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/api/compare/"):
+		s.comparePath = r.URL.Path
+		s.compareAccept = r.Header.Get("Accept")
+		status := s.compareStatus
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(s.compareBody))
 	case r.URL.Path == "/graphql":
 		s.graphqlAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
@@ -177,6 +193,38 @@ func TestFetchPRTimelinePatchesDatesThreads(t *testing.T) {
 	}
 	if auth := st.graphqlAuth; auth != "Bearer inst-token" {
 		t.Errorf("Authorization del graphql: got %q want el token de instalación", auth)
+	}
+}
+
+// TestGetCommitDiffDiffCrudoYError (trazabilidad S4/T2): el diff de un
+// push directo sale del endpoint compare con media type de diff — cuerpo
+// crudo sin decodear — y el fallo upstream (500) se devuelve como error.
+func TestGetCommitDiffDiffCrudoYError(t *testing.T) {
+	raw := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-old\n+new\n"
+	st := &timelineStub{diffAccept: map[string]string{}, compareBody: raw}
+	ad := newTimelineEnv(t, st)
+	repo, _ := timelineRepoAndPR()
+
+	diff, err := ad.GetCommitDiff(context.Background(), repo, "base-sha", "head-sha")
+	if err != nil {
+		t.Fatalf("GetCommitDiff: %v", err)
+	}
+	if diff != raw {
+		t.Errorf("el diff crudo viaja tal cual:\n got %q\nwant %q", diff, raw)
+	}
+	if st.comparePath != "/repos/acme/api/compare/base-sha...head-sha" {
+		t.Errorf("path del compare: got %q", st.comparePath)
+	}
+	if st.compareAccept != mediaTypeDiff {
+		t.Errorf("Accept del compare: got %q want %q", st.compareAccept, mediaTypeDiff)
+	}
+
+	// Fallo upstream: 500 → error, sin diff.
+	st.mu.Lock()
+	st.compareStatus = http.StatusInternalServerError
+	st.mu.Unlock()
+	if _, err := ad.GetCommitDiff(context.Background(), repo, "base-sha", "head-sha"); err == nil {
+		t.Error("el 500 del compare debe devolver error")
 	}
 }
 

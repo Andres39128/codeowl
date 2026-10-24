@@ -33,7 +33,13 @@ type timelineStub struct {
 	commitsJSON    string // GET .../commits
 	commitDiff     map[string]string
 	commitDiffCode map[string]int // sha → status; default 200 si hay fixture
-	discussions    struct {
+	// Endpoint compare (GetCommitDiff, trazabilidad S4): from/to grabados
+	// para asserts, fixture JSON y status configurable.
+	compareCode int
+	compareJSON string
+	compareFrom string
+	compareTo   string
+	discussions struct {
 		code int
 		body string
 	}
@@ -61,6 +67,16 @@ func (s *timelineStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
+	case r.URL.Path == "/api/v4/projects/7/repository/compare":
+		s.compareFrom = r.URL.Query().Get("from")
+		s.compareTo = r.URL.Query().Get("to")
+		code := s.compareCode
+		if code == 0 {
+			code = http.StatusOK
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(s.compareJSON))
 	case r.URL.Path == discussionsPath:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(s.discussions.code)
@@ -101,6 +117,39 @@ func glCommitJSON(id, date string) string {
 }
 
 const aGoDiff = `[{"old_path":"a.go","new_path":"a.go","diff":"@@ -1 +1 @@\n-old\n+new\n"}]`
+
+// TestGetCommitDiffReensambladoYError (trazabilidad S4/T2): la API v4 no
+// sirve diff plano — el compare trae los archivos como JSON (solo hunks) y
+// se reensamblan con encabezados git (mismo formato que GetDiff); el fallo
+// upstream (500) se devuelve como error.
+func TestGetCommitDiffReensambladoYError(t *testing.T) {
+	st := &timelineStub{compareJSON: `{"diffs":[` +
+		`{"old_path":"a.go","new_path":"a.go","diff":"@@ -1 +1 @@\n-old\n+new\n","deleted_file":false,"renamed_file":false},` +
+		`{"old_path":"viejo.go","new_path":"nuevo.go","diff":"@@ -1 +1 @@\n-x\n+y\n","deleted_file":true,"renamed_file":true}` +
+		`]}`}
+	ad, repo := newTimelineEnv(t, st)
+
+	diff, err := ad.GetCommitDiff(context.Background(), repo, "base-sha", "head-sha")
+	if err != nil {
+		t.Fatalf("GetCommitDiff: %v", err)
+	}
+	want := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n" +
+		"diff --git a/viejo.go b/nuevo.go\n--- a/viejo.go\n+++ b/nuevo.go\n@@ -1 +1 @@\n-x\n+y\n"
+	if diff != want {
+		t.Errorf("diff reensamblado:\n got %q\nwant %q", diff, want)
+	}
+	if st.compareFrom != "base-sha" || st.compareTo != "head-sha" {
+		t.Errorf("from/to del compare: got %q/%q", st.compareFrom, st.compareTo)
+	}
+
+	// Fallo upstream: 500 → error, sin diff.
+	st.mu.Lock()
+	st.compareCode = http.StatusInternalServerError
+	st.mu.Unlock()
+	if _, err := ad.GetCommitDiff(context.Background(), repo, "base-sha", "head-sha"); err == nil {
+		t.Error("el 500 del compare debe devolver error")
+	}
+}
 
 // TestFetchPRTimelinePatchesThreads verifica el mapeo feliz (§6 F5): fecha
 // parseada, patch reensamblado con encabezados git, threads solo de notas

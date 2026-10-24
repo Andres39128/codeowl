@@ -25,17 +25,17 @@ Salida solo en dashboard: no hay PR donde publicar.
 ## Tasks
 
 - T1 (S6): migración 0011 + store (direct_pushes, reviews polimórfico,
-  queries upsert/list/get) + tests. [pending]
+  queries upsert/list/get) + tests. [184210af]
 - T2 (S4): webhook push GitHub + GitLab (parse, filtro rama base, dedup,
   enqueue PushReviewJob) + adapter GetCommitDiff (compare API ambos VCS)
-  + tests. [pending]
+  + tests. [184210af]
 - T3 (S2, S5): PushReviewJob — pipeline reutilizado con target push (diff
   before..after, SAST + agentes + resumen, sin publicación), stale si llega
   push nuevo + tests de integración. [pending]
 - T4 (S1): API — GET /api/pushes (lista), GET /api/pushes/{id} (detalle:
-  resumen, findings, diff) + tests. [pending]
+  resumen, findings, diff) + tests. [184210af]
 - T5 (S1): dashboard — página Trazabilidad (lista + detalle + nav) reusando
-  componentes del detalle de PR + tests. [pending]
+  componentes del detalle de PR + tests. [184210af]
 - T6 (docs): guía §3.3/§3.6 (modelo y flujo push), mapa, guía_usuario +
   log de cierre. [pending]
 

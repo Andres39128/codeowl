@@ -17,6 +17,7 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
+	"github.com/Andres39128/codeowl/backend/internal/vcs"
 )
 
 // Cabeceras de entrega de GitLab (§9.3): Standard Webhooks (signing token) y
@@ -41,11 +42,19 @@ type webhookPayload struct {
 	ObjectAttributes json.RawMessage `json:"object_attributes"`
 	Changes          *glChanges      `json:"changes"`
 	MergeRequest     *glMRRef        `json:"merge_request"` // presente en note sobre MR
+
+	// Push directo (trazabilidad-merges S4): GitLab manda el committer como
+	// user_username escalar (no objeto user) y la ref completa refs/heads/….
+	UserUsername string `json:"user_username"`
+	Ref          string `json:"ref"`
+	Before       string `json:"before"`
+	After        string `json:"after"`
 }
 
 type glProject struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	DefaultBranch string `json:"default_branch"` // rama base (push, S4)
 }
 
 type glUser struct {
@@ -239,9 +248,13 @@ func (a *Adapter) verify(ctx context.Context, repo store.Repository, r *http.Req
 // rama base (retarget) o la marca draft (solo draft→ready — la vuelta a draft
 // se descarta, mismo tratamiento que converted_to_draft en GitHub; título,
 // labels y descripción también). note pasa cruda: handleNote filtra
-// noteable_type, mención y anti-bucle.
+// noteable_type, mención y anti-bucle. Push directo pasa crudo
+// (trazabilidad S4): la rama base y los SHAs válidos los filtra handlePush,
+// que necesita el default_branch del payload.
 func filterEvent(p *webhookPayload) bool {
 	switch p.ObjectKind {
+	case "push":
+		return true
 	case "merge_request":
 		if p.ObjectAttributes == nil {
 			return false
@@ -278,7 +291,50 @@ func (a *Adapter) dispatch(ctx context.Context, repo store.Repository, p *webhoo
 		return a.handleMergeRequest(ctx, repo, p)
 	case "note":
 		return a.handleNote(ctx, repo, p)
+	case "push":
+		return a.handlePush(ctx, repo, p)
 	}
+	return nil
+}
+
+// handlePush procesa el evento push (trazabilidad-merges S4): solo los
+// pushes a la rama base son trazables — las ramas de feature se analizan
+// al abrir el MR (S3) — y crear/borrar rama (before/after todo-ceros) no
+// tiene ventana que analizar. Pasa → upsert idempotente por (repo, after)
+// y encola el PushReviewJob con el pipeline completo, sin publicación en
+// el VCS (S5): la salida vive en el dashboard.
+func (a *Adapter) handlePush(ctx context.Context, repo store.Repository, p *webhookPayload) error {
+	if p.Ref != "refs/heads/"+p.Project.DefaultBranch {
+		slog.InfoContext(ctx, "webhook gitlab: push fuera de la rama base, descartado",
+			"ref", p.Ref, "repo", repo.Owner+"/"+repo.Name)
+		return nil
+	}
+	if vcs.IsZeroSHA(p.Before) || vcs.IsZeroSHA(p.After) {
+		slog.InfoContext(ctx, "webhook gitlab: push de crear/borrar rama, descartado", "ref", p.Ref)
+		return nil
+	}
+	row, err := a.st.UpsertDirectPush(ctx, store.UpsertDirectPushParams{
+		RepositoryID: repo.ID,
+		Branch:       p.Project.DefaultBranch,
+		BeforeSha:    p.Before,
+		AfterSha:     p.After,
+		Committer:    p.UserUsername,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert del push directo %s: %w", p.After, err)
+	}
+	args, err := json.Marshal(jobs.PushReviewJobArgs{
+		RepositoryID: repo.ID,
+		PushID:       row.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("serializando args del PushReviewJob: %w", err)
+	}
+	if err := a.jq.Enqueue(ctx, jobs.KindPushReview, args); err != nil {
+		return fmt.Errorf("encolando PushReviewJob del push %s: %w", p.After, err)
+	}
+	slog.InfoContext(ctx, "webhook gitlab: push directo a la rama base",
+		"repo", repo.Owner+"/"+repo.Name, "branch", row.Branch, "push_id", row.ID, "after", p.After)
 	return nil
 }
 

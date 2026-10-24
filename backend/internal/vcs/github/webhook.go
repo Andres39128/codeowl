@@ -20,6 +20,7 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
+	"github.com/Andres39128/codeowl/backend/internal/vcs"
 )
 
 // Cabeceras de entrega de GitHub (§9.3): evento, firma y delivery GUID.
@@ -39,6 +40,13 @@ type webhookPayload struct {
 	Comment     *ghComment     `json:"comment"`
 	Changes     *ghChanges     `json:"changes"`
 	Repository  ghRepository   `json:"repository"`
+
+	// Push directo (trazabilidad-merges S4): ref completa (refs/heads/…),
+	// ventana before..after y el committer del push.
+	Ref    string  `json:"ref"`
+	Before string  `json:"before"`
+	After  string  `json:"after"`
+	Sender ghActor `json:"sender"`
 }
 
 type ghPullRequest struct {
@@ -84,8 +92,9 @@ type ghChanges struct {
 }
 
 type ghRepository struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	DefaultBranch string `json:"default_branch"` // rama base (push, S4)
 }
 
 // HandleWebhook es el handler de POST /webhooks/github (§3.5/§9.3). Procesa
@@ -190,6 +199,8 @@ func (a *Adapter) HandleWebhook(ctx context.Context, w http.ResponseWriter, r *h
 		err = a.handleIssueComment(ctx, repo, &p)
 	case "pull_request_review_comment":
 		err = a.handleReviewComment(ctx, repo, &p)
+	case "push":
+		err = a.handlePush(ctx, repo, &p)
 	}
 	if err != nil {
 		// Upsert/enqueue fallido (p. ej. BD caída): 5xx para re-entrega —
@@ -203,9 +214,13 @@ func (a *Adapter) HandleWebhook(ctx context.Context, w http.ResponseWriter, r *h
 // filterEvent aplica el filtro de eventos suscritos (§3.5): pull_request en
 // opened/synchronize/reopened/ready_for_review, edited solo por retarget
 // (changes.base), closed; comentarios created en la conversación o en un
-// hilo inline. Todo lo demás devuelve false.
+// hilo inline. Push directo pasa crudo (trazabilidad S4): la rama base y
+// los SHAs válidos los filtra handlePush, que necesita el default_branch
+// del payload. Todo lo demás devuelve false.
 func filterEvent(event string, p *webhookPayload) bool {
 	switch event {
+	case "push":
+		return true
 	case "pull_request":
 		if p.PullRequest == nil {
 			return false
@@ -300,6 +315,47 @@ func (a *Adapter) handlePullRequest(ctx context.Context, repo store.Repository, 
 	if err := a.jq.Enqueue(ctx, jobs.KindReview, args); err != nil {
 		return fmt.Errorf("encolando ReviewJob del PR %d: %w", pr.Number, err)
 	}
+	return nil
+}
+
+// handlePush procesa el evento push (trazabilidad-merges S4): solo los
+// pushes a la rama base son trazables — las ramas de feature se analizan
+// al abrir el PR (S3) — y crear/borrar rama (before/after todo-ceros) no
+// tiene ventana que analizar. Pasa → upsert idempotente por (repo, after)
+// y encola el PushReviewJob con el pipeline completo, sin publicación en
+// el VCS (S5): la salida vive en el dashboard.
+func (a *Adapter) handlePush(ctx context.Context, repo store.Repository, p *webhookPayload) error {
+	if p.Ref != "refs/heads/"+p.Repository.DefaultBranch {
+		slog.InfoContext(ctx, "webhook github: push fuera de la rama base, descartado",
+			"ref", p.Ref, "repo", repo.Owner+"/"+repo.Name)
+		return nil
+	}
+	if vcs.IsZeroSHA(p.Before) || vcs.IsZeroSHA(p.After) {
+		slog.InfoContext(ctx, "webhook github: push de crear/borrar rama, descartado", "ref", p.Ref)
+		return nil
+	}
+	row, err := a.st.UpsertDirectPush(ctx, store.UpsertDirectPushParams{
+		RepositoryID: repo.ID,
+		Branch:       p.Repository.DefaultBranch,
+		BeforeSha:    p.Before,
+		AfterSha:     p.After,
+		Committer:    p.Sender.Login,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert del push directo %s: %w", p.After, err)
+	}
+	args, err := json.Marshal(jobs.PushReviewJobArgs{
+		RepositoryID: repo.ID,
+		PushID:       row.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("serializando args del PushReviewJob: %w", err)
+	}
+	if err := a.jq.Enqueue(ctx, jobs.KindPushReview, args); err != nil {
+		return fmt.Errorf("encolando PushReviewJob del push %s: %w", p.After, err)
+	}
+	slog.InfoContext(ctx, "webhook github: push directo a la rama base",
+		"repo", repo.Owner+"/"+repo.Name, "branch", row.Branch, "push_id", row.ID, "after", p.After)
 	return nil
 }
 

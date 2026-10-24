@@ -313,6 +313,38 @@ func (a *Adapter) GetDiff(ctx context.Context, repo *store.Repository, pr *store
 	}
 }
 
+// GetCommitDiff arma el diff unificado before...after de un push directo a
+// la rama base (trazabilidad-merges S4): el endpoint compare de la API v4
+// trae los archivos como JSON (solo hunks) y se reensamblan con encabezados
+// git, el mismo formato que GetDiff — insumo del PushReviewJob.
+func (a *Adapter) GetCommitDiff(ctx context.Context, repo *store.Repository, before, after string) (string, error) {
+	token, err := a.repoToken(repo)
+	if err != nil {
+		return "", fmt.Errorf("token para el diff del push: %w", err)
+	}
+	var out struct {
+		Diffs []glAPIDiff `json:"diffs"`
+	}
+	path := fmt.Sprintf("%s/api/v4/projects/%d/repository/compare?from=%s&to=%s",
+		a.apiBase(repo), repo.ExternalID, url.QueryEscape(before), url.QueryEscape(after))
+	status, err := a.doJSON(ctx, http.MethodGet, path, token, nil, &out)
+	if err != nil {
+		return "", fmt.Errorf("comparando %s...%s: %w", before, after, err)
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("comparando %s...%s: status %d", before, after, status)
+	}
+	var sb strings.Builder
+	for _, f := range out.Diffs {
+		fmt.Fprintf(&sb, "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n", f.OldPath, f.NewPath, f.OldPath, f.NewPath)
+		sb.WriteString(f.Diff)
+		if !strings.HasSuffix(f.Diff, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String(), nil
+}
+
 // ListOpenPRs lista los MRs abiertos del repo — insumo del ReconcileJob de la
 // reconexión (§3.5). El SHA de la base no viene en el listado: se resuelve el
 // tip por rama target vía branchTip (cache §3.6.1.1).

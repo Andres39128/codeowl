@@ -291,6 +291,37 @@ func (a *Adapter) GetDiff(ctx context.Context, repo *store.Repository, pr *store
 	return string(b), nil
 }
 
+// GetCommitDiff produce el diff unificado before...after de un push
+// directo a la rama base (trazabilidad-merges S4): el mismo endpoint
+// compare con media type de diff que GetDiff — tres puntos, diff contra el
+// merge-base — sobre los SHAs de la ventana del push. El cuerpo es el diff
+// crudo, insumo del PushReviewJob.
+func (a *Adapter) GetCommitDiff(ctx context.Context, repo *store.Repository, before, after string) (string, error) {
+	token, err := a.repoToken(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("token de instalación para el diff del push: %w", err)
+	}
+	req, err := newAPIRequest(ctx, http.MethodGet, a.baseURL,
+		fmt.Sprintf("/repos/%s/%s/compare/%s...%s", repo.Owner, repo.Name, before, after),
+		token, mediaTypeDiff, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("comparando %s...%s: %w", before, after, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", apiError(http.MethodGet, req.URL.Path, resp.StatusCode, resp.Body)
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("leyendo diff del push %s: %w", after, err)
+	}
+	return string(b), nil
+}
+
 // ListOpenPRs lista los PRs abiertos del repo — insumo del ReconcileJob de
 // la reconexión (§3.5). Pagina hasta agotar.
 func (a *Adapter) ListOpenPRs(ctx context.Context, repo *store.Repository) ([]vcs.OpenPR, error) {

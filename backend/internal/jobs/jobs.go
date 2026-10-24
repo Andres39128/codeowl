@@ -26,13 +26,14 @@ import (
 // Kinds de los jobs del dominio (mapa: backend.jobs). El IndexJob (F4) es
 // la indexación RAG del repo.
 const (
-	KindReview    = "review"
-	KindChat      = "chat" // F2
-	KindCleanup   = "cleanup"
-	KindRotation  = "rotation"
-	KindReconcile = "reconcile"
-	KindIndex     = "index"   // F4
-	KindMetrics   = "metrics" // F5
+	KindReview     = "review"
+	KindChat       = "chat" // F2
+	KindCleanup    = "cleanup"
+	KindRotation   = "rotation"
+	KindReconcile  = "reconcile"
+	KindIndex      = "index"       // F4
+	KindMetrics    = "metrics"     // F5
+	KindPushReview = "push_review" // trazabilidad-merges S4
 )
 
 // Colas River (§9.6): review y chat corren con slots propios — el SLO de
@@ -137,6 +138,18 @@ type MetricsJobArgs struct {
 }
 
 func (MetricsJobArgs) Kind() string { return KindMetrics }
+
+// PushReviewJobArgs son los argumentos del PushReviewJob
+// (trazabilidad-merges S4): el push directo a la rama base que dispara el
+// pipeline completo — el diff before..after lo resuelve el worker vía
+// GetCommitDiff; la salida vive solo en el dashboard, sin publicación en
+// el VCS.
+type PushReviewJobArgs struct {
+	RepositoryID int64 `json:"repository_id"`
+	PushID       int64 `json:"push_id"`
+}
+
+func (PushReviewJobArgs) Kind() string { return KindPushReview }
 
 // Worker es lo que Register acepta: un worker River concreto de este
 // paquete. Un método de interfaz no puede ser genérico, así que cada worker
@@ -262,16 +275,16 @@ func uniqueWhileAliveStates() []rivertype.JobState {
 	}
 }
 
-// insertOpts resuelve la cola y las opciones por kind: review e index
-// comparten la cola review y el tope de intentos (§9.6/§9.7; review además
-// unicidad §3.6.1.4, index unicidad por repo §9.6); chat lleva su cola con
-// tope de intentos; metrics va a ops con reintentos baratos y SIN unicidad
-// (§6 F5: cada cierre encola el suyo — el recompute del worker es
-// idempotente); el resto va a ops.
+// insertOpts resuelve la cola y las opciones por kind: review, index y
+// push_review comparten la cola review y el tope de intentos (§9.6/§9.7;
+// review además unicidad §3.6.1.4, index unicidad por repo §9.6, push_review
+// unicidad por push — S4); chat lleva su cola con tope de intentos; metrics
+// va a ops con reintentos baratos y SIN unicidad (§6 F5: cada cierre encola
+// el suyo — el recompute del worker es idempotente); el resto va a ops.
 func insertOpts(kind string) *river.InsertOpts {
 	opts := &river.InsertOpts{Queue: QueueOps}
 	switch kind {
-	case KindReview, KindIndex:
+	case KindReview, KindIndex, KindPushReview:
 		opts.Queue = QueueReview
 		opts.MaxAttempts = reviewMaxAttempts
 		opts.UniqueOpts = river.UniqueOpts{ByArgs: true, ByState: uniqueWhileAliveStates()}

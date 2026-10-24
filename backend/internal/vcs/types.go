@@ -79,3 +79,14 @@ type OpenPR struct {
 	BaseSHA string
 	Draft   bool
 }
+
+// zeroSHA es el SHA-1 todo-ceros (40 '0'): el VCS lo manda en before/after
+// cuando el push crea o borra una rama — no hay ventana before..after que
+// analizar (trazabilidad-merges S4).
+const zeroSHA = "0000000000000000000000000000000000000000"
+
+// IsZeroSHA dice si el SHA es el todo-ceros de crear/borrar rama: el filtro
+// del webhook push lo descarta (S4). Compartido por ambos adapters.
+func IsZeroSHA(sha string) bool {
+	return sha == zeroSHA
+}

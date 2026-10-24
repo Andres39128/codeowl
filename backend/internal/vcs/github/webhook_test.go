@@ -15,12 +15,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Andres39128/codeowl/backend/internal/config"
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
@@ -193,6 +195,23 @@ func prPayload(repoID int64, number int64, action, head, base, baseRef string, m
 	return payload
 }
 
+// pushPayload arma el payload de un evento push (trazabilidad S4): ref
+// completa (refs/heads/…), ventana before..after, el sender del push y la
+// rama base del repo en el payload.
+func pushPayload(repoID int64, ref, before, after, sender string) map[string]any {
+	return map[string]any{
+		"ref":    ref,
+		"before": before,
+		"after":  after,
+		"sender": map[string]any{"login": sender, "type": "User"},
+		"repository": map[string]any{
+			"id":             repoID,
+			"name":           "repo",
+			"default_branch": "main",
+		},
+	}
+}
+
 // serve ejecuta el request y verifica el status esperado.
 func serve(t *testing.T, e *webhookEnv, req *http.Request, wantStatus int) {
 	t.Helper()
@@ -209,6 +228,16 @@ func (e *webhookEnv) getPR(t *testing.T, repoID, number int64) (store.PullReques
 	return e.st.GetPullRequestByRepoNumber(context.Background(), store.GetPullRequestByRepoNumberParams{
 		RepositoryID: repoID, Number: number,
 	})
+}
+
+// getDirectPushes lista los pushes directos del repo (trazabilidad S4).
+func (e *webhookEnv) getDirectPushes(t *testing.T, repoID int64) []store.ListDirectPushesRow {
+	t.Helper()
+	rows, err := e.st.ListDirectPushes(context.Background(), pgtype.Int8{Int64: repoID, Valid: true})
+	if err != nil {
+		t.Fatalf("ListDirectPushes: %v", err)
+	}
+	return rows
 }
 
 func TestWebhookFirmaValidaPasaEInvalidaRechaza(t *testing.T) {
@@ -783,7 +812,8 @@ func TestWebhookEventoNoSuscritoSeDescarta(t *testing.T) {
 	e := newWebhookEnv(t)
 	repo := e.newRepo(t, true)
 
-	serve(t, e, createSignedPayload(t, "push", map[string]any{
+	// push está suscrito desde S4; create (crear rama/tag) y ping no.
+	serve(t, e, createSignedPayload(t, "create", map[string]any{
 		"repository": map[string]any{"id": repo.ExternalID},
 	}), http.StatusOK)
 	serve(t, e, createSignedPayload(t, "ping", map[string]any{
@@ -792,5 +822,77 @@ func TestWebhookEventoNoSuscritoSeDescarta(t *testing.T) {
 
 	if e.q.count() != 0 {
 		t.Errorf("eventos no suscritos no encolan: jobs=%d", e.q.count())
+	}
+}
+
+// TestWebhookPushRamaBaseUpsertYEncola (S4): el push a la rama base
+// registra el direct_push (branch = default_branch, committer = sender) y
+// encola el PushReviewJob apuntando a la fila creada.
+func TestWebhookPushRamaBaseUpsertYEncola(t *testing.T) {
+	e := newWebhookEnv(t)
+	repo := e.newRepo(t, true)
+
+	serve(t, e, createSignedPayload(t, "push",
+		pushPayload(repo.ExternalID, "refs/heads/main", "before-aaa", "after-aaa", "directo")), http.StatusOK)
+
+	rows := e.getDirectPushes(t, repo.ID)
+	if len(rows) != 1 {
+		t.Fatalf("el push a la rama base debe registrar 1 direct_push: %d filas", len(rows))
+	}
+	push := rows[0]
+	if push.Branch != "main" || push.BeforeSha != "before-aaa" ||
+		push.AfterSha != "after-aaa" || push.Committer != "directo" {
+		t.Errorf("upsert del push: got %+v", push)
+	}
+	if e.q.count() != 1 {
+		t.Fatalf("el push debe encolar 1 job: jobs=%d", e.q.count())
+	}
+	kind, args := e.q.last()
+	if kind != jobs.KindPushReview {
+		t.Errorf("kind: got %q want %q", kind, jobs.KindPushReview)
+	}
+	var jobArgs jobs.PushReviewJobArgs
+	if err := json.Unmarshal(args, &jobArgs); err != nil {
+		t.Fatalf("args del job: %v", err)
+	}
+	if jobArgs.RepositoryID != repo.ID || jobArgs.PushID != push.ID {
+		t.Errorf("args del PushReviewJob: got %+v", jobArgs)
+	}
+}
+
+// TestWebhookPushFeatureBranchNoCreaNada (S3/S4): los pushes a ramas de
+// feature no se analizan — se analizan cuando abran el PR.
+func TestWebhookPushFeatureBranchNoCreaNada(t *testing.T) {
+	e := newWebhookEnv(t)
+	repo := e.newRepo(t, true)
+
+	serve(t, e, createSignedPayload(t, "push",
+		pushPayload(repo.ExternalID, "refs/heads/feature-x", "before-aaa", "after-aaa", "directo")), http.StatusOK)
+
+	if rows := e.getDirectPushes(t, repo.ID); len(rows) != 0 {
+		t.Errorf("un push a rama de feature no registra direct_push: %d filas", len(rows))
+	}
+	if e.q.count() != 0 {
+		t.Errorf("un push a rama de feature no encola: jobs=%d", e.q.count())
+	}
+}
+
+// TestWebhookPushCerosNoCreaNada (S4): before/after todo-ceros (40 '0') es
+// crear/borrar rama — no hay ventana before..after que analizar.
+func TestWebhookPushCerosNoCreaNada(t *testing.T) {
+	e := newWebhookEnv(t)
+	repo := e.newRepo(t, true)
+	ceros := strings.Repeat("0", 40)
+
+	serve(t, e, createSignedPayload(t, "push",
+		pushPayload(repo.ExternalID, "refs/heads/main", ceros, "after-aaa", "directo")), http.StatusOK)
+	serve(t, e, createSignedPayload(t, "push",
+		pushPayload(repo.ExternalID, "refs/heads/main", "before-aaa", ceros, "directo")), http.StatusOK)
+
+	if rows := e.getDirectPushes(t, repo.ID); len(rows) != 0 {
+		t.Errorf("crear/borrar rama no registra direct_push: %d filas", len(rows))
+	}
+	if e.q.count() != 0 {
+		t.Errorf("crear/borrar rama no encola: jobs=%d", e.q.count())
 	}
 }
