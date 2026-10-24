@@ -320,6 +320,11 @@ func TestF3ReviewConfigPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 
 	// El PR existe antes de la corrida con la identidad del fixture: el
 	// chequeo stale (§3.6.1.3) compara contra esta fila.

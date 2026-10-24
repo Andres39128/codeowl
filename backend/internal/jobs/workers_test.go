@@ -73,6 +73,11 @@ func wRepo(t *testing.T, st *store.Store) store.Repository {
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(context.Background(), repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	return repo
 }
 
@@ -249,7 +254,7 @@ func (q *wQueue) Enqueue(_ context.Context, kind string, _ json.RawMessage) erro
 	return nil
 }
 func (q *wQueue) CancelPendingByPR(context.Context, int64) (int, error) { return 0, nil }
-func (q *wQueue) Register(...Worker) error                             { return nil }
+func (q *wQueue) Register(...Worker) error                              { return nil }
 func (q *wQueue) Start(context.Context) error {
 	return nil
 }
@@ -465,9 +470,9 @@ func TestReviewJobWorkerReencoloTx(t *testing.T) {
 	// ese head que deben existir al cerrar el job (1 = el re-encolado, o el
 	// original cuando la identidad no cambió; 0 = cerrado no re-encola).
 	each := []struct {
-		name    string
-		mutar   func(t *testing.T, st *store.Store, prID int64) string
-		espera  int
+		name   string
+		mutar  func(t *testing.T, st *store.Store, prID int64) string
+		espera int
 	}{
 		{
 			name: "identidad cambiada re-encola",
@@ -877,7 +882,11 @@ func TestReconcileJobWorkerCierraPRs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id = $1", gl.ID)
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, gl.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	if err := w.Work(ctx, wJob(ReconcileJobArgs{RepositoryID: gl.ID}, 1, 1)); err == nil {
 		t.Error("la reconciliación de un VCS sin adapter debe fallar en F1")
 	}

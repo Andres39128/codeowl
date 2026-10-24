@@ -522,6 +522,10 @@ Regla: **todo bug fix llega con el test que lo habría atrapado.** El testing qu
 - **CI (cada push, determinista):** el gateway se apunta a un stub OpenAI-compatible; se cubren validación de schema de salida, parsing, dedup, reintentos/failover del gateway y el plumbing del pipeline. Cero llamadas a proveedores reales: el CI no puede ser flaky ni quemar tokens en cada run.
 - **Evals de prompts (fuera de CI):** fixtures de diff reales (entrada → hallazgos esperados) contra el proveedor del mismo rol que producción (default `review`, configurable — evaluar un prompt con un modelo distinto del que reseña mide el drift equivocado), corridas manuales o nocturnas; el resultado queda registrado para detectar drift al cambiar un prompt. Un eval fallido no rompe el build — dispara ajuste del prompt y re-eval.
 
+**Regla: la suite de integración necesita la base de verdad.** Los tests que hablan con Postgres hacen `t.Skip` cuando no hay `DATABASE_URL`: sin la variable, `go test ./internal/...` informa `ok` sin ejecutar nada — un verde falso. Para dar por verde el backend: correr la suite **con** `DATABASE_URL` apuntando a la base de desarrollo y **sin el worker corriendo** (el worker toma los jobs que encolan los tests y les cambia el estado: `running` en vez de `available`). Verificar que el conteo de tests no es cero (`go test -v | grep -c '^=== RUN'`) y que la suite dejó la base como estaba.
+
+**Los fixtures limpian lo que crean.** Todo test que crea un repo en la base registra su borrado (`t.Cleanup` → `store.DeleteRepositoryCascade`): las filas de prueba sobreviven al proceso y aparecen en el dashboard como repos conectados. La query de cascada existe para eso — el producto nunca borra un repo (§3.5, la baja es el flag `enabled`).
+
 El mapeo finding→posición de comentario (§3.6) se testea igual: fixtures de hunks reales, incluyendo líneas que quedaron fuera del diff visible. El skip de corridas stale (incluido el re-encolo transaccional de §3.6) y el anti-bucle del chat (§3.5) también: fixture de webhook con head viejo o comentario del bot → cero llamadas LLM, cero publicaciones.
 
 ---

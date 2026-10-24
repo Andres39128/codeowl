@@ -108,9 +108,9 @@ func (q *capturedQueue) Enqueue(_ context.Context, kind string, args json.RawMes
 	return nil
 }
 func (q *capturedQueue) CancelPendingByPR(context.Context, int64) (int, error) { return 0, nil }
-func (q *capturedQueue) Register(...jobs.Worker) error                        { return nil }
-func (q *capturedQueue) Start(context.Context) error                          { return nil }
-func (q *capturedQueue) Stop(context.Context) error                           { return nil }
+func (q *capturedQueue) Register(...jobs.Worker) error                         { return nil }
+func (q *capturedQueue) Start(context.Context) error                           { return nil }
+func (q *capturedQueue) Stop(context.Context) error                            { return nil }
 
 // pending drena el canal sin bloquear: los jobs encolados hasta ahora.
 func (q *capturedQueue) pending() []enqueuedJob {
@@ -393,6 +393,11 @@ func TestGitHubWebhookToReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 
 	llmSrv := stubLLM(t, reviewerOut, summarizerOut)
 	encKey, err := store.Encrypt(masterKey, []byte("sk-stub-integration"))

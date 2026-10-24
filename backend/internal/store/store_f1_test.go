@@ -34,6 +34,11 @@ func f1Repo(t *testing.T, st *Store) Repository {
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(context.Background(), repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	return repo
 }
 
@@ -174,6 +179,11 @@ func TestRepositoriesCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRepository github: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	if !repo.Enabled || repo.ReviewDrafts || repo.Language != "es" || !repo.ChatOrgOnly {
 		t.Errorf("defaults de config: got %+v", repo)
 	}
@@ -210,6 +220,11 @@ func TestRepositoriesCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRepository gitlab: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, gl.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	glGot, err := st.GetRepository(ctx, gl.ID)
 	if err != nil {
 		t.Fatalf("GetRepository: %v", err)

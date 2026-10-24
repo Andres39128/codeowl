@@ -136,6 +136,13 @@ func (e *webhookEnv) newRepo(t *testing.T, enabled bool) store.Repository {
 			t.Fatalf("SetRepositoryEnabled(false): %v", err)
 		}
 	}
+	// El repo es efímero: sin este cleanup cada corrida deja una fila
+	// basura en la base (el dashboard los lista como repos conectados).
+	t.Cleanup(func() {
+		if err := e.st.DeleteRepositoryCascade(context.Background(), repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	return repo
 }
 

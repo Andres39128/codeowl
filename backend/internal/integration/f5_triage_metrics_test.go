@@ -142,6 +142,11 @@ func f5SeedRun(t *testing.T, st *store.Store, stubURL string) (store.Repository,
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	encKey, err := store.Encrypt(masterKey, []byte("sk-stub-integration"))
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -538,6 +543,11 @@ func TestF5MetricsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	pr, err := st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
 		RepositoryID: repo.ID, Number: f5PRNumber + 2,
 		Author: "dev-integration", State: "closed",

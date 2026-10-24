@@ -662,6 +662,11 @@ func TestPRsTriageScoresSortYJson(t *testing.T) {
 			t.Fatalf("UpdatePullRequestTriageScores(%s): %v", nombre, err)
 		}
 	}
+	// El primero: "cerrado" tiene impact 10 y effort null (un PR cerrado
+	// también ordena por score). Va primero para que el updated_at que
+	// pisa el score lo deje antes que slow/fast/top — el orden base que
+	// el comentario de arriba describe.
+	puntuar("cerrado", pgtype.Int4{}, pgtype.Int4{Int32: 10, Valid: true})
 	puntuar("slow", pgtype.Int4{Int32: 30, Valid: true}, pgtype.Int4{}) // impact null: sin índice
 	puntuar("fast", pgtype.Int4{Int32: 80, Valid: true}, pgtype.Int4{Int32: 65, Valid: true})
 	puntuar("top", pgtype.Int4{Int32: 30, Valid: true}, pgtype.Int4{})

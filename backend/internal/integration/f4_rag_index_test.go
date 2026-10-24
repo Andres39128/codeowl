@@ -252,6 +252,11 @@ func f4SeedRepo(t *testing.T, st *store.Store, masterKey []byte, stubURL string)
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := st.DeleteRepositoryCascade(ctx, repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
 	encKey, err := store.Encrypt(masterKey, []byte("sk-stub-integration"))
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)

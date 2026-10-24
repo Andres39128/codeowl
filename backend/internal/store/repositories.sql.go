@@ -77,6 +77,37 @@ func (q *Queries) DeleteRepository(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteRepositoryCascade = `-- name: DeleteRepositoryCascade :exec
+WITH d_comments AS (
+    DELETE FROM comments_sent
+    WHERE pull_request_id IN (SELECT id FROM pull_requests WHERE repository_id = $1)
+    RETURNING 1
+), d_findings AS (
+    DELETE FROM findings
+    WHERE review_id IN (SELECT id FROM reviews WHERE pull_request_id IN (SELECT id FROM pull_requests WHERE repository_id = $1))
+    RETURNING 1
+), d_reviews AS (
+    DELETE FROM reviews
+    WHERE pull_request_id IN (SELECT id FROM pull_requests WHERE repository_id = $1)
+    RETURNING 1
+), d_pulls AS (
+    DELETE FROM pull_requests WHERE repository_id = $1 RETURNING 1
+), d_index AS (
+    DELETE FROM repo_index WHERE repository_id = $1 RETURNING 1
+)
+DELETE FROM repositories AS r WHERE r.id = $1
+`
+
+// Borrado real del repo con sus dependientes: comments_sent, findings,
+// reviews, pull_requests y repo_index. Las FKs no tienen ON DELETE CASCADE
+// (§3.3) y el producto nunca borra un repo — la baja es el flag enabled
+// (§3.5). Esta query la usa la limpieza de los fixtures de test, que de
+// otro modo dejan repos basura en la base de desarrollo.
+func (q *Queries) DeleteRepositoryCascade(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteRepositoryCascade, id)
+	return err
+}
+
 const getRepository = `-- name: GetRepository :one
 SELECT id, vcs, external_id, owner, name, webhook_secret, secret_token, api_token, base_url, deploy_key, enabled, review_drafts, language, chat_org_only, created_at, updated_at FROM repositories WHERE id = $1
 `
