@@ -81,6 +81,18 @@ Si un hallazgo no corresponde, tocá **No aplica**: se guarda para auditoría,
 se atenúa y no vuelve a molestar en futuras revisiones del repositorio (y no
 cuenta como resuelto ni como persistente).
 
+## 6. Trazabilidad: cambios sin PR
+
+Si alguien sube cambios directo a la rama principal (sin abrir un Pull
+Request), la página **Trazabilidad** los registra y analiza igual que un
+PR: resumen, diagrama, diff y hallazgos — solo que el resultado vive acá,
+no en GitHub. Es tu registro de auditoría de lo que llegó a la rama
+principal por fuera del flujo normal.
+
+Cada entrada muestra quién subió (committer), qué rango de commits
+(before → after) y el estado del análisis; los hallazgos se marcan
+"No aplica" igual que en un PR.
+
 ## Si algo no funciona
 
 El panel **Cola de Jobs** muestra si una revisión está pendiente, en curso o

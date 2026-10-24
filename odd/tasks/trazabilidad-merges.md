@@ -37,8 +37,7 @@ Salida solo en dashboard: no hay PR donde publicar.
 - T5 (S1): dashboard — página Trazabilidad (lista + detalle + nav) reusando
   componentes del detalle de PR + tests. [184210af]
 - T6 (docs): guía §3.3/§3.6 (modelo y flujo push), mapa, guía_usuario +
-  log de cierre. [pending]
-
+  log de cierre. [d45c0c69]
 ## Log
 
 - L1 (pedido original, verbatim): "Quita todo lo de acme y adicionalmente
@@ -52,3 +51,15 @@ Salida solo en dashboard: no hay PR donde publicar.
   idéntico a un PR) para la profundidad del análisis.
 - L4: rama trazabilidad-merges apilada sobre resolucion-hallazgos (aún no
   mergeada — el stack dev sirve ambas).
+- L5: verificación — T1-T4 RED→GREEN por tarea (workers delegados con
+  verificación del parent: build+vet+tests). Suites: backend completa ok
+  (solo TestCancelPendingByPR preexistente en main; interleaving flakea
+  bajo carga pero pasa aislado), integración -tags integration 12+2 verde,
+  dashboard 141/141 (--pool=threads: /tmp con cuota llena). Fixes colaterales
+  en camino: DeleteRepositoryCascade→pushes (T1), ListDirectPushes una fila
+  por push (T4), handleDismissFinding polimórfico con test propio (T4),
+  stubs integration + f5/f6 migrados a los tipos nuevos (T3).
+- L6: medio ambiente — /tmp con cuota agotada por /tmp/mony-* (~24G) de otra
+  sesión: go necesita GOTMPDIR=/var/tmp/gotmp y vitest --pool=threads.
+  Pendientes de limpieza (bloqueadas por warden, piden aprobación del
+  usuario): BD codeowl_t2_scratch, /tmp/codeowl-t2-base.*, /var/tmp/codeowl-*.

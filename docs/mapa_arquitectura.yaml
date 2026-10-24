@@ -111,6 +111,11 @@ backend:
         GET /api/metrics suma resolution_per_week (S3): resueltos vs
         persistentes por repo/semana — ListResolutionPerWeek por self-join;
         tasa computada en la api
+      - >-
+        trazabilidad de pushes sin PR (trazabilidad-merges T4): GET /api/pushes
+        (lista con repo/estado/conteos), GET /api/pushes/{id} (detalle: review
+        completa + findings con dismissed), GET /api/pushes/{id}/diff (proxy a
+        GetCommitDiff, 502 upstream) — member-visible
       - "usuarios: GET/POST /api/users, PUT /api/users/{id} (F1, admin) — invitación, reset de contraseña, desactivación (guía §3.4)"
       - "cola de jobs: GET /api/jobs (F1) — lectura del panel de cola: pending/running/discarded por tipo (guía §9.9)"
       - "detalle de PR: GET /api/prs, GET /api/prs/{id}, GET /api/prs/{id}/diff (F3, member) — lista + findings + diff resuelto por el adapter (GetDiff) bajo demanda, sin copia en BD (guía §6 F3); GET /api/prs gana query params sort/state/repo/severity y risk_score en la lista (F5, T7)"
@@ -223,7 +228,32 @@ backend:
   jobs:
     ruta: backend/internal/jobs
     proposito: wrapper fino de la cola — interfaz JobQueue propia sobre River; enqueue transaccional y tipos de job del dominio
-    expone: ["interface JobQueue (Enqueue, Register)", "ReviewJob", "IndexJob", "CleanupJob (retención: webhook_deliveries, sessions expiradas, workdirs huérfanos /var/tmp/rev-*)", "ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto propio por comando)", "RotationJob (re-cifrado de las tablas cifradas al rotar la master key — on-demand desde el dashboard; transición dual MASTER_KEY + MASTER_KEY_PREVIOUS en api y worker durante la rotación, guía §9.2)", "ReconcileJob (reconexión de repo: consulta los PRs abiertos al VCS vía ListOpenPRs del adapter — sin LLM — y marca cerrados los que ya no figuran; on-demand desde el dashboard, la API solo encola — guía §3.5)", "MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias y resolución de threads — encolado al cierre del PR; sin LLM)"]
+    expone:
+      - "interface JobQueue (Enqueue, Register)"
+      - "ReviewJob"
+      - >-
+        PushReviewJob (trazabilidad-merges: mismo pipeline que ReviewJob
+        sobre un push directo — diff before..after vía GetCommitDiff, stale
+        si hay push más nuevo, SIN publicación — guía §3.3)
+      - "IndexJob"
+      - >-
+        CleanupJob (retención: webhook_deliveries, sessions expiradas,
+        workdirs huérfanos /var/tmp/rev-*)
+      - >-
+        ChatJob (asíncrono: el handler de webhook nunca llama LLM; presupuesto
+        propio por comando)
+      - >-
+        RotationJob (re-cifrado de las tablas cifradas al rotar la master key
+        — on-demand desde el dashboard; transición dual MASTER_KEY +
+        MASTER_KEY_PREVIOUS en api y worker durante la rotación, guía §9.2)
+      - >-
+        ReconcileJob (reconexión de repo: consulta los PRs abiertos al VCS
+        vía ListOpenPRs del adapter — sin LLM — y marca cerrados los que ya
+        no figuran; on-demand desde el dashboard, la API solo encola — guía
+        §3.5)
+      - >-
+        MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias
+        y resolución de threads — encolado al cierre del PR; sin LLM)
     depende_de: [store]
     pruebas: backend/internal/jobs/jobs_test.go
     fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob, ReconcileJob) / F2 (ChatJob) / F4 (IndexJob) / F5 (MetricsJob)
