@@ -26,14 +26,14 @@ no se tocan (auditoría §3.3).
 ## Tasks
 
 - T1 (S1, S2): backend — query del previo por PR + `persistent` en
-  findingView + `resolved[]` en GET /api/prs/{id} + tests. [pending]
+  findingView + `resolved[]` en GET /api/prs/{id} + tests. [87e065f1]
 - T2 (S2): dashboard — badge "Persistente" + sección colapsada "Resueltos
   en esta corrida (N)" en PrDetail + tests. [pending]
 - T3 (S3): backend — ListResolutionPerWeek (por repo/semana, excluye
-  huellas dismissadas) + extensión de métricas + tests. [pending]
-- T4 (S3): dashboard — tasa de resolución en la página de métricas + tests. [pending]
+  huellas dismissadas) + extensión de métricas + tests. [c16b7476] (fix colateral: DeleteRepositoryCascade + finding_dismissals [796bf327])
+- T4 (S3): dashboard — tasa de resolución en la página de métricas + tests. [fa8d86a6]
 - T5 (S5): docs — guía §3.3 (ciclo de vida del hallazgo) + mapa
-  arquitectura + log de cierre. [pending]
+  arquitectura + log de cierre. [1921f192]
 
 ## Log
 
@@ -45,3 +45,13 @@ no se tocan (auditoría §3.3).
 - L2: el usuario eligió "Comparación + métricas" sobre la pregunta de
   alcance (badge persistente + resueltos colapsados + tasa de resolución en
   métricas).
+- L3: verificación — backend: suite completa ok (api/store/review…), solo
+  falla TestCancelPendingByPR, PREEXISTENTE en main limpio (verificado con
+  stash); dashboard: 127/127. RED→GREEN por tarea. Fix colateral:
+  DeleteRepositoryCascade no borraba finding_dismissals (FK 0010).
+- L4: sqlc no rastrea columnas de window functions (LAG) en CTEs —
+  ListResolutionPerWeek usa self-join + NOT EXISTS para el predecesor
+  inmediato. La tasa por fila viaja como float (denominador ≥ 1 siempre).
+- L5: preexistente en dashboard: biome marca 2 errores a11y en
+  PrDetail.tsx L741 (role="group" redundante en details, S4) — están en
+  main; reportado al usuario, fuera del alcance de este feature.

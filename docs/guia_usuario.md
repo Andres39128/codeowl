@@ -64,12 +64,22 @@ aplica con un clic desde el comentario del PR (botón *Ver en GitHub*).
 ## 5. Verificá que quedó arreglado
 
 Después de aplicar el cambio y subirlo, dispará la revisión otra vez
-(**Revisar ahora** o el aviso automático). Si el hallazgo desapareció, quedó
-corregido; si la sugerencia muestra "✔ Aplicada", la herramienta detectó tu
-arreglo.
+(**Revisar ahora** o el aviso automático). La nueva corrida te lo dice sin
+que compares a ojo:
+
+- **Resueltos en esta corrida (N)**: sección colapsada al final de los
+  hallazgos con lo que ya no aparece — arreglos confirmados.
+- **↻ Persistente**: etiqueta en el hallazgo que reapareció — la misma
+  alerta de la corrida anterior sigue sin arreglarse. Priorizalo.
+- Si la sugerencia muestra "✔ Aplicada", la herramienta detectó tu arreglo.
+
+La página **Triage** suma la **tasa de resolución** (qué proporción de los
+hallazgos desaparece entre corridas) con el detalle de resueltos vs
+persistentes por repositorio.
 
 Si un hallazgo no corresponde, tocá **No aplica**: se guarda para auditoría,
-se atenúa y no vuelve a molestar en futuras revisiones del repositorio.
+se atenúa y no vuelve a molestar en futuras revisiones del repositorio (y no
+cuenta como resuelto ni como persistente).
 
 ## Si algo no funciona
 
