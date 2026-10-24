@@ -15,7 +15,7 @@ const createFinding = `-- name: CreateFinding :one
 
 INSERT INTO findings (review_id, file, line, severity, category, body, suggestion, source, verified)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at, accepted
+RETURNING id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at, accepted, github_comment_id
 `
 
 type CreateFindingParams struct {
@@ -59,12 +59,13 @@ func (q *Queries) CreateFinding(ctx context.Context, arg CreateFindingParams) (F
 		&i.Verified,
 		&i.CreatedAt,
 		&i.Accepted,
+		&i.GithubCommentID,
 	)
 	return i, err
 }
 
 const listFindingsByPR = `-- name: ListFindingsByPR :many
-SELECT f.id, f.review_id, f.file, f.line, f.severity, f.category, f.body, f.suggestion, f.source, f.verified, f.created_at, f.accepted
+SELECT f.id, f.review_id, f.file, f.line, f.severity, f.category, f.body, f.suggestion, f.source, f.verified, f.created_at, f.accepted, f.github_comment_id
 FROM findings f
 JOIN reviews r ON r.id = f.review_id
 WHERE r.pull_request_id = $1
@@ -94,6 +95,7 @@ func (q *Queries) ListFindingsByPR(ctx context.Context, pullRequestID int64) ([]
 			&i.Verified,
 			&i.CreatedAt,
 			&i.Accepted,
+			&i.GithubCommentID,
 		); err != nil {
 			return nil, err
 		}
@@ -106,7 +108,7 @@ func (q *Queries) ListFindingsByPR(ctx context.Context, pullRequestID int64) ([]
 }
 
 const listFindingsByReview = `-- name: ListFindingsByReview :many
-SELECT id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at, accepted FROM findings WHERE review_id = $1 ORDER BY id
+SELECT id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at, accepted, github_comment_id FROM findings WHERE review_id = $1 ORDER BY id
 `
 
 func (q *Queries) ListFindingsByReview(ctx context.Context, reviewID int64) ([]Finding, error) {
@@ -131,6 +133,7 @@ func (q *Queries) ListFindingsByReview(ctx context.Context, reviewID int64) ([]F
 			&i.Verified,
 			&i.CreatedAt,
 			&i.Accepted,
+			&i.GithubCommentID,
 		); err != nil {
 			return nil, err
 		}
@@ -158,5 +161,24 @@ type UpdateFindingAcceptedParams struct {
 // Null = sin evaluar; nunca se des-marca a null una vez escrito.
 func (q *Queries) UpdateFindingAccepted(ctx context.Context, arg UpdateFindingAcceptedParams) error {
 	_, err := q.db.Exec(ctx, updateFindingAccepted, arg.ID, arg.Accepted)
+	return err
+}
+
+const updateFindingGithubCommentID = `-- name: UpdateFindingGithubCommentID :exec
+UPDATE findings
+SET github_comment_id = $2
+WHERE id = $1
+`
+
+type UpdateFindingGithubCommentIDParams struct {
+	ID              int64
+	GithubCommentID pgtype.Text
+}
+
+// El publicador (§3.6.2) escribe el ID del comentario que produjo el
+// hallazgo: el dashboard permalinkea al comentario real, donde el bloque
+// suggestion de GitHub se aplica con un clic.
+func (q *Queries) UpdateFindingGithubCommentID(ctx context.Context, arg UpdateFindingGithubCommentIDParams) error {
+	_, err := q.db.Exec(ctx, updateFindingGithubCommentID, arg.ID, arg.GithubCommentID)
 	return err
 }

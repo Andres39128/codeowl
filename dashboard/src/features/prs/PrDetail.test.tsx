@@ -40,6 +40,8 @@ const findings: FindingView[] = [
 		suggestion: "if err != nil {\n\treturn err\n}",
 		source: "llm",
 		verified: true,
+		accepted: null,
+		github_comment_id: null,
 	},
 	{
 		id: 2,
@@ -52,6 +54,8 @@ const findings: FindingView[] = [
 		suggestion: null,
 		source: "llm",
 		verified: false,
+		accepted: null,
+		github_comment_id: null,
 	},
 	{
 		id: 3,
@@ -64,6 +68,8 @@ const findings: FindingView[] = [
 		suggestion: null,
 		source: "llm",
 		verified: null,
+		accepted: null,
+		github_comment_id: null,
 	},
 	{
 		id: 4,
@@ -76,6 +82,8 @@ const findings: FindingView[] = [
 		suggestion: null,
 		source: "sast",
 		verified: null,
+		accepted: null,
+		github_comment_id: null,
 	},
 ];
 
@@ -142,6 +150,46 @@ afterEach(cleanup);
 // La UI explica la semántica de cada badge: los linters (SAST) son
 // deterministas y no se verifican; los del LLM pasan por el Verifier.
 describe("ayuda de los hallazgos", () => {
+	it("la sugerencia se explica y ofrece copiar y el enlace al comentario", async () => {
+		const conComentario: PrDetailView = {
+			...detail,
+			findings: [
+				{
+					...findings[0],
+					github_comment_id: "4363709304",
+					accepted: false,
+				} as FindingView,
+			],
+		};
+		mockApi({ detail: conComentario, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo alto");
+		// Explica qué es la sugerencia.
+		expect(screen.getByText(/propuesta de código/i)).toBeTruthy();
+		// Copiar el código.
+		expect(screen.getByRole("button", { name: /copiar/i })).toBeTruthy();
+		// Enlace al comentario real del PR, donde GitHub lo aplica con un clic.
+		const enlace = screen.getByRole("link", { name: /ver en github/i });
+		expect(enlace.getAttribute("href")).toContain(
+			"https://github.com/acme/codeowl/pull/42#discussion_r4363709304",
+		);
+		// Distingue la sugerencia no aplicada de la aplicada.
+		expect(screen.getByText(/no aplicada/i)).toBeTruthy();
+	});
+
+	it("marca la sugerencia aplicada cuando el metrics job la evaluó", async () => {
+		const aplicada: PrDetailView = {
+			...detail,
+			findings: [{ ...findings[0], accepted: true } as FindingView],
+		};
+		mockApi({ detail: aplicada, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo alto");
+		expect(screen.getByText(/aplicada/i)).toBeTruthy();
+		expect(screen.queryByText(/no aplicada/i)).toBeNull();
+	});
 	it("los hallazgos SAST se marcan como deterministas, no como sin verificar", async () => {
 		mockApi({ detail, diff });
 		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
@@ -259,6 +307,8 @@ describe("filtros de hallazgos", () => {
 			suggestion: null,
 			source: "llm",
 			verified: null,
+			accepted: null,
+			github_comment_id: null,
 		};
 		const dosCorridas: PrDetailView = {
 			...detail,

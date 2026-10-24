@@ -86,6 +86,7 @@ type Store interface {
 	UpdateReviewStatus(ctx context.Context, arg store.UpdateReviewStatusParams) (store.Review, error)
 	UpdateReviewSummary(ctx context.Context, arg store.UpdateReviewSummaryParams) (store.Review, error)
 	CreateFinding(ctx context.Context, arg store.CreateFindingParams) (store.Finding, error)
+	UpdateFindingGithubCommentID(ctx context.Context, arg store.UpdateFindingGithubCommentIDParams) error
 	ListEnabledLlmProvidersByRole(ctx context.Context, role string) ([]store.LlmProvider, error)
 	GetCommentsSentByPRAndType(ctx context.Context, arg store.GetCommentsSentByPRAndTypeParams) ([]store.CommentsSent, error)
 	CreateCommentSent(ctx context.Context, arg store.CreateCommentSentParams) (store.CommentsSent, error)
@@ -233,6 +234,7 @@ type ReviewResult struct {
 // Finding es el hallazgo unificado del pipeline — de LLM o SAST — antes de
 // persistir y publicar (§3.3).
 type Finding struct {
+	ID         int64  // id de la fila en findings (asignado al persistir); 0 si el hallazgo aún no se persistió
 	File       string
 	Line       int32
 	Severity   string // high | medium | low (§3.3, conjunto cerrado)
@@ -526,12 +528,12 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	// Persistencia de los hallazgos de esta corrida (§3.3): verified con el
 	// veredicto del Verifier para lo verificado; null para SAST, lo filtrado
 	// por el perfil y lo que el verifier no pudo verificar.
-	for _, f := range publishable {
+	for i, f := range publishable {
 		verified := pgtype.Bool{} // null (§3.3)
 		if v, ok := verdicts[Fingerprint(f.File, f.Category, f.Anchor)]; ok {
 			verified = pgtype.Bool{Bool: v, Valid: true}
 		}
-		if _, err := st.CreateFinding(ctx, store.CreateFindingParams{
+		created, err := st.CreateFinding(ctx, store.CreateFindingParams{
 			ReviewID:   rev.ID,
 			File:       f.File,
 			Line:       f.Line,
@@ -541,9 +543,23 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 			Suggestion: pgText(f.Suggestion),
 			Source:     f.Source,
 			Verified:   verified,
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, fmt.Errorf("persistiendo el finding de %s: %w", f.File, err)
 		}
+		// El id de la fila viaja al publicador: es lo que permite asociar el
+		// hallazgo con el comentario que produce en el VCS (§3.6.2).
+		publishable[i].ID = created.ID
+	}
+	// toPublish es un subconjunto de publishable construido antes de
+	// persistir: se le asigna el id de su fila por huella (file|categoría|
+	// ancla), que el dedup deja única.
+	idPorHuella := make(map[string]int64, len(publishable))
+	for _, f := range publishable {
+		idPorHuella[Fingerprint(f.File, f.Category, f.Anchor)] = f.ID
+	}
+	for i := range toPublish {
+		toPublish[i].ID = idPorHuella[Fingerprint(toPublish[i].File, toPublish[i].Category, toPublish[i].Anchor)]
 	}
 
 	// (g) Summarizer: estadísticas del diff + recuento de hallazgos

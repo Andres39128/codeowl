@@ -9,6 +9,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -113,7 +114,20 @@ func (p *publisher) publishInline(ctx context.Context, f Finding, pos vcs.Commen
 		Category:      pgtype.Text{String: f.Category, Valid: true},
 		Anchor:        pgText(f.Anchor),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// El ID del comentario queda en el hallazgo: el dashboard permalinkea al
+	// comentario real, donde el bloque suggestion se aplica con un clic.
+	// Si esta escritura falla, el comentario ya está publicado en el VCS —
+	// un ID faltante no invalida la publicación, así que no se propaga.
+	if err := p.st.UpdateFindingGithubCommentID(ctx, store.UpdateFindingGithubCommentIDParams{
+		ID:              f.ID,
+		GithubCommentID: pgtype.Text{String: id, Valid: true},
+	}); err != nil {
+		slog.Warn("escribiendo el comment id del hallazgo", "finding", f.ID, "err", err)
+	}
+	return nil
 }
 
 // severityLabel mapea la severidad al rótulo del tema (§5.1: severidad =

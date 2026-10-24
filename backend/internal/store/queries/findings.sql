@@ -25,3 +25,11 @@ ORDER BY f.id;
 UPDATE findings
 SET accepted = $2
 WHERE id = $1;
+
+-- name: UpdateFindingGithubCommentID :exec
+-- El publicador (§3.6.2) escribe el ID del comentario que produjo el
+-- hallazgo: el dashboard permalinkea al comentario real, donde el bloque
+-- suggestion de GitHub se aplica con un clic.
+UPDATE findings
+SET github_comment_id = $2
+WHERE id = $1;

@@ -87,6 +87,8 @@ type Finding struct {
 	Verified   pgtype.Bool
 	CreatedAt  pgtype.Timestamptz
 	Accepted   pgtype.Bool
+	// ID del comentario publicado en el VCS para este hallazgo (perm-link del dashboard)
+	GithubCommentID pgtype.Text
 }
 
 type LlmProvider struct {

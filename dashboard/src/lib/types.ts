@@ -116,6 +116,12 @@ export interface FindingView {
 	category: string;
 	body: string;
 	suggestion: string | null;
+	/** Accepted: el metrics job (§6 F5) evaluó si la sugerencia terminó
+	 * aplicada. null = sin evaluar (el PR sigue abierto). */
+	accepted: boolean | null;
+	/** GithubCommentID: id del comentario que el hallazgo produjo en GitHub.
+	 * Con él se permalinkea al comentario real. */
+	github_comment_id: string | null;
 	source: "llm" | "sast";
 	verified: boolean | null;
 }

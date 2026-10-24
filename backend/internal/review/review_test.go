@@ -91,6 +91,8 @@ type stubStore struct {
 	reviews        map[int64]*store.Review
 	nextRev        int64
 	findings       []store.CreateFindingParams
+	// commentIDs: id del hallazgo → id del comentario publicado en el VCS.
+	commentIDs map[int64]string
 	comments       map[string][]store.CommentsSent // indexadas por type
 	nextCmt        int64
 	cheapProviders []store.LlmProvider                            // cola del rol cheap (verifier)
@@ -176,6 +178,18 @@ func (s *stubStore) CreateFinding(_ context.Context, arg store.CreateFindingPara
 	defer s.mu.Unlock()
 	s.findings = append(s.findings, arg)
 	return store.Finding{ID: int64(len(s.findings))}, nil
+}
+
+// UpdateFindingGithubCommentID registra el id del comentario publicado: el
+// stub lo guarda para que el test pueda verificar la asociación.
+func (s *stubStore) UpdateFindingGithubCommentID(_ context.Context, arg store.UpdateFindingGithubCommentIDParams) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.commentIDs == nil {
+		s.commentIDs = map[int64]string{}
+	}
+	s.commentIDs[arg.ID] = arg.GithubCommentID.String
+	return nil
 }
 
 func (s *stubStore) ListEnabledLlmProvidersByRole(_ context.Context, role string) ([]store.LlmProvider, error) {
@@ -524,6 +538,18 @@ func TestRunHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(d.vcs.suggestBods[0], "inyección SQL") {
 		t.Errorf("el comentario de sugerencia debe traer la explicación:\n%s", d.vcs.suggestBods[0])
+	}
+	// Cada hallazgo publica guarda el id del comentario que produjo (§3.6.2):
+	// el dashboard permalinkea al comentario real.
+	d.st.mu.Lock()
+	defer d.st.mu.Unlock()
+	if len(d.st.commentIDs) != 2 {
+		t.Fatalf("commentIDs = %v, querés 2 (uno por hallazgo inline)", d.st.commentIDs)
+	}
+	for findingID, commentID := range d.st.commentIDs {
+		if commentID != "suggestion-1" && commentID != "inline-1" {
+			t.Errorf("el hallazgo %d guardó el comment id %q, querés suggestion-1 o inline-1", findingID, commentID)
+		}
 	}
 	if strings.Contains(d.vcs.suggestBods[0], "```suggestion\n```suggestion") {
 		t.Errorf("la sugerencia quedó envuelta dos veces:\n%s", d.vcs.suggestBods[0])

@@ -71,8 +71,15 @@ func TestForwardSourceParseaMigracionesReales(t *testing.T) {
 	if eighth != 8 {
 		t.Errorf("octava versión: got %d want 8", eighth)
 	}
-	if _, err := src.Next(eighth); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("no hay novena versión: esperaba os.ErrNotExist, got %v", err)
+	ninth, err := src.Next(eighth)
+	if err != nil {
+		t.Fatalf("Next(8): %v", err)
+	}
+	if ninth != 9 {
+		t.Errorf("novena versión: got %d want 9", ninth)
+	}
+	if _, err := src.Next(ninth); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("no hay décima versión: esperaba os.ErrNotExist, got %v", err)
 	}
 
 	rc, id, err := src.ReadUp(1)

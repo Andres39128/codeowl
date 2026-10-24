@@ -21,6 +21,86 @@ import {
 	stateOf,
 } from "./view";
 
+/** Sugerencia del hallazgo: el cambio exacto que propone el modelo, listo
+ * para aplicar. En GitHub viaja como bloque `suggestion` (se aplica con un
+ * clic); acá se puede copiar y saltar al comentario real. */
+function Sugerencia({
+	suggestion,
+	accepted,
+	githubCommentID,
+	prURL,
+}: {
+	suggestion: string;
+	accepted: boolean | null;
+	githubCommentID: string | null;
+	prURL: string | null;
+}) {
+	const [copiado, setCopiado] = useState(false);
+
+	async function copiar() {
+		try {
+			await navigator.clipboard.writeText(suggestion);
+			setCopiado(true);
+			setTimeout(() => setCopiado(false), 2000);
+		} catch {
+			// Sin permiso de portapapeles (contexto no seguro): el código
+			// sigue visible para copiarlo a mano.
+			setCopiado(false);
+		}
+	}
+
+	return (
+		<div class="mt-2">
+			<div class="mb-1 flex flex-wrap items-center gap-2">
+				<h3 class="text-xs font-semibold">Sugerencia</h3>
+				<span
+					class="text-xs text-text-muted"
+					title="El cambio exacto que propone el modelo para arreglar lo que encontró: en GitHub se publica como bloque aplicable con un clic; acá lo podés copiar y pegar."
+				>
+					propuesta de código del modelo
+				</span>
+				{accepted === true && (
+					<span
+						class="text-xs text-severity-baja"
+						title="El metrics job (§6 F5) detectó el código de la sugerencia en un commit posterior: quedó aplicada."
+					>
+						✔ Aplicada
+					</span>
+				)}
+				{accepted === false && (
+					<span
+						class="text-xs text-text-muted"
+						title="El metrics job (§6 F5) evaluó la sugerencia y no encontró su código en ningún commit posterior."
+					>
+						○ No aplicada
+					</span>
+				)}
+				<button
+					type="button"
+					class="ml-auto rounded border border-border-subtle px-2 py-0.5 text-xs text-action-primary hover:bg-bg-elevated"
+					onClick={copiar}
+				>
+					{copiado ? "✓ Copiado" : "Copiar"}
+				</button>
+				{githubCommentID !== null && prURL !== null && (
+					<a
+						href={`${prURL}#discussion_r${githubCommentID}`}
+						target="_blank"
+						rel="noreferrer"
+						class="rounded border border-border-subtle px-2 py-0.5 text-xs text-action-primary hover:bg-bg-elevated"
+						title="Abre el comentario en GitHub, donde el bloque suggestion se aplica con un clic."
+					>
+						Ver en GitHub
+					</a>
+				)}
+			</div>
+			<pre class="overflow-auto rounded-md border border-border-subtle bg-bg-elevated p-3 text-xs">
+				<code>{suggestion}</code>
+			</pre>
+		</div>
+	);
+}
+
 /** Estado de verificación del hallazgo (F3 — Verifier): verificado, falso
  * positivo audit-only (no publicado al VCS) o sin verificar. Un hallazgo
  * SAST no se verifica nunca: el linter es determinista (§3.3) — por eso no
@@ -148,6 +228,13 @@ export function PrDetail({ prId }: { prId: number }) {
 	const state = stateOf(pr.state);
 	const reviewStatus = review !== null ? reviewStatusOf(review.status) : null;
 
+	// URL del PR en el VCS: el permalink del comentario real (donde el
+	// bloque suggestion de GitHub se aplica con un clic). GitLab usa #note_.
+	const prURL =
+		pr.repo.vcs === "gitlab"
+			? `https://gitlab.com/${pr.repo.owner}/${pr.repo.name}/-/merge_requests/${pr.number}`
+			: `https://github.com/${pr.repo.owner}/${pr.repo.name}/pull/${pr.number}`;
+
 	return (
 		<section class="min-w-0">
 			<a href="#/prs" class="text-sm text-text-muted hover:text-text-primary">
@@ -247,6 +334,10 @@ export function PrDetail({ prId }: { prId: number }) {
 							del LLM contra el código — "Verificado" = corroborado; "Falso
 							positivo" = no se publicó en el PR (solo auditoría); "Sin
 							verificar" = no se pudo contrastar y se publica igual.{" "}
+							<strong>Sugerencia</strong>: el cambio exacto que propone el
+							modelo para arreglar lo que encontró — en GitHub se publica como
+							bloque aplicable con un clic; acá lo copiás o saltás al
+							comentario.{" "}
 							<em>Pasa el mouse sobre cada badge para el detalle.</em>
 						</p>
 						{/* Filtros del revisor: acotan el conjunto sin perder el
@@ -395,14 +486,12 @@ export function PrDetail({ prId }: { prId: number }) {
 											</p>
 											{finding.suggestion !== null &&
 												finding.suggestion !== "" && (
-													<>
-														<h3 class="mt-2 mb-1 text-xs font-semibold">
-															Sugerencia
-														</h3>
-														<pre class="overflow-auto rounded-md border border-border-subtle bg-bg-elevated p-3 text-xs">
-															<code>{finding.suggestion}</code>
-														</pre>
-													</>
+													<Sugerencia
+														suggestion={finding.suggestion}
+														accepted={finding.accepted}
+														githubCommentID={finding.github_comment_id}
+														prURL={prURL}
+													/>
 												)}
 										</li>
 									);

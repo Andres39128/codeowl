@@ -252,6 +252,13 @@ type findingView struct {
 	Suggestion *string `json:"suggestion"`
 	Source     string  `json:"source"`
 	Verified   *bool   `json:"verified"`
+	// Accepted: el metrics job (§6 F5) marca si la sugerencia terminó
+	// aplicada. Null = sin evaluar (el PR sigue abierto).
+	Accepted *bool `json:"accepted"`
+	// GithubCommentID: id del comentario que este hallazgo produjo en el
+	// VCS. Con él el dashboard permalinkea al comentario real, donde el
+	// bloque suggestion de GitHub se aplica con un clic.
+	GithubCommentID *string `json:"github_comment_id"`
 }
 
 // prDetailView es el cuerpo de GET /api/prs/{id}: PR + última corrida +
@@ -374,6 +381,14 @@ func findingViewsOf(findings []store.Finding) []findingView {
 		if f.Verified.Valid {
 			b := f.Verified.Bool
 			v.Verified = &b
+		}
+		if f.Accepted.Valid {
+			b := f.Accepted.Bool
+			v.Accepted = &b
+		}
+		if f.GithubCommentID.Valid && f.GithubCommentID.String != "" {
+			s := f.GithubCommentID.String
+			v.GithubCommentID = &s
 		}
 		views = append(views, v)
 	}
