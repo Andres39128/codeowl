@@ -2,7 +2,13 @@
  * verificación, diff degradable y ancla de hallazgo (mapa:
  * dashboard.features.prs). */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/apiClient";
 import type {
@@ -47,6 +53,7 @@ const findings: FindingView[] = [
 		verified: true,
 		accepted: null,
 		github_comment_id: null,
+		dismissed: false,
 	},
 	{
 		id: 2,
@@ -61,6 +68,7 @@ const findings: FindingView[] = [
 		verified: false,
 		accepted: null,
 		github_comment_id: null,
+		dismissed: false,
 	},
 	{
 		id: 3,
@@ -75,6 +83,7 @@ const findings: FindingView[] = [
 		verified: null,
 		accepted: null,
 		github_comment_id: null,
+		dismissed: false,
 	},
 	{
 		id: 4,
@@ -89,6 +98,7 @@ const findings: FindingView[] = [
 		verified: null,
 		accepted: null,
 		github_comment_id: null,
+		dismissed: false,
 	},
 ];
 
@@ -222,7 +232,7 @@ describe("ayuda de los hallazgos", () => {
 		mockApi({ detail, diff });
 		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
 
-		const leyenda = (await screen.findByText(/Cómo leer esto/)).closest("p");
+		const leyenda = (await screen.findByText(/Cómo leer esto/))?.closest("p");
 		expect(leyenda).toBeTruthy();
 		expect(leyenda?.textContent).toContain("SAST");
 		expect(leyenda?.textContent).toContain("Verificación");
@@ -314,6 +324,7 @@ describe("filtros de hallazgos", () => {
 			verified: null,
 			accepted: null,
 			github_comment_id: null,
+			dismissed: false,
 		};
 		const dosCorridas: PrDetailView = {
 			...detail,
@@ -503,5 +514,84 @@ describe("detalle de corrida", () => {
 		// sobre el total crudo (5552+17215+5064+3614 = 31445).
 		expect(screen.getByText(/31[.,]445 tokens/)).toBeTruthy();
 		expect(screen.getByText(/5 alta/)).toBeTruthy();
+	});
+});
+
+describe("triage de hallazgos (S4)", () => {
+	it("marca no aplica y oculta los marcados por defecto", async () => {
+		const marcado: FindingView = {
+			id: 5,
+			review_id: 1,
+			file: "src/marcado.go",
+			line: 1,
+			severity: "low",
+			category: "style",
+			body: "Cuerpo marcado",
+			suggestion: null,
+			source: "llm",
+			verified: null,
+			accepted: null,
+			github_comment_id: null,
+			dismissed: true,
+		};
+		apiMock.mockImplementation((path: string) => {
+			if (path === "/api/prs/7")
+				return Promise.resolve({ ...detail, findings: [...findings, marcado] });
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		// El marcado está oculto por defecto: 5 hallazgos, 4 visibles.
+		await screen.findByText("Cuerpo alto");
+		expect(screen.queryByText("Cuerpo marcado")).toBeNull();
+		expect(screen.getByText("Hallazgos (4 de 5)")).toBeTruthy();
+
+		// Mostrar marcados lo revela con su etiqueta.
+		fireEvent.click(screen.getByLabelText("Marcados"));
+		expect(screen.getByText("Cuerpo marcado")).toBeTruthy();
+		expect(screen.getByText("✕ No aplica")).toBeTruthy();
+	});
+
+	it("el botón no aplica llama al endpoint y refresca", async () => {
+		apiMock.mockImplementation((path: string, opts?: { method?: string }) => {
+			if (path === "/api/findings/2/dismiss" && opts?.method === "POST") {
+				return Promise.resolve({ dismissed: true });
+			}
+			if (path === "/api/prs/7") return Promise.resolve(detail);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+		await screen.findByText("Cuerpo medio");
+
+		const botones = screen.getAllByRole("button", { name: /no aplica/i });
+		fireEvent.click(botones[0]!);
+
+		await waitFor(() => {
+			expect(apiMock).toHaveBeenCalledWith(
+				"/api/findings/1/dismiss",
+				expect.objectContaining({ method: "POST" }),
+			);
+		});
+	});
+
+	it("agrupa por archivo con encabezados colapsables", async () => {
+		apiMock.mockImplementation((path: string) => {
+			if (path === "/api/prs/7") return Promise.resolve(detail);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+		await screen.findByText("Cuerpo alto");
+
+		fireEvent.click(screen.getByLabelText("Vista"));
+
+		const grupos = screen.getAllByRole("group");
+		expect(grupos.length).toBe(4); // un details por archivo
+		// El grupo es el <details> del archivo; el texto vive en el summary.
+		expect(
+			screen.getAllByText(/src\/foo\.go/).some((el) => el.closest("details")),
+		).toBe(true);
 	});
 });

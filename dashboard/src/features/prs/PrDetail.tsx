@@ -4,7 +4,7 @@
  * cliente y el escaping es el nativo de Preact, jamás innerHTML (§9.5). El
  * diff es degradable: si el VCS falla (502), el resto de la página sigue. */
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "preact/hooks";
 import { Badge } from "../../components/Badge";
 import { Banner } from "../../components/Banner";
@@ -216,6 +216,103 @@ function CorridaDetail({ reviewId }: { reviewId: number }) {
 	);
 }
 
+/** Agrupa hallazgos por archivo preservando el orden de aparición. */
+function porArchivo(list: FindingView[]): [string, FindingView[]][] {
+	const grupos = new Map<string, FindingView[]>();
+	for (const f of list) {
+		const g = grupos.get(f.file) ?? [];
+		g.push(f);
+		grupos.set(f.file, g);
+	}
+	return [...grupos.entries()];
+}
+
+/** Un hallazgo del triage (S4): badges, cuerpo, sugerencia accionable y el
+ * botón "No aplica" que registra la huella para las corridas futuras. */
+function HallazgoItem({
+	finding,
+	onScroll,
+	prURL,
+}: {
+	finding: FindingView;
+	onScroll: (file: string, line: number) => void;
+	prURL: string | null;
+}) {
+	const queryClient = useQueryClient();
+	const dismiss = useMutation({
+		mutationFn: () =>
+			api(`/api/findings/${finding.id}/dismiss`, {
+				method: "POST",
+				body: { reason: "" },
+			}),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["pr"] }),
+	});
+	const sev = severityOf(finding.severity);
+	return (
+		<li
+			key={finding.id}
+			class={`rounded-md border border-border-subtle p-3 ${finding.dismissed ? "opacity-50" : ""}`}
+		>
+			<div class="mb-1 flex flex-wrap items-center gap-2">
+				<Badge
+					tone={sev.tone}
+					title="Severidad del hallazgo: Alta rompe la corrección, Media la debería, Baja es ajuste menor."
+				>
+					{`● ${sev.label}`}
+				</Badge>
+				<Badge title={categoryHintOf(finding.category)}>
+					{categoryOf(finding.category)}
+				</Badge>
+				<Badge
+					title={
+						finding.source === "sast"
+							? "Lo detectó un linter determinista (ESLint, Ruff, golangci-lint, Clippy, Gitleaks)."
+							: "Lo detectó el modelo de lenguaje (agente Reviewer)."
+					}
+				>
+					{sourceOf(finding.source)}
+				</Badge>
+				<Verified verified={finding.verified} source={finding.source} />
+				{finding.dismissed && (
+					<span
+						class="text-xs text-text-muted"
+						title="Alguien marcó esta huella como no aplica: queda para auditoría y no vuelve a molestar."
+					>
+						✕ No aplica
+					</span>
+				)}
+				<button
+					type="button"
+					class="max-w-full break-all text-left font-mono text-xs text-action-primary underline"
+					onClick={() => onScroll(finding.file, finding.line)}
+				>
+					{`${finding.file}:${finding.line}`}
+				</button>
+				{!finding.dismissed && (
+					<button
+						type="button"
+						disabled={dismiss.isPending}
+						class="ml-auto rounded border border-border-subtle px-2 py-0.5 text-xs text-text-muted hover:bg-bg-elevated disabled:opacity-50"
+						title="Marca la huella (archivo + categoría) como no aplica: se oculta acá y en las corridas futuras de este repo. Queda guardada para auditoría."
+						onClick={() => dismiss.mutate()}
+					>
+						{dismiss.isPending ? "Marcando…" : "No aplica"}
+					</button>
+				)}
+			</div>
+			<p class="text-sm break-words whitespace-pre-wrap">{finding.body}</p>
+			{finding.suggestion !== null && finding.suggestion !== "" && (
+				<Sugerencia
+					suggestion={finding.suggestion}
+					accepted={finding.accepted}
+					githubCommentID={finding.github_comment_id}
+					prURL={prURL}
+				/>
+			)}
+		</li>
+	);
+}
+
 export function PrDetail({ prId }: { prId: number }) {
 	const {
 		pr,
@@ -246,6 +343,10 @@ export function PrDetail({ prId }: { prId: number }) {
 	// Corrida cuya auditoría está abierta (roles, tokens, duración) — null
 	// cuando el panel está cerrado.
 	const [verCorrida, setVerCorrida] = useState<number | null>(null);
+	// Triage S4: los marcados "no aplica" se ocultan por defecto y la
+	// agrupación por archivo colapsa listas largas.
+	const [mostrarMarcados, setMostrarMarcados] = useState(false);
+	const [agruparPorArchivo, setAgruparPorArchivo] = useState(false);
 	const latestReviewID = review?.id ?? null;
 
 	const fileOptions = useMemo(
@@ -262,13 +363,16 @@ export function PrDetail({ prId }: { prId: number }) {
 	const visible = useMemo(() => {
 		const q = query.trim().toLowerCase();
 		return scoped.filter((f) => {
+			// S4: los marcados "no aplica" quedan ocultos salvo elección
+			// explícita — molestar de nuevo es lo que querés evitar.
+			if (f.dismissed && !mostrarMarcados) return false;
 			if (severity !== "" && f.severity !== severity) return false;
 			if (source !== "" && f.source !== source) return false;
 			if (file !== "" && f.file !== file) return false;
 			if (q !== "" && !f.body.toLowerCase().includes(q)) return false;
 			return true;
 		});
-	}, [scoped, severity, source, file, query]);
+	}, [scoped, severity, source, file, query, mostrarMarcados]);
 
 	if (isLoading) {
 		return <p class="text-text-muted">Cargando…</p>;
@@ -442,6 +546,48 @@ export function PrDetail({ prId }: { prId: number }) {
 									</span>
 								</div>
 							</div>
+							{/* Triage S4: los "no aplica" ocultos por defecto y
+							 * la agrupación por archivo para listas largas. */}
+							<div class="flex flex-col gap-1">
+								<label class="text-xs text-text-muted" for="f-dismissed">
+									Marcados
+								</label>
+								<div class="flex items-center gap-2">
+									<input
+										id="f-dismissed"
+										type="checkbox"
+										checked={mostrarMarcados}
+										onInput={(event) =>
+											setMostrarMarcados(
+												(event.target as HTMLInputElement).checked,
+											)
+										}
+									/>
+									<span class="text-xs text-text-muted">
+										{mostrarMarcados ? "Mostrar marcados" : "Ocultar marcados"}
+									</span>
+								</div>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs text-text-muted" for="f-group">
+									Vista
+								</label>
+								<div class="flex items-center gap-2">
+									<input
+										id="f-group"
+										type="checkbox"
+										checked={agruparPorArchivo}
+										onInput={(event) =>
+											setAgruparPorArchivo(
+												(event.target as HTMLInputElement).checked,
+											)
+										}
+									/>
+									<span class="text-xs text-text-muted">
+										{agruparPorArchivo ? "Agrupar por archivo" : "Lista plana"}
+									</span>
+								</div>
+							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs text-text-muted" for="f-severity">
 									Severidad
@@ -518,63 +664,37 @@ export function PrDetail({ prId }: { prId: number }) {
 							<p class="text-sm text-text-muted">
 								Ningún hallazgo cumple los filtros elegidos.
 							</p>
+						) : agruparPorArchivo ? (
+							<div class="flex flex-col gap-2">
+								{porArchivo(visible).map(([archivo, grupo]) => (
+									<details key={archivo} open={true} role="group">
+										<summary class="cursor-pointer rounded-md border border-border-subtle px-3 py-1.5 text-sm">
+											<span class="font-mono text-xs">{archivo}</span>
+											<span class="ml-2 text-xs text-text-muted">{`${grupo.length} hallazgo${grupo.length === 1 ? "" : "s"}`}</span>
+										</summary>
+										<ul class="mt-2 flex flex-col gap-3 border-l border-border-subtle pl-3">
+											{grupo.map((finding) => (
+												<HallazgoItem
+													key={finding.id}
+													finding={finding}
+													onScroll={scrollToFinding}
+													prURL={prURL}
+												/>
+											))}
+										</ul>
+									</details>
+								))}
+							</div>
 						) : (
 							<ul class="flex flex-col gap-3">
-								{visible.map((finding) => {
-									const sev = severityOf(finding.severity);
-									return (
-										<li
-											key={finding.id}
-											class="rounded-md border border-border-subtle p-3"
-										>
-											<div class="mb-1 flex flex-wrap items-center gap-2">
-												<Badge
-													tone={sev.tone}
-													title="Severidad del hallazgo: Alta rompe la corrección, Media la debería, Baja es ajuste menor."
-												>
-													{`● ${sev.label}`}
-												</Badge>
-												<Badge title={categoryHintOf(finding.category)}>
-													{categoryOf(finding.category)}
-												</Badge>
-												<Badge
-													title={
-														finding.source === "sast"
-															? "Lo detectó un linter determinista (ESLint, Ruff, golangci-lint, Clippy, Gitleaks)."
-															: "Lo detectó el modelo de lenguaje (agente Reviewer)."
-													}
-												>
-													{sourceOf(finding.source)}
-												</Badge>
-												<Verified
-													verified={finding.verified}
-													source={finding.source}
-												/>
-												<button
-													type="button"
-													class="ml-auto max-w-full break-all text-left font-mono text-xs text-action-primary underline"
-													onClick={() =>
-														scrollToFinding(finding.file, finding.line)
-													}
-												>
-													{`${finding.file}:${finding.line}`}
-												</button>
-											</div>
-											<p class="text-sm break-words whitespace-pre-wrap">
-												{finding.body}
-											</p>
-											{finding.suggestion !== null &&
-												finding.suggestion !== "" && (
-													<Sugerencia
-														suggestion={finding.suggestion}
-														accepted={finding.accepted}
-														githubCommentID={finding.github_comment_id}
-														prURL={prURL}
-													/>
-												)}
-										</li>
-									);
-								})}
+								{visible.map((finding) => (
+									<HallazgoItem
+										key={finding.id}
+										finding={finding}
+										onScroll={scrollToFinding}
+										prURL={prURL}
+									/>
+								))}
 							</ul>
 						)}
 					</>

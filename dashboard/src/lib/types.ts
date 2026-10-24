@@ -170,6 +170,10 @@ export interface FindingView {
 	/** GithubCommentID: id del comentario que el hallazgo produjo en GitHub.
 	 * Con él se permalinkea al comentario real. */
 	github_comment_id: string | null;
+	/** Dismissed: la huella (repo, file, category) fue marcada "no aplica"
+	 * (S4). El hallazgo viaja igual (auditoría); la UI lo oculta por
+	 * defecto. */
+	dismissed: boolean;
 	source: "llm" | "sast";
 	verified: boolean | null;
 }
