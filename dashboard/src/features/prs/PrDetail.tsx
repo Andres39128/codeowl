@@ -4,13 +4,14 @@
  * cliente y el escaping es el nativo de Preact, jamás innerHTML (§9.5). El
  * diff es degradable: si el VCS falla (502), el resto de la página sigue. */
 
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "preact/hooks";
 import { Badge } from "../../components/Badge";
 import { Banner } from "../../components/Banner";
 import { Card } from "../../components/Card";
 import { DiffViewer } from "../../components/DiffViewer";
-import { ApiError } from "../../lib/apiClient";
-import type { FindingView } from "../../lib/types";
+import { ApiError, api } from "../../lib/apiClient";
+import type { FindingView, ReviewDetail } from "../../lib/types";
 import { usePR } from "../../lib/usePR";
 import {
 	categoryHintOf,
@@ -152,6 +153,69 @@ function Verified({
 	);
 }
 
+/** Auditoría de una corrida (§9.9): qué proveedor atendió cada rol, tokens
+ * quemados, duración y hallazgos. Se abre desde el resumen del PR. */
+function CorridaDetail({ reviewId }: { reviewId: number }) {
+	const detalle = useQuery({
+		queryKey: ["review", reviewId],
+		queryFn: () => api<ReviewDetail>(`/api/reviews/${reviewId}`),
+	});
+	if (detalle.isPending)
+		return <p class="text-sm text-text-muted">Cargando…</p>;
+	if (detalle.isError) {
+		return <Banner tone="error">No se pudo cargar la corrida.</Banner>;
+	}
+	const d = detalle.data;
+	const totalTokens = d.llm_usage.reduce<number>(
+		(acc, u) => acc + u.tokens_in + u.tokens_out,
+		0,
+	);
+	return (
+		<div class="mt-3 rounded-md border border-border-subtle bg-bg-surface p-3 text-sm">
+			<div class="mb-2 flex flex-wrap items-center gap-3">
+				<span class="font-semibold">Corrida #{d.id}</span>
+				<span class="text-text-muted">
+					Duración: {(d.duration_ms / 1000).toFixed(0)}s (
+					{Math.floor(d.duration_ms / 60000)}m{" "}
+					{Math.round((d.duration_ms % 60000) / 1000)}s)
+				</span>
+				<span class="text-text-muted">
+					{totalTokens.toLocaleString("es-AR")} tokens
+				</span>
+			</div>
+			<table class="w-full text-xs">
+				<caption class="sr-only">Uso de LLM por rol en la corrida</caption>
+				<thead>
+					<tr class="text-left text-text-muted">
+						<th class="py-1 font-medium">Rol</th>
+						<th class="py-1 font-medium">Modelo</th>
+						<th class="py-1 font-medium">Tokens in</th>
+						<th class="py-1 font-medium">Tokens out</th>
+					</tr>
+				</thead>
+				<tbody>
+					{d.llm_usage.map((u) => (
+						<tr
+							key={`${u.role}-${u.model}`}
+							class="border-t border-border-subtle"
+						>
+							<td class="py-1">{u.role}</td>
+							<td class="py-1">{u.model}</td>
+							<td class="py-1">{u.tokens_in.toLocaleString("es-AR")}</td>
+							<td class="py-1">{u.tokens_out.toLocaleString("es-AR")}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+			<p class="mt-2 text-xs text-text-muted">
+				Hallazgos: {d.findings_by_severity.high} alta ·{" "}
+				{d.findings_by_severity.medium} media · {d.findings_by_severity.low}{" "}
+				baja
+			</p>
+		</div>
+	);
+}
+
 export function PrDetail({ prId }: { prId: number }) {
 	const {
 		pr,
@@ -179,6 +243,9 @@ export function PrDetail({ prId }: { prId: number }) {
 	// résumé el comentario publicado — con un toggle para auditar el
 	// histórico completo.
 	const [onlyLatest, setOnlyLatest] = useState(true);
+	// Corrida cuya auditoría está abierta (roles, tokens, duración) — null
+	// cuando el panel está cerrado.
+	const [verCorrida, setVerCorrida] = useState<number | null>(null);
 	const latestReviewID = review?.id ?? null;
 
 	const fileOptions = useMemo(
@@ -285,6 +352,18 @@ export function PrDetail({ prId }: { prId: number }) {
 								</pre>
 							</>
 						)}
+						<button
+							type="button"
+							class="mt-3 rounded border border-border-subtle px-2 py-1 text-xs text-action-primary hover:bg-bg-elevated"
+							onClick={() =>
+								setVerCorrida(verCorrida === null ? review.id : null)
+							}
+						>
+							{verCorrida === null
+								? "Ver corrida (roles, tokens, duración)"
+								: "Cerrar corrida"}
+						</button>
+						{verCorrida !== null && <CorridaDetail reviewId={verCorrida} />}
 					</>
 				)}
 			</Card>

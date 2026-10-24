@@ -5,7 +5,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/apiClient";
-import type { FindingView, PrDetailView, StackCohort } from "../../lib/types";
+import type {
+	FindingView,
+	PrDetailView,
+	ReviewDetail,
+	StackCohort,
+} from "../../lib/types";
 import { createWrapper } from "../../test/createWrapper";
 import { PrDetail } from "./PrDetail";
 
@@ -452,5 +457,51 @@ describe("PrDetail", () => {
 
 		expect(await screen.findByText("Cuerpo alto")).toBeTruthy();
 		expect(screen.queryByText("Change Stack")).toBeNull();
+	});
+});
+
+describe("detalle de corrida", () => {
+	it("el resumen ofrece ver la auditoría de la última corrida", async () => {
+		const detalle: ReviewDetail = {
+			id: 1,
+			pull_request_id: 7,
+			status: "success",
+			created_at: "2026-10-01T12:00:00Z",
+			duration_ms: 301146,
+			summary: "s",
+			llm_usage: [
+				{
+					role: "review",
+					model: "Muse-Glimmer-30B",
+					tokens_in: 5552,
+					tokens_out: 17215,
+				},
+				{
+					role: "cheap",
+					model: "Muse-Glimmer-30B",
+					tokens_in: 5064,
+					tokens_out: 3614,
+				},
+			],
+			findings_by_severity: { high: 5, medium: 4, low: 0 },
+		};
+		apiMock.mockImplementation((path: string) => {
+			if (path === "/api/reviews/1") return Promise.resolve(detalle);
+			if (path === "/api/prs/7") return Promise.resolve(detail);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		fireEvent.click(
+			await screen.findByRole("button", { name: /ver corrida/i }),
+		);
+
+		expect(await screen.findByText(/5m 1s/)).toBeTruthy();
+		expect(screen.getByText(/review/)).toBeTruthy();
+		// El separador de miles depende del locale del runner: se asserta
+		// sobre el total crudo (5552+17215+5064+3614 = 31445).
+		expect(screen.getByText(/31[.,]445 tokens/)).toBeTruthy();
+		expect(screen.getByText(/5 alta/)).toBeTruthy();
 	});
 });

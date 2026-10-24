@@ -57,6 +57,24 @@ export interface JobHistoryRow {
 	error: string | null;
 }
 
+/** Detalle de una corrida (GET /api/reviews/{id}): auditoría — roles con
+ * tokens, duración, hallazgos por severidad. */
+export interface ReviewDetail {
+	id: number;
+	pull_request_id: number;
+	status: ReviewStatus;
+	created_at: string;
+	duration_ms: number;
+	summary: string;
+	llm_usage: {
+		role: string;
+		model: string;
+		tokens_in: number;
+		tokens_out: number;
+	}[];
+	findings_by_severity: { high: number; medium: number; low: number };
+}
+
 /** Fila del panel de cola (§9.9): river_job agrupado por (kind, state). */
 export interface JobRow {
 	kind: string;
