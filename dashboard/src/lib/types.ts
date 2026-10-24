@@ -34,6 +34,17 @@ export interface ManagedUser {
 	disabled: boolean;
 }
 
+/** Fila de la historia de jobs (GET /api/jobs/history): un job finalizado con
+ * duración de ejecución y el último error si lo hubo. */
+export interface JobHistoryRow {
+	kind: string;
+	state: "completed" | "cancelled" | "discarded";
+	created_at: string;
+	finalized_at: string;
+	duration_ms: number;
+	error: string | null;
+}
+
 /** Fila del panel de cola (§9.9): river_job agrupado por (kind, state). */
 export interface JobRow {
 	kind: string;

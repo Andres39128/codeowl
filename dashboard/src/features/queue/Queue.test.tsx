@@ -1,9 +1,9 @@
 /** Queue: filas del panel con estado y tono correctos (mapa: dashboard.features.queue). */
 
-import { cleanup, render, screen } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/apiClient";
-import type { JobRow } from "../../lib/types";
+import type { JobHistoryRow, JobRow } from "../../lib/types";
 import { createWrapper } from "../../test/createWrapper";
 import { Queue } from "./Queue";
 
@@ -75,5 +75,49 @@ describe("Queue", () => {
 		// El intervalo viaja en las opciones de la query; se verifica vía el
 		// mock: TanStack llama api en el montaje y el intervalo queda configurado.
 		expect(mockedApi).toHaveBeenCalledWith("/api/jobs");
+	});
+
+	it("cola vacía se explica en vez de mostrar una tabla sin filas", async () => {
+		mockedApi.mockResolvedValue([]);
+		render(<Queue />, { wrapper: createWrapper() });
+
+		expect(await screen.findByText(/No hay jobs en la cola/)).toBeTruthy();
+		expect(screen.queryByText("Cantidad")).toBeNull();
+	});
+
+	it("la pestaña historial lista los jobs finalizados con duración y error", async () => {
+		const historia: JobHistoryRow[] = [
+			{
+				kind: "review",
+				state: "completed",
+				created_at: "2026-10-01T12:00:00Z",
+				finalized_at: "2026-10-01T12:01:30Z",
+				duration_ms: 90000,
+				error: null,
+			},
+			{
+				kind: "index",
+				state: "discarded",
+				created_at: "2026-10-01T10:00:00Z",
+				finalized_at: "2026-10-01T10:00:05Z",
+				duration_ms: 5000,
+				error: "job kind is not registered: index",
+			},
+		];
+		mockedApi.mockImplementation((path: string) =>
+			path === "/api/jobs/history"
+				? Promise.resolve(historia)
+				: Promise.resolve(jobs),
+		);
+		render(<Queue />, { wrapper: createWrapper() });
+
+		fireEvent.click(await screen.findByRole("tab", { name: /historial/i }));
+
+		// Duración legible, no cruda.
+		expect(await screen.findByText(/1m 30s/)).toBeTruthy();
+		expect(screen.getByText(/Completado/)).toBeTruthy();
+		expect(screen.getByText(/job kind is not registered: index/)).toBeTruthy();
+		// El panel vivo sigue montado (pestañas, no recarga de página).
+		expect(mockedApi).toHaveBeenCalledWith("/api/jobs/history");
 	});
 });

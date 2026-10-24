@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,5 +93,92 @@ func TestJobsVisibleParaMember(t *testing.T) {
 	// Sin sesión → 401 como cualquier endpoint.
 	if got := e.do(t, http.MethodGet, "/api/jobs", nil, "", nil).StatusCode; got != http.StatusUnauthorized {
 		t.Errorf("GET /api/jobs sin sesión debe ser 401, fue %d", got)
+	}
+}
+
+// TestJobsHistoria: GET /api/jobs/history lista los jobs finalizados (lo más
+// reciente primero) con duración de ejecución y error si lo hubo — sin incluir
+// los vivos (§9.9: el panel es el estado vivo; la historia es auditoría).
+func TestJobsHistoria(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+
+	sufijo := time.Now().UnixNano()
+	k := fmt.Sprintf("historia-review-%d", sufijo)
+	insertar := func(state string, edad time.Duration, conError bool) {
+		t.Helper()
+		inicio := time.Now().Add(-edad)
+		const base = `INSERT INTO river_job (kind, queue, state, max_attempts, args, attempted_at, created_at, finalized_at, errors)
+			 VALUES ($1, 'ops', $2, 1, '{}'::jsonb, $3, $3, $4, `
+		var sql string
+		if conError {
+			sql = base + `ARRAY['{"error":"boom"}']::jsonb[])`
+		} else {
+			sql = base + `NULL)`
+		}
+		if _, err := e.st.Pool.Exec(context.Background(), sql,
+			k, state, inicio, inicio.Add(2*time.Second)); err != nil {
+			t.Fatalf("insertando job de prueba (%s): %v", state, err)
+		}
+	}
+	insertar("completed", 1*time.Hour, false)
+	insertar("discarded", 2*time.Hour, true)
+	insertar("cancelled", 3*time.Hour, false)
+	// Un job vivo NO entra en la historia.
+	if _, err := e.st.Pool.Exec(context.Background(),
+		`INSERT INTO river_job (kind, queue, state, max_attempts, args)
+		 VALUES ($1, 'ops', 'available', 1, '{}'::jsonb)`, k); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(context.Background(),
+			"DELETE FROM river_job WHERE kind = $1", k)
+	})
+
+	resp := e.do(t, http.MethodGet, "/api/jobs/history", a.cookie, a.csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/jobs/history debe ser 200, fue %d", resp.StatusCode)
+	}
+	var rows []jobHistoryRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		t.Fatal(err)
+	}
+
+	// Match por kind único: la base puede tener jobs completed reales
+	// (el cleanup del worker dura ~2 ms) y no son los del fixture.
+	deEstado := func(state string) *jobHistoryRow {
+		for i := range rows {
+			if rows[i].Kind == k && rows[i].State == state {
+				return &rows[i]
+			}
+		}
+		return nil
+	}
+	completado := deEstado("completed")
+	if completado == nil {
+		t.Fatalf("el completado debe estar en la historia, hubo: %+v", rows)
+	}
+	if completado.DurationMS != 2000 {
+		t.Errorf("duración = %d ms, querés 2000 (finalized_at − attempted_at)", completado.DurationMS)
+	}
+	if completado.Error != nil {
+		t.Errorf("un job completado no debe traer error, trajo %q", *completado.Error)
+	}
+	descartado := deEstado("discarded")
+	if descartado == nil {
+		t.Fatalf("el descartado debe estar en la historia: %+v", rows)
+	}
+	if descartado.Error == nil || !strings.Contains(*descartado.Error, "boom") {
+		t.Errorf("el descartado debe traer el último error, trajo %v", descartado.Error)
+	}
+	// Lo más reciente primero.
+	if rows[0].CreatedAt.Before(rows[len(rows)-1].CreatedAt) {
+		t.Errorf("la historia debe venir lo más reciente primero: %+v", rows)
+	}
+	// Los vivos (available) no aparecen.
+	for _, r := range rows {
+		if r.State == "available" || r.State == "running" {
+			t.Errorf("un job vivo no debe estar en la historia: %+v", r)
+		}
 	}
 }

@@ -1,13 +1,15 @@
-/** Panel de cola (guía §9.9): pending/running/discarded por tipo de job, con
- * cantidad y última creación. Disponible para todo usuario autenticado (§3.4)
- * y con refresco automático cada 5 segundos. */
+/** Panel de cola (guía §9.9): estado vivo por tipo de job y, en la pestaña
+ * historial, los últimos jobs finalizados con duración y error. Disponible
+ * para todo usuario autenticado (§3.4) y con refresco automático cada 5
+ * segundos. */
 
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "preact/hooks";
 import { Badge, type BadgeTone } from "../../components/Badge";
 import { Banner } from "../../components/Banner";
 import { type Column, Table } from "../../components/Table";
 import { api } from "../../lib/apiClient";
-import type { JobRow } from "../../lib/types";
+import type { JobHistoryRow, JobRow } from "../../lib/types";
 
 /** Etiqueta y tono por estado. `available` y `pending` son "en espera": River
  * v0.48 inserta los jobs nuevos como available (api/queue.go). */
@@ -46,12 +48,93 @@ const columns: Column<JobRow>[] = [
 	},
 ];
 
+/** Estados finales de la historia (conjunto cerrado de river_job). */
+const historyView: Record<
+	JobHistoryRow["state"],
+	{ label: string; tone: BadgeTone }
+> = {
+	completed: { label: "Completado", tone: "baja" },
+	cancelled: { label: "Cancelado", tone: "neutral" },
+	discarded: { label: "Descartado", tone: "alta" },
+};
+
+function historyStateOf(row: JobHistoryRow): { label: string; tone: BadgeTone } {
+	return historyView[row.state] ?? { label: row.state, tone: "neutral" };
+}
+
+/** Duración legible (ms → "2,5s" / "1m 30s" / "12,4m"): el dato crudo viaja
+ * en el title. */
+function duracion(ms: number): string {
+	if (ms < 1000) return `${ms} ms`;
+	const seg = ms / 1000;
+	if (seg < 60) return `${seg.toLocaleString("es-AR", { maximumFractionDigits: 1 })}s`;
+	const min = Math.floor(seg / 60);
+	if (min < 60) return `${min}m ${Math.round(seg - min * 60)}s`;
+	return `${(min / 60).toLocaleString("es-AR", { maximumFractionDigits: 1 })}h`;
+}
+
+const historyColumns: Column<JobHistoryRow>[] = [
+	{
+		key: "kind",
+		header: "Tipo",
+		render: (row) => <Badge>{row.kind}</Badge>,
+	},
+	{
+		key: "state",
+		header: "Resultado",
+		render: (row) => {
+			const view = historyStateOf(row);
+			return <Badge tone={view.tone}>{`● ${view.label}`}</Badge>;
+		},
+	},
+	{
+		key: "duration_ms",
+		header: "Duración",
+		render: (row) => (
+			<span title={`${row.duration_ms} ms`}>{duracion(row.duration_ms)}</span>
+		),
+	},
+	{
+		key: "finalized_at",
+		header: "Finalizado",
+		render: (row) => new Date(row.finalized_at).toLocaleString("es-AR"),
+	},
+	{
+		key: "error",
+		header: "Error",
+		render: (row) =>
+			row.error === null ? (
+				<span class="text-text-muted">—</span>
+			) : (
+				<code
+					class="block max-w-96 truncate font-mono text-xs text-severity-alta"
+					title={row.error}
+				>
+					{row.error}
+				</code>
+			),
+	},
+];
+
 export function Queue() {
+	// La pestaña activa decide qué consulta corre: una sola cosa por vez.
+	const [pestana, setPestana] = useState<"cola" | "historial">("cola");
 	const jobs = useQuery({
 		queryKey: ["jobs"],
 		queryFn: () => api<JobRow[]>("/api/jobs"),
 		refetchInterval: 5000,
 	});
+	const historia = useQuery({
+		queryKey: ["jobs-history"],
+		queryFn: () => api<JobHistoryRow[]>("/api/jobs/history"),
+		refetchInterval: 5000,
+		enabled: pestana === "historial",
+	});
+
+	const pestañas: { id: "cola" | "historial"; label: string }[] = [
+		{ id: "cola", label: "En cola" },
+		{ id: "historial", label: "Historial" },
+	];
 
 	return (
 		<section>
@@ -60,16 +143,63 @@ export function Queue() {
 				Estado de la cola por tipo de job; se actualiza cada 5 segundos.
 			</p>
 
-			{jobs.isError ? (
-				<Banner tone="error">No se pudo cargar la cola de jobs.</Banner>
-			) : jobs.isPending ? (
+			<div class="mb-4 flex gap-1" role="tablist">
+				{pestañas.map((p) => (
+					<button
+						key={p.id}
+						type="button"
+						role="tab"
+						aria-selected={pestana === p.id}
+						class={`rounded-md px-3 py-1.5 text-sm ${
+							pestana === p.id
+								? "bg-bg-elevated font-medium text-text-primary"
+								: "text-text-muted hover:text-text-primary"
+						}`}
+						onClick={() => setPestana(p.id)}
+					>
+						{p.label}
+					</button>
+				))}
+			</div>
+
+			{pestana === "cola" ? (
+				jobs.isError ? (
+					<Banner tone="error">No se pudo cargar la cola de jobs.</Banner>
+				) : jobs.isPending ? (
+					<p class="text-text-muted">Cargando…</p>
+				) : jobs.data.length === 0 ? (
+					// Sin jobs: no hay tabla vacía que interpretar — se dice qué
+					// significa y qué esperaría ver acá.
+					<Banner tone="info">
+						No hay jobs en la cola: no hay revisión, indexación ni métricas
+						pendientes ni en ejecución. Cuando se dispare una corrida (por
+						webhook o reconexión) el job aparece acá hasta que el worker lo
+						termina.
+					</Banner>
+				) : (
+					<Table
+						caption="Jobs agrupados por tipo y estado"
+						columns={columns}
+						rows={jobs.data}
+						getRowKey={(job) => `${job.kind}-${job.state}`}
+					/>
+				)
+			) : historia.isError ? (
+				<Banner tone="error">No se pudo cargar el historial de jobs.</Banner>
+			) : historia.isPending ? (
 				<p class="text-text-muted">Cargando…</p>
+			) : historia.data.length === 0 ? (
+				<Banner tone="info">
+					Todavía no hay jobs terminados: acá aparecen los últimos 50 con su
+					resultado (completado, cancelado o descartado), cuánto tardaron y el
+					error si fallaron.
+				</Banner>
 			) : (
 				<Table
-					caption="Jobs agrupados por tipo y estado"
-					columns={columns}
-					rows={jobs.data}
-					getRowKey={(job) => `${job.kind}-${job.state}`}
+					caption="Últimos 50 jobs finalizados, lo más reciente primero"
+					columns={historyColumns}
+					rows={historia.data}
+					getRowKey={(row) => `${row.kind}-${row.finalized_at}`}
 				/>
 			)}
 		</section>

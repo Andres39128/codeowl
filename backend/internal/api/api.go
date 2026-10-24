@@ -124,6 +124,7 @@ func (s *Server) Routes() *http.ServeMux {
 	// el triage y consulta el estado de la cola (§3.4). Solo lectura: auth
 	// sin csrf.
 	mux.Handle("GET /api/jobs", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleListJobs)))))
+	mux.Handle("GET /api/jobs/history", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleJobsHistory)))))
 
 	// Detalle de PR (guía §6 F3): lista, detalle con findings y diff vía
 	// GetDiff del adapter. Solo lectura, member-visible (§3.4: opera el
