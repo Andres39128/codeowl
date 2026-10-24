@@ -817,6 +817,35 @@ func TestRotationJobWorkerRecifrado(t *testing.T) {
 		t.Fatal("la rotación sin MASTER_KEY_PREVIOUS debe rehusarse (§9.2)")
 	}
 
+	// El job re-cifra TODAS las filas de la base compartida (producción
+	// rota todo); las filas REALES se respaldan antes y se restauran
+	// después, o la instancia de desarrollo queda con secretos que ninguna
+	// clave real descifra.
+	type provRow struct {
+		id     int64
+		apiKey string
+	}
+	provsReales, err := st.Pool.Query(ctx, "SELECT id, api_key FROM llm_providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backupProvs []provRow
+	for provsReales.Next() {
+		var r provRow
+		if err := provsReales.Scan(&r.id, &r.apiKey); err != nil {
+			t.Fatal(err)
+		}
+		backupProvs = append(backupProvs, r)
+	}
+	provsReales.Close()
+	t.Cleanup(func() {
+		for _, r := range backupProvs {
+			if _, err := st.Pool.Exec(ctx, "UPDATE llm_providers SET api_key=$1 WHERE id=$2", r.apiKey, r.id); err != nil {
+				t.Errorf("restaurando el api_key del proveedor %d: %v", r.id, err)
+			}
+		}
+	})
+
 	w := &RotationJobWorker{Store: st, NewKey: newKey, OldKey: oldKey}
 	if err := w.Work(ctx, wJob(RotationJobArgs{}, 1, 1)); err != nil {
 		t.Fatalf("Work: %v", err)
