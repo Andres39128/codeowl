@@ -763,20 +763,39 @@ func TestCleanupJobWorkerRetencion(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRotationJobWorkerRecifrado(t *testing.T) {
-	st := wStore(t)
+	// El job de rotación re-cifra TODAS las filas de la base (producción
+	// rota todo): contra la BD compartida, los proveedores reales del
+	// desarrollo quedarían cifrados con claves de test. BD scratch propia —
+	// solo viven acá los fixtures del test.
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL no está seteado: saltando tests de integración")
+	}
+	admin, err := pgx.Connect(context.Background(), strings.Replace(url, "/codeowl?", "/postgres?", 1))
+	if err != nil {
+		t.Fatalf("conectando a la BD admin: %v", err)
+	}
+	nombre := fmt.Sprintf("codeowl_rotacion_%d", time.Now().UnixNano())
+	if _, err := admin.Exec(context.Background(), "CREATE DATABASE "+nombre); err != nil {
+		t.Fatalf("creando BD scratch: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "DROP DATABASE "+nombre+" WITH (FORCE)")
+		_ = admin.Close(context.Background())
+	})
+	scratch := strings.Replace(url, "/codeowl?", "/"+nombre+"?", 1)
+	st, err := store.Open(context.Background(), scratch)
+	if err != nil {
+		t.Fatalf("Open scratch: %v", err)
+	}
+	t.Cleanup(st.Close)
+	if err := store.Migrate(scratch, migrations.FS); err != nil {
+		t.Fatalf("Migrate scratch: %v", err)
+	}
 	ctx := context.Background()
 
 	oldKey := bytes.Repeat([]byte{0xA1}, 32) // claves de prueba de 32 bytes
 	newKey := bytes.Repeat([]byte{0xB2}, 32)
-
-	// La BD compartida acumula filas de corridas anteriores cuyas columnas
-	// "cifradas" son plaintext de otros tests (el invariante de producción
-	// es: columna cifrada = salida de store.Encrypt). El re-cifrado aborta
-	// ante un valor indescifrable (§9.2: correcto en producción), así que
-	// acá se repara la basura ANTES del job: solo filas anteriores al
-	// arranque de esta corrida — las de tests corriendo en paralelo son
-	// nuevas y no se tocan.
-	reparaJunkCifrado(t, st, oldKey, time.Now().Add(-time.Second))
 
 	apiKeyCifrada, err := store.Encrypt(oldKey, []byte("sk-prueba-llm"))
 	if err != nil {
@@ -816,35 +835,6 @@ func TestRotationJobWorkerRecifrado(t *testing.T) {
 	if err := wSinPrevia.Work(ctx, wJob(RotationJobArgs{}, 1, 1)); err == nil {
 		t.Fatal("la rotación sin MASTER_KEY_PREVIOUS debe rehusarse (§9.2)")
 	}
-
-	// El job re-cifra TODAS las filas de la base compartida (producción
-	// rota todo); las filas REALES se respaldan antes y se restauran
-	// después, o la instancia de desarrollo queda con secretos que ninguna
-	// clave real descifra.
-	type provRow struct {
-		id     int64
-		apiKey string
-	}
-	provsReales, err := st.Pool.Query(ctx, "SELECT id, api_key FROM llm_providers")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var backupProvs []provRow
-	for provsReales.Next() {
-		var r provRow
-		if err := provsReales.Scan(&r.id, &r.apiKey); err != nil {
-			t.Fatal(err)
-		}
-		backupProvs = append(backupProvs, r)
-	}
-	provsReales.Close()
-	t.Cleanup(func() {
-		for _, r := range backupProvs {
-			if _, err := st.Pool.Exec(ctx, "UPDATE llm_providers SET api_key=$1 WHERE id=$2", r.apiKey, r.id); err != nil {
-				t.Errorf("restaurando el api_key del proveedor %d: %v", r.id, err)
-			}
-		}
-	})
 
 	w := &RotationJobWorker{Store: st, NewKey: newKey, OldKey: oldKey}
 	if err := w.Work(ctx, wJob(RotationJobArgs{}, 1, 1)); err != nil {
