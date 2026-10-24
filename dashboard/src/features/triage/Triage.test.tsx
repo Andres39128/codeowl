@@ -57,6 +57,7 @@ const metrics: MetricsView = {
 	reviews_with_cost: 5,
 	avg_tokens_per_review: 1500,
 	reviews_per_week: [],
+	resolution_per_week: [],
 };
 
 // Filas ya ordenadas por riesgo como las sirve el server (sort=risk): el
@@ -314,5 +315,64 @@ describe("Triage", () => {
 		expect(barra.getAttribute("style")).toContain("height: 100%");
 		const baja = screen.getByTitle("Semana del 2026-10-13: 1 PR (1 corrida)");
 		expect(baja.getAttribute("style")).toContain("height: 20%");
+	});
+});
+
+// Tasa de resolución entre corridas (resolucion-hallazgos S3): agregado en
+// el strip y desglose por repo de resueltos vs persistentes.
+describe("tasa de resolución", () => {
+	it("muestra el agregado y el desglose por repo", async () => {
+		const conResolucion: MetricsView = {
+			...metrics,
+			resolution_per_week: [
+				{
+					week: "2026-10-06",
+					repository: "acme/codeowl",
+					resolved: 3,
+					persistent: 1,
+					resolution_rate: 0.75,
+				},
+				{
+					week: "2026-10-13",
+					repository: "acme/codeowl",
+					resolved: 3,
+					persistent: 1,
+					resolution_rate: 0.75,
+				},
+				{
+					week: "2026-10-13",
+					repository: "acme/otro",
+					resolved: 0,
+					persistent: 2,
+					resolution_rate: 0,
+				},
+			],
+		};
+		mockApi(prsByRisk, conResolucion);
+		render(<Triage />, { wrapper: createWrapper() });
+
+		await screen.findByText("Métricas (últimos 30 días)");
+		// El strip trae el agregado de la ventana: 6/(6+4) = 60%.
+		expect(
+			screen.getByText("Tasa de resolución", { exact: false }),
+		).toBeTruthy();
+		expect(screen.getByText("60%")).toBeTruthy();
+
+		// Desglose por repo: acá se agregan las semanas del repo.
+		expect(screen.getByText("Resueltos vs persistentes por repo")).toBeTruthy();
+		const codeowl = screen.getByTitle("acme/codeowl: 6 resueltos, 2 persistentes (75%)");
+		expect(codeowl).toBeTruthy();
+		expect(
+			screen.getByTitle("acme/otro: 0 resueltos, 2 persistentes (0%)"),
+		).toBeTruthy();
+	});
+
+	it("sin datos de resolución no renderiza la sección", async () => {
+		mockApi(prsByRisk, metrics);
+		render(<Triage />, { wrapper: createWrapper() });
+
+		await screen.findByText("Métricas (últimos 30 días)");
+		expect(screen.queryByText("Resueltos vs persistentes por repo")).toBeNull();
+		expect(screen.queryByText("Tasa de resolución", { exact: false })).toBeNull();
 	});
 });

@@ -226,4 +226,16 @@ export interface MetricsView {
 	reviews_with_cost: number;
 	avg_tokens_per_review: number | null;
 	reviews_per_week: ReviewsPerWeekPoint[];
+	/** Tasa de resolución por repo/semana (resolucion-hallazgos S3): pares
+	 * corrida nueva + inmediata anterior con hallazgos. Huellas dismissadas
+	 * excluidas (veredicto humano); la tasa por fila tiene denominador ≥ 1. */
+	resolution_per_week: ResolutionPerWeekPoint[];
+}
+
+export interface ResolutionPerWeekPoint {
+	week: string;
+	repository: string;
+	resolved: number;
+	persistent: number;
+	resolution_rate: number;
 }
