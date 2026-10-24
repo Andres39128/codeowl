@@ -33,3 +33,16 @@ SELECT
     (SELECT COUNT(*) FROM comments_sent cs
      WHERE cs.resolved = true AND cs.applied = false
        AND cs.created_at >= sqlc.arg('since'))                            AS false_positives;
+
+-- name: ListReviewsPerWeek :many
+-- PRs revisados por semana ISO (S3): una fila por semana con corridas en la
+-- ventana; DISTINCT review.pull_request_id cuenta PRs, no corridas (un PR
+-- con 3 push = 1 PR revisado esa semana). Semanas sin actividad no existen
+-- (null honesto: la serie es puntos, no promedios inflados).
+SELECT date_trunc('week', rv.created_at)::date AS week,
+       COUNT(DISTINCT rv.pull_request_id)::bigint AS prs,
+       COUNT(*)::bigint AS reviews
+FROM reviews rv
+WHERE rv.created_at >= $1
+GROUP BY week
+ORDER BY week;

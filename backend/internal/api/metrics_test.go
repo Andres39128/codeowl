@@ -328,3 +328,92 @@ func fstr(p *float64) string {
 	}
 	return strconv.FormatFloat(*p, 'f', -1, 64)
 }
+
+// TestMetricsSerieSemanal (S3): la serie cuenta PRs (distinto), no corridas,
+// y solo incluye semanas con actividad dentro de la ventana.
+func TestMetricsSerieSemanal(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+	ctx := context.Background()
+
+	now := time.Now().UnixNano()
+	repo, err := e.st.CreateRepository(ctx, store.CreateRepositoryParams{
+		Vcs: "github", ExternalID: now, Owner: "test", Name: "serie",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Dos PRs: el mismo PR con dos corridas (cuenta 1 PR) y otro con una.
+	pr1, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 1, Author: "ana", State: "open",
+		HeadSha: "h1", BaseRef: "main", BaseSha: "b1",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now().Add(-48 * time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr2, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 2, Author: "ana", State: "open",
+		HeadSha: "h2", BaseRef: "main", BaseSha: "b2",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now().Add(-48 * time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// La semana sembrada se aísla pisando created_at: la base de desarrollo
+	// tiene corridas reales en la semana actual y la serie es global. La
+	// semana se pide al mismo SQL que produce la serie (date_trunc week) —
+	// calcularla en Go duplicaría la definición de "semana".
+	// Semana futura (+35d): ninguna corrida real la puebla, y la ventana de
+	// 60 días la alcanza desde el presente.
+	sembrada := time.Now().AddDate(0, 0, 35)
+	var weekSembrada string
+	if err := e.st.Pool.QueryRow(ctx,
+		"SELECT to_char(date_trunc('week', $1::timestamptz), 'YYYY-MM-DD')", sembrada).Scan(&weekSembrada); err != nil {
+		t.Fatal(err)
+	}
+	creadas := []int64{}
+	for _, pr := range []store.PullRequest{pr1, pr1, pr2} {
+		rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{
+			PullRequestID: pr.ID, HeadSha: pr.HeadSha, BaseSha: pr.BaseSha,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.st.Pool.Exec(ctx,
+			"UPDATE reviews SET created_at=$1 WHERE id=$2", sembrada, rev.ID); err != nil {
+			t.Fatal(err)
+		}
+		creadas = append(creadas, rev.ID)
+	}
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM reviews WHERE id = ANY($1)", creadas)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM pull_requests WHERE repository_id = $1", repo.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id = $1", repo.ID)
+	})
+
+	resp := e.do(t, http.MethodGet, "/api/metrics?days=60", a.cookie, a.csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var view metricsView
+	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
+		t.Fatal(err)
+	}
+	var sembradaPoint *weeklySeriesPoint
+	for i := range view.ReviewsPerWeek {
+		if view.ReviewsPerWeek[i].Week == weekSembrada {
+			sembradaPoint = &view.ReviewsPerWeek[i]
+			break
+		}
+	}
+	if sembradaPoint == nil {
+		t.Fatalf("la semana sembrada %s no está en la serie: %+v", weekSembrada, view.ReviewsPerWeek)
+	}
+	if sembradaPoint.Prs != 2 {
+		t.Errorf("prs = %d, querés 2 (pr1 con 2 corridas cuenta 1)", sembradaPoint.Prs)
+	}
+	if sembradaPoint.Reviews != 3 {
+		t.Errorf("reviews = %d, querés 3 corridas", sembradaPoint.Reviews)
+	}
+}

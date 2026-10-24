@@ -70,3 +70,43 @@ func (q *Queries) GetMetricsSummary(ctx context.Context, since pgtype.Timestampt
 	)
 	return i, err
 }
+
+const listReviewsPerWeek = `-- name: ListReviewsPerWeek :many
+SELECT date_trunc('week', rv.created_at)::date AS week,
+       COUNT(DISTINCT rv.pull_request_id)::bigint AS prs,
+       COUNT(*)::bigint AS reviews
+FROM reviews rv
+WHERE rv.created_at >= $1
+GROUP BY week
+ORDER BY week
+`
+
+type ListReviewsPerWeekRow struct {
+	Week    pgtype.Date
+	Prs     int64
+	Reviews int64
+}
+
+// PRs revisados por semana ISO (S3): una fila por semana con corridas en la
+// ventana; DISTINCT review.pull_request_id cuenta PRs, no corridas (un PR
+// con 3 push = 1 PR revisado esa semana). Semanas sin actividad no existen
+// (null honesto: la serie es puntos, no promedios inflados).
+func (q *Queries) ListReviewsPerWeek(ctx context.Context, createdAt pgtype.Timestamptz) ([]ListReviewsPerWeekRow, error) {
+	rows, err := q.db.Query(ctx, listReviewsPerWeek, createdAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReviewsPerWeekRow
+	for rows.Next() {
+		var i ListReviewsPerWeekRow
+		if err := rows.Scan(&i.Week, &i.Prs, &i.Reviews); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

@@ -16,6 +16,13 @@ import (
 	"github.com/Andres39128/codeowl/backend/internal/store"
 )
 
+// weeklySeriesPoint es una semana de la serie de PRs revisados (S3).
+type weeklySeriesPoint struct {
+	Week    string `json:"week"` // lunes de la semana ISO, YYYY-MM-DD
+	Prs     int64  `json:"prs"`
+	Reviews int64  `json:"reviews"`
+}
+
 // metricsView es la respuesta de GET /api/metrics. Diseño (decisión 8 de F5):
 //   - Las tasas viajan como float 0..1 o null cuando el denominador es 0 —
 //     null honesto, no 0% disfrazado de dato.
@@ -36,6 +43,9 @@ type metricsView struct {
 	FalsePositiveRate   *float64 `json:"false_positive_rate"`
 	ReviewsWithCost     int64    `json:"reviews_with_cost"`
 	AvgTokensPerReview  *float64 `json:"avg_tokens_per_review"`
+	// Serie semanal (S3): solo semanas con corridas; el dashboard espacia
+	// los huecos, no los inventa a cero.
+	ReviewsPerWeek []weeklySeriesPoint `json:"reviews_per_week"`
 }
 
 // metricsDaysDefault es la ventana por defecto (guía §6: "merged últimos
@@ -116,5 +126,18 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "error interno")
 		return
 	}
-	writeJSON(w, http.StatusOK, composeMetrics(days, sum, tok))
+	weekly, err := s.store.ListReviewsPerWeek(r.Context(), since)
+	if err != nil {
+		slog.Error("calculando la serie semanal", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	view := composeMetrics(days, sum, tok)
+	view.ReviewsPerWeek = make([]weeklySeriesPoint, 0, len(weekly))
+	for _, w := range weekly {
+		view.ReviewsPerWeek = append(view.ReviewsPerWeek, weeklySeriesPoint{
+			Week: w.Week.Time.Format("2006-01-02"), Prs: w.Prs, Reviews: w.Reviews,
+		})
+	}
+	writeJSON(w, http.StatusOK, view)
 }
