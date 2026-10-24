@@ -623,18 +623,36 @@ func (s *Server) handleDismissFinding(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "error interno")
 		return
 	}
-	// El repo del hallazgo: el dismiss es por (repo, file, category).
+	// El repo del hallazgo: el dismiss es por (repo, file, category). El
+	// target de la corrida es polimórfico (migración 0011): findings de un
+	// PR o de un push directo — la huella cruza targets (mismo repo).
 	review, err := s.store.GetReview(r.Context(), finding.ReviewID)
 	if err != nil {
 		slog.Error("buscando la corrida del hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
 		writeError(w, http.StatusInternalServerError, "error interno")
 		return
 	}
-	// Corrida de un PR (este handler es de findings de PR): el target polimórfico
-	// garantiza pull_request_id válido para corridas de PR (migración 0011).
-	pr, err := s.store.GetPullRequest(r.Context(), review.PullRequestID.Int64)
-	if err != nil {
-		slog.Error("buscando el PR del hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
+	var repoID int64
+	switch {
+	case review.PullRequestID.Valid:
+		pr, err := s.store.GetPullRequest(r.Context(), review.PullRequestID.Int64)
+		if err != nil {
+			slog.Error("buscando el PR del hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
+			writeError(w, http.StatusInternalServerError, "error interno")
+			return
+		}
+		repoID = pr.RepositoryID
+	case review.DirectPushID.Valid:
+		push, err := s.store.GetDirectPush(r.Context(), review.DirectPushID.Int64)
+		if err != nil {
+			slog.Error("buscando el push del hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
+			writeError(w, http.StatusInternalServerError, "error interno")
+			return
+		}
+		repoID = push.RepositoryID
+	default:
+		// Imposible por el CHECK de la 0011: corrida sin target.
+		slog.Error("corrida sin target al dismiss", "review", review.ID, "req_id", r.Context().Value(requestIDKey))
 		writeError(w, http.StatusInternalServerError, "error interno")
 		return
 	}
@@ -649,7 +667,7 @@ func (s *Server) handleDismissFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.store.UpsertFindingDismissal(r.Context(), store.UpsertFindingDismissalParams{
-		RepositoryID: pr.RepositoryID,
+		RepositoryID: repoID,
 		File:         finding.File,
 		Category:     finding.Category,
 		DismissedBy:  sess.Row.UserID,

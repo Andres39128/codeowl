@@ -30,16 +30,52 @@ func (q *Queries) GetDirectPush(ctx context.Context, id int64) (DirectPush, erro
 	return i, err
 }
 
+const getLatestReviewByDirectPush = `-- name: GetLatestReviewByDirectPush :one
+SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at, direct_push_id FROM reviews
+WHERE direct_push_id = $1::bigint
+ORDER BY id DESC
+LIMIT 1
+`
+
+// ESPEJO de GetLatestReviewByPR (reviews.sql) con la ventana del push: el id
+// es monotónico, ordenar por id DESC es estable. ErrNoRows = push sin
+// corridas. Vive en este archivo (no en reviews.sql) para mantener junta la
+// ventana del push (T4).
+func (q *Queries) GetLatestReviewByDirectPush(ctx context.Context, directPushID int64) (Review, error) {
+	row := q.db.QueryRow(ctx, getLatestReviewByDirectPush, directPushID)
+	var i Review
+	err := row.Scan(
+		&i.ID,
+		&i.PullRequestID,
+		&i.HeadSha,
+		&i.BaseSha,
+		&i.Summary,
+		&i.Walkthrough,
+		&i.Mermaid,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DirectPushID,
+	)
+	return i, err
+}
+
 const listDirectPushes = `-- name: ListDirectPushes :many
 SELECT dp.id, dp.repository_id, dp.branch, dp.before_sha, dp.after_sha, dp.committer, dp.created_at,
        r.owner AS repo_owner,
        r.name  AS repo_name,
+       r.vcs   AS repo_vcs,
        rv.id   AS latest_review_id,
        rv.status AS latest_review_status,
        rv.created_at AS latest_review_at
 FROM direct_pushes dp
 JOIN repositories r ON r.id = dp.repository_id
-LEFT JOIN reviews rv ON rv.direct_push_id = dp.id
+LEFT JOIN reviews rv ON rv.id = (
+    SELECT rv2.id FROM reviews rv2
+    WHERE rv2.direct_push_id = dp.id
+    ORDER BY rv2.id DESC
+    LIMIT 1
+)
 WHERE dp.repository_id = $1 OR $1 IS NULL
 ORDER BY dp.created_at DESC, dp.id DESC
 LIMIT 100
@@ -55,15 +91,18 @@ type ListDirectPushesRow struct {
 	CreatedAt          pgtype.Timestamptz
 	RepoOwner          string
 	RepoName           string
+	RepoVcs            string
 	LatestReviewID     pgtype.Int8
 	LatestReviewStatus pgtype.Text
 	LatestReviewAt     pgtype.Timestamptz
 }
 
-// Trazabilidad cronológica (S1): el listado trae repo (owner/name) y el
-// estado de su corrida más reciente — LEFT JOIN: un push puede estar aún sin
-// analizar (o con la corrida en vuelo). repository_id null = todos los
-// repos (narg: el dashboard global no filtra).
+// Trazabilidad cronológica (S1): el listado trae repo (owner/name/vcs) y el
+// estado de su corrida más reciente — UNA fila por push: el JOIN con
+// reviews matchea SOLO la última corrida (subquery por id DESC; el id es
+// monotónico, mismo criterio que GetLatestReviewByPR). LEFT: un push puede
+// estar aún sin analizar (o con la corrida en vuelo). repository_id null =
+// todos los repos (narg: el dashboard global no filtra).
 func (q *Queries) ListDirectPushes(ctx context.Context, repositoryID pgtype.Int8) ([]ListDirectPushesRow, error) {
 	rows, err := q.db.Query(ctx, listDirectPushes, repositoryID)
 	if err != nil {
@@ -83,9 +122,79 @@ func (q *Queries) ListDirectPushes(ctx context.Context, repositoryID pgtype.Int8
 			&i.CreatedAt,
 			&i.RepoOwner,
 			&i.RepoName,
+			&i.RepoVcs,
 			&i.LatestReviewID,
 			&i.LatestReviewStatus,
 			&i.LatestReviewAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFindingsByDirectPush = `-- name: ListFindingsByDirectPush :many
+SELECT f.id, f.review_id, f.file, f.line, f.severity, f.category, f.body, f.suggestion, f.source, f.verified, f.created_at, f.accepted, f.github_comment_id, (fd.id IS NOT NULL)::bool AS dismissed
+FROM findings f
+JOIN reviews r ON r.id = f.review_id
+JOIN direct_pushes dp ON dp.id = r.direct_push_id
+LEFT JOIN finding_dismissals fd
+       ON fd.repository_id = dp.repository_id
+      AND fd.file = f.file
+      AND fd.category = f.category
+WHERE r.direct_push_id = $1::bigint
+ORDER BY f.id
+`
+
+type ListFindingsByDirectPushRow struct {
+	ID              int64
+	ReviewID        int64
+	File            string
+	Line            int32
+	Severity        string
+	Category        string
+	Body            string
+	Suggestion      pgtype.Text
+	Source          string
+	Verified        pgtype.Bool
+	CreatedAt       pgtype.Timestamptz
+	Accepted        pgtype.Bool
+	GithubCommentID pgtype.Text
+	Dismissed       bool
+}
+
+// ESPEJO de ListFindingsByPR (findings.sql), scoping por direct_push_id:
+// todos los hallazgos de todas las corridas del push. dismissed marca la
+// huella "no aplica" del repo (S4): el hallazgo viaja igual (auditoría) y
+// la UI lo atenúa.
+func (q *Queries) ListFindingsByDirectPush(ctx context.Context, directPushID int64) ([]ListFindingsByDirectPushRow, error) {
+	rows, err := q.db.Query(ctx, listFindingsByDirectPush, directPushID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFindingsByDirectPushRow
+	for rows.Next() {
+		var i ListFindingsByDirectPushRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReviewID,
+			&i.File,
+			&i.Line,
+			&i.Severity,
+			&i.Category,
+			&i.Body,
+			&i.Suggestion,
+			&i.Source,
+			&i.Verified,
+			&i.CreatedAt,
+			&i.Accepted,
+			&i.GithubCommentID,
+			&i.Dismissed,
 		); err != nil {
 			return nil, err
 		}

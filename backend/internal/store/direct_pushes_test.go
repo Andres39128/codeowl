@@ -131,3 +131,55 @@ func TestReviewTargetPolimorfico(t *testing.T) {
 		t.Error("repository_id null debe listar todos los repos")
 	}
 }
+
+// T4: el listado es UNA fila por push con SU corrida más reciente — el JOIN
+// con reviews matchea solo la última (id DESC, mismo criterio que
+// GetLatestReviewByPR), no una fila por corrida; y trae el vcs del repo
+// para la vista de trazabilidad del dashboard.
+func TestListDirectPushesUltimaReviewSinDuplicar(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	repo := seedPushRepo(t, st)
+
+	push, err := st.UpsertDirectPush(ctx, UpsertDirectPushParams{
+		RepositoryID: repo.ID, Branch: "main",
+		BeforeSha: "b-9", AfterSha: "a-9", Committer: "ana",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Dos corridas: la vieja queda stale, la nueva (id mayor) nace running.
+	r1, err := st.CreateReview(ctx, CreateReviewParams{
+		DirectPushID: pgtype.Int8{Int64: push.ID, Valid: true}, HeadSha: "a-9", BaseSha: "b-9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateReviewStatus(ctx, UpdateReviewStatusParams{ID: r1.ID, Status: "stale"}); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := st.CreateReview(ctx, CreateReviewParams{
+		DirectPushID: pgtype.Int8{Int64: push.ID, Valid: true}, HeadSha: "a-9", BaseSha: "b-9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := st.ListDirectPushes(ctx, pgtype.Int8{Int64: repo.ID, Valid: true})
+	if err != nil {
+		t.Fatalf("ListDirectPushes: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListDirectPushes = %d filas, querés 1 (una por push, no por corrida): %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if !row.LatestReviewID.Valid || row.LatestReviewID.Int64 != r2.ID {
+		t.Errorf("latest_review_id = %+v, querés la corrida más reciente %d", row.LatestReviewID, r2.ID)
+	}
+	if !row.LatestReviewStatus.Valid || row.LatestReviewStatus.String != "running" {
+		t.Errorf("latest_review_status = %+v, querés running (r2, no el stale de r1)", row.LatestReviewStatus)
+	}
+	if row.RepoVcs != "github" {
+		t.Errorf("repo_vcs = %q, querés github", row.RepoVcs)
+	}
+}
