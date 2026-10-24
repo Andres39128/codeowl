@@ -32,6 +32,7 @@ const detail: PrDetailView = {
 	},
 	review: null,
 	findings: [],
+	resolved: [],
 };
 
 beforeEach(() => {

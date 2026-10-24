@@ -287,6 +287,14 @@ function HallazgoItem({
 						✕ No aplica
 					</span>
 				)}
+				{finding.persistent && (
+					<span
+						class="text-xs text-text-muted"
+						title="La misma huella (archivo + categoría) apareció en la corrida anterior de este PR: sigue sin arreglarse."
+					>
+						↻ Persistente
+					</span>
+				)}
 				<button
 					type="button"
 					class="max-w-full break-all text-left font-mono text-xs text-action-primary underline"
@@ -340,6 +348,7 @@ export function PrDetail({ prId }: { prId: number }) {
 		pr,
 		review,
 		findings,
+		resolved,
 		changeStack,
 		diff,
 		isLoading,
@@ -766,6 +775,35 @@ export function PrDetail({ prId }: { prId: number }) {
 					</>
 				)}
 			</Card>
+
+			{/* Resueltos entre corridas (S2): huellas de la corrida anterior que
+			 * ya no aparecen — colapsada para no competir con lo que SÍ hay que
+			 * arreglar. Solo existe si hay resueltos (sin placeholders vacíos). */}
+			{resolved.length > 0 && (
+				<details class="mt-3 rounded-md border border-border-subtle px-3 py-2">
+					<summary class="cursor-pointer text-sm">
+						<strong>{`Resueltos en esta corrida (${resolved.length})`}</strong>
+						<span class="ml-2 text-xs text-text-muted">
+							hallazgos de la corrida anterior que ya no aparecen
+						</span>
+					</summary>
+					<ul class="mt-2 flex flex-col gap-2 border-l border-border-subtle pl-3">
+						{resolved.map((f) => {
+							const sev = severityOf(f.severity);
+							return (
+								<li key={f.id} class="py-1">
+									<div class="mb-1 flex flex-wrap items-center gap-2">
+										<Badge tone={sev.tone}>{`● ${sev.label}`}</Badge>
+										<span class="font-mono text-xs text-action-primary">{`${f.file}:${f.line}`}</span>
+										<span class="text-xs text-text-muted">{categoryOf(f.category)}</span>
+									</div>
+									<p class="text-sm text-text-muted break-words">{f.body}</p>
+								</li>
+							);
+						})}
+					</ul>
+				</details>
+			)}
 
 			{/* Change stack (F6 §6): solo existe cuando la última corrida pudo
 			 * calcular cohortes — sin índice del repo el campo no viene y no se
