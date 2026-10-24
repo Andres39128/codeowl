@@ -465,3 +465,36 @@ func (a *Adapter) doJSON(ctx context.Context, method, path, token, accept string
 	}
 	return status, nil
 }
+
+// ResolveRepo consulta si la App tiene acceso a owner/name y devuelve el ID
+// numérico del repo (§3.3): es el external_id que el formulario de conexión
+// pide — con repos privados, la API pública no lo responde sin credencial,
+// así que el dashboard no puede saberlo por su cuenta.
+func (a *Adapter) ResolveRepo(ctx context.Context, owner, name string) (externalID int64, installed bool, err error) {
+	tm, err := a.ensureTokenManager()
+	if err != nil {
+		return 0, false, err
+	}
+	instID, installed, err := tm.InstallationStatus(ctx, owner, name)
+	if err != nil || !installed {
+		return 0, installed, err
+	}
+	token, err := tm.Token(ctx, instID)
+	if err != nil {
+		return 0, true, fmt.Errorf("token de instalación para leer %s/%s: %w", owner, name, err)
+	}
+	var out struct {
+		ID       int64  `json:"id"`
+		FullName string `json:"full_name"`
+		Private  bool   `json:"private"`
+	}
+	status, err := a.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s", owner, name),
+		token, mediaTypeJSON, nil, &out)
+	if err != nil {
+		return 0, true, fmt.Errorf("leyendo el repo %s/%s: %w", owner, name, err)
+	}
+	if status != http.StatusOK {
+		return 0, true, fmt.Errorf("leyendo el repo %s/%s: status %d", owner, name, status)
+	}
+	return out.ID, true, nil
+}

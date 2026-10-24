@@ -109,6 +109,9 @@ func (s *Server) Routes() *http.ServeMux {
 
 	mux.Handle("GET /api/repos", s.admin(s.handleListRepos))
 	mux.Handle("POST /api/repos", s.admin(s.handleCreateRepo))
+	// Go 1.22 mux: el segmento literal "github" pisa {id} — sin colisión
+	// con GET /api/repos/{id}.
+	mux.Handle("GET /api/repos/github/resolve", s.admin(s.handleResolveRepo))
 	mux.Handle("PUT /api/repos/{id}", s.admin(s.handleUpdateRepo))
 	// §3.5: la baja del repo es el flag enabled, jamás un delete.
 	mux.Handle("DELETE /api/repos/{id}", s.admin(s.handleDeleteRepo))

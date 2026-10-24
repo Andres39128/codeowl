@@ -96,6 +96,7 @@ backend:
       - "POST /api/auth/login + POST /api/auth/logout + GET /api/auth/session (F0) — sesión por cookie HttpOnly, CSRF en todo mutante POST/PUT/DELETE (guía §3.4)"
       - "proveedores LLM: GET/POST /api/providers, PUT/DELETE /api/providers/{id} (F1, admin) — CRUD de settings"
       - "repos conectados: GET/POST /api/repos, PUT /api/repos/{id} (F1, admin) — conectar = registrar; desconectar = flag enabled, sin delete (guía §3.5)"
+      - "GET /api/repos/github/resolve?owner=&name= (admin): resuelve el external_id del repo con el JWT de la App — el dato que el formulario de conexión no puede saber solo, y la llave para conectar repos privados; App sin acceso → 404 con el remedio"
       - "usuarios: GET/POST /api/users, PUT /api/users/{id} (F1, admin) — invitación, reset de contraseña, desactivación (guía §3.4)"
       - "cola de jobs: GET /api/jobs (F1) — lectura del panel de cola: pending/running/discarded por tipo (guía §9.9)"
       - "detalle de PR: GET /api/prs, GET /api/prs/{id}, GET /api/prs/{id}/diff (F3, member) — lista + findings + diff resuelto por el adapter (GetDiff) bajo demanda, sin copia en BD (guía §6 F3); GET /api/prs gana query params sort/state/repo/severity y risk_score en la lista (F5, T7)"

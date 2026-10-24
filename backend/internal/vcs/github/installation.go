@@ -172,29 +172,49 @@ func (tm *tokenManager) InstallationID(ctx context.Context, repo *store.Reposito
 	}
 	tm.mu.Unlock()
 
-	jwt, err := tm.jwt()
+	id, ok, err := tm.InstallationStatus(ctx, repo.Owner, repo.Name)
 	if err != nil {
 		return 0, err
+	}
+	if !ok {
+		return 0, fmt.Errorf("resolviendo instalación de la App para %s: status 404 (¿App instalada en el repo?)", name)
+	}
+	return id, nil
+}
+
+// InstallationStatus resuelve la instalación de la App sobre owner/name:
+// (id, true, nil) si la App tiene acceso al repo; (0, false, nil) con 404 —
+// el repo existe pero la App no está instalada ahí (estado consultable, no
+// error); error ante fallo real de infraestructura.
+func (tm *tokenManager) InstallationStatus(ctx context.Context, owner, name string) (int64, bool, error) {
+	full := owner + "/" + name
+	jwt, err := tm.jwt()
+	if err != nil {
+		return 0, false, err
 	}
 	var out struct {
 		ID int64 `json:"id"`
 	}
 	req, err := newAPIRequest(ctx, http.MethodGet, tm.baseURL,
-		fmt.Sprintf("/repos/%s/%s/installation", repo.Owner, repo.Name), jwt, mediaTypeJSON, nil)
+		fmt.Sprintf("/repos/%s/installation", full), jwt, mediaTypeJSON, nil)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	status, err := tm.do(ctx, req, &out)
 	if err != nil {
-		return 0, fmt.Errorf("resolviendo instalación de la App para %s: %w", name, err)
+		return 0, false, fmt.Errorf("resolviendo instalación de la App para %s: %w", full, err)
 	}
-	if status != http.StatusOK {
-		return 0, fmt.Errorf("resolviendo instalación de la App para %s: status %d (¿App instalada en el repo?)", name, status)
+	switch {
+	case status == http.StatusOK:
+		tm.mu.Lock()
+		tm.inst[full] = cachedInstallation{id: out.ID, fetchedAt: time.Now()}
+		tm.mu.Unlock()
+		return out.ID, true, nil
+	case status == http.StatusNotFound:
+		return 0, false, nil
+	default:
+		return 0, false, fmt.Errorf("resolviendo instalación de la App para %s: status %d", full, status)
 	}
-	tm.mu.Lock()
-	tm.inst[name] = cachedInstallation{id: out.ID, fetchedAt: time.Now()}
-	tm.mu.Unlock()
-	return out.ID, nil
 }
 
 // do ejecuta la request y decodea la respuesta JSON en out si no es nil.

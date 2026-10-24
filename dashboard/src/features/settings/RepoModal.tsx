@@ -26,6 +26,43 @@ export function RepoModal({ onClose }: RepoModalProps) {
 	const [apiToken, setApiToken] = useState("");
 	const [deployKey, setDeployKey] = useState("");
 	const [baseUrl, setBaseUrl] = useState("");
+	const [detectando, setDetectando] = useState(false);
+	const [aviso, setAviso] = useState<{
+		tone: "success" | "error";
+		texto: string;
+	} | null>(null);
+
+	// Detectar resuelve el external_id con la GitHub App (§3.3): con repos
+	// privados es el único dato que el dashboard no puede saber por su
+	// cuenta — sin esto, conectar un privado era imposible.
+	async function detectar() {
+		setDetectando(true);
+		setAviso(null);
+		try {
+			const out = await api<{
+				installed: boolean;
+				external_id: number;
+				full_name: string;
+			}>(
+				`/api/repos/github/resolve?owner=${encodeURIComponent(owner.trim())}&name=${encodeURIComponent(name.trim())}`,
+			);
+			setExternalId(String(out.external_id));
+			setAviso({
+				tone: "success",
+				texto: `App instalada ✓ — ID de ${out.full_name} completado.`,
+			});
+		} catch (err) {
+			setAviso({
+				tone: "error",
+				texto:
+					err instanceof ApiError
+						? err.message
+						: "No se pudo consultar el repo en GitHub.",
+			});
+		} finally {
+			setDetectando(false);
+		}
+	}
 
 	const connect = useMutation({
 		mutationFn: () =>
@@ -105,6 +142,30 @@ export function RepoModal({ onClose }: RepoModalProps) {
 						class={inputClass}
 					/>
 				</Field>
+
+				{vcs === "github" && (
+					<div class="mb-2 flex items-center gap-2">
+						<button
+							type="button"
+							onClick={detectar}
+							disabled={detectando || !owner.trim() || !name.trim()}
+							class="rounded border border-border-subtle px-2 py-1 text-xs text-action-primary disabled:opacity-50 hover:bg-bg-elevated"
+						>
+							{detectando ? "Detectando…" : "Detectar ID con la App"}
+						</button>
+						<span
+							class="text-xs text-text-muted"
+							title="Con la App instalada, el ID se resuelve solo — también para repos privados."
+						>
+							completá owner y nombre y lo traemos solo
+						</span>
+					</div>
+				)}
+				{aviso !== null && (
+					<Banner tone={aviso.tone} class="mb-2">
+						{aviso.texto}
+					</Banner>
+				)}
 
 				<Field
 					label="ID externo (external_id del repo en el VCS)"

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,4 +214,66 @@ func TestReposDeleteEs405(t *testing.T) {
 	if got := e.do(t, http.MethodDelete, "/api/repos/123", a.cookie, a.csrf, nil).StatusCode; got != http.StatusMethodNotAllowed {
 		t.Errorf("DELETE de repo debe ser 405, fue %d", got)
 	}
+}
+
+// resolverStub implementa repoResolver: fija la respuesta del adapter.
+type resolverStub struct {
+	stubVCS
+	id        int64
+	installed bool
+	err       error
+}
+
+func (r *resolverStub) ResolveRepo(_ context.Context, _, _ string) (int64, bool, error) {
+	return r.id, r.installed, r.err
+}
+
+// TestResolveRepo: el formulario de conexión resuelve el external_id de un
+// repo (privado incluido) con la App — y obtiene el remedio claro cuando la
+// App no está instalada (guía §3.3).
+func TestResolveRepo(t *testing.T) {
+	t.Run("resuelve el external_id", func(t *testing.T) {
+		e := newTestEnvVCS(t, 5, &resolverStub{id: 1398958392, installed: true}, nil)
+		a := e.admin(t)
+		resp := e.do(t, http.MethodGet, "/api/repos/github/resolve?owner=acme&name=privado", a.cookie, a.csrf, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, querés 200", resp.StatusCode)
+		}
+		var out repoResolveView
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		if !out.Installed || out.ExternalID != 1398958392 || out.FullName != "acme/privado" {
+			t.Errorf("vista = %+v, querés installed con external_id 1398958392", out)
+		}
+	})
+
+	t.Run("sin instalación da 404 con el remedio", func(t *testing.T) {
+		e := newTestEnvVCS(t, 5, &resolverStub{installed: false}, nil)
+		a := e.admin(t)
+		resp := e.do(t, http.MethodGet, "/api/repos/github/resolve?owner=acme&name=privado", a.cookie, a.csrf, nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, querés 404", resp.StatusCode)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if !strings.Contains(string(body), "instalala") {
+			t.Errorf("el mensaje debe decir cómo remediarlo: %s", body)
+		}
+	})
+
+	t.Run("falta owner o name da 400", func(t *testing.T) {
+		e := newTestEnvVCS(t, 5, &resolverStub{installed: true}, nil)
+		a := e.admin(t)
+		if got := e.do(t, http.MethodGet, "/api/repos/github/resolve?name=solo", a.cookie, a.csrf, nil).StatusCode; got != http.StatusBadRequest {
+			t.Errorf("status = %d, querés 400", got)
+		}
+	})
+
+	t.Run("error del upstream da 502", func(t *testing.T) {
+		e := newTestEnvVCS(t, 5, &resolverStub{err: fmt.Errorf("GitHub caído")}, nil)
+		a := e.admin(t)
+		if got := e.do(t, http.MethodGet, "/api/repos/github/resolve?owner=a&name=b", a.cookie, a.csrf, nil).StatusCode; got != http.StatusBadGateway {
+			t.Errorf("status = %d, querés 502", got)
+		}
+	})
 }

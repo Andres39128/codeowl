@@ -8,8 +8,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -75,6 +77,52 @@ func (s *Server) encryptedText(v string) (pgtype.Text, error) {
 		return pgtype.Text{}, err
 	}
 	return pgtype.Text{String: enc, Valid: true}, nil
+}
+
+// repoResolver resuelve el ID numérico de un repo de GitHub con las
+// credenciales de la App (§3.3): el github.Adapter la satisface. Va por
+// type assertion y no por VCSProvider para no obligar a GitLab a fingir
+// una resolución que su flujo (F2) no tiene.
+type repoResolver interface {
+	ResolveRepo(ctx context.Context, owner, name string) (externalID int64, installed bool, err error)
+}
+
+// repoResolveView es la respuesta de GET /api/repos/github/resolve.
+type repoResolveView struct {
+	Installed  bool   `json:"installed"`
+	ExternalID int64  `json:"external_id"`
+	FullName   string `json:"full_name,omitempty"`
+	Private    bool   `json:"private,omitempty"`
+}
+
+// handleResolveRepo: GET /api/repos/github/resolve?owner=&name= — con el JWT
+// de la App resuelve si está instalada sobre el repo y su external_id (el
+// dato que el formulario de conexión pide y que con repos privados nadie
+// puede ver desde el dashboard). App sin acceso → 404 con el remedio.
+func (s *Server) handleResolveRepo(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	owner, name := q.Get("owner"), q.Get("name")
+	if owner == "" || name == "" {
+		writeError(w, http.StatusBadRequest, "owner y name son obligatorios")
+		return
+	}
+	res, ok := s.github.(repoResolver)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "la resolución de repos no está disponible")
+		return
+	}
+	id, installed, err := res.ResolveRepo(r.Context(), owner, name)
+	if err != nil {
+		// El upstream falló (JWT, red, API): 502 — es de GitHub, no nuestro.
+		slog.Error("resolviendo repo en el VCS", "owner", owner, "name", name, "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusBadGateway, "no se pudo consultar el repo en GitHub")
+		return
+	}
+	if !installed {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("la GitHub App no tiene acceso a %s/%s: instalala en el repo y volvé a intentar", owner, name))
+		return
+	}
+	writeJSON(w, http.StatusOK, repoResolveView{Installed: true, ExternalID: id, FullName: owner + "/" + name})
 }
 
 // handleListRepos: GET /api/repos.
