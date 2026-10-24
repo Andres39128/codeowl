@@ -27,7 +27,14 @@ de corrida, C métricas de valor, D triage de hallazgos.
 
 - T0 (S1-S4): docs — mapa_arquitectura endpoints nuevos + guía §3.5/§9.9 si
   aplica. [este commit]
-- T1 (S1): backend salud por repo + "revisar ahora" + tests.
+- T1 (S1): backend salud por repo + "revisar ahora" + tests. [cd1de85d]
+- T2 (S1): dashboard tarjeta de salud + botón + tests. [c7846747]
+- T3 (S2): backend GET /api/reviews/{id} + tests. [9bd9238b]
+- T4 (S2): dashboard vista de corrida + tests. [39ebabd2]
+- T5 (S3): backend serie semanal en /api/metrics + tests. [3b60cc7c]
+- T6 (S3): dashboard barras semanales en Triage + tests. [4f0f645b]
+- T7 (S4): migración 0010 + dismiss por huella + tests. [70a17655]
+- T8 (S4): dashboard agrupación por archivo + no aplica + tests. [1afef440]
 - T2 (S1): dashboard tarjeta de salud + botón + tests.
 - T3 (S2): backend GET /api/reviews/{id} (resumen, cobertura, uso por rol,
   duración) + tests.
@@ -43,3 +50,5 @@ de corrida, C métricas de valor, D triage de hallazgos.
   para que pueda ser más claro y más util"
 - L2: el usuario eligió las cuatro unidades (A salud por repo, B detalle de
   corrida, C métricas de valor, D triage de hallazgos) en ese orden.
+- L3: las cuatro unidades implementadas y verificadas (backend 12/12 con BD
+  real, dashboard 115/115). Commits por tarea arriba.
