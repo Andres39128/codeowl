@@ -29,9 +29,9 @@ explique.
 
 ## Tasks
 
-- T1 (S1): componente PromptModal + botón en HallazgoItem + tests.
-- T2 (S2): página Guía + nav + tests.
-- T3 (S3): docs/guia_usuario.md + referencia en la guía del proyecto.
+- T1 (S1): componente PromptModal + botón en HallazgoItem + tests. [db9f90da]
+- T2 (S2): página Guía + nav + tests. [8ab8c957]
+- T3 (S3): docs/guia_usuario.md + referencia en la guía del proyecto. [022c6c31]
 
 ## Log
 
@@ -40,3 +40,7 @@ explique.
   crear una guía clara de paso a paso, que hacer en cada punto, como
   verificar y corregir las alertas y un creador de prompts para realizar
   las correcciones de las alertas y todo lo que se descubra"
+- L4: verificado en navegador real: Guía (#/guia) con los 5 pasos y links
+  correctos, PromptModal con tabs Corregir/Explicar, archivo y línea del
+  hallazgo real en el prompt, pedidos completos; hunk con fallback honesto
+  cuando el archivo no está en el diff. Dashboard 121/121.
