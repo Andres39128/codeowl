@@ -232,6 +232,122 @@ func (w *ReviewJobWorker) failFinal(ctx context.Context, job *river.Job[ReviewJo
 	return cause
 }
 
+// ---------------------------------------------------------------------------
+// PushReviewWorker — pipeline de un push directo (trazabilidad-merges S2/S5)
+// ---------------------------------------------------------------------------
+
+// PushReviewWorker corre una corrida de review sobre un push directo a la
+// rama base (trazabilidad-merges S2): clona la rama base al workdir del job
+// (S3: el push a analizar llegó ahí) y delega en review.Run con el input de
+// push — el diff sale del compare del VCS (before..after de la fila) y la
+// salida vive solo en el dashboard (S5): sin publicación en el VCS. Misma
+// cola review y tope de intentos que el ReviewJob (insertOpts ya lo enruta
+// desde T2). Sin re-chequeo de identidad en vuelo: la fila de un push es
+// inmutable (el upsert deduplica por (repo, after_sha) y solo refresca
+// branch/committer) — un push más nuevo queda cubierto por el stale de Run.
+type PushReviewWorker struct {
+	river.WorkerDefaults[PushReviewJobArgs]
+
+	Store     *store.Store
+	Gateway   review.Gateway        // *llm.Gateway la satisface
+	Analyzer  review.Analyzer       // *analyze.Runner la satisface
+	Provider  vcs.VCSProvider       // FetchDefaultBranch clona la rama base; GetCommitDiff trae el diff
+	Retriever review.Retriever      // contexto simbólico del repo (§6 F4); nil → sin bloque
+	Impact    review.ImpactProvider // dependientes del grafo de imports (§6 F6); nil → impact null
+	Queue     JobQueue              // encola el IndexJob tras la corrida (§6 F4)
+	Config    review.Config
+
+	WorkdirRoot string // default /var/tmp (los tests usan un tmp propio)
+}
+
+func (w *PushReviewWorker) register(b *river.Workers) error { return river.AddWorkerSafely(b, w) }
+
+// Work ejecuta la corrida del push. El workdir vive solo durante el job:
+// se crea con el ID del job y se borra al salir, éxito o fallo.
+func (w *PushReviewWorker) Work(ctx context.Context, job *river.Job[PushReviewJobArgs]) error {
+	args := job.Args
+	workdir, err := os.MkdirTemp(workdirRoot(w.WorkdirRoot), fmt.Sprintf("%s%d-", workdirPrefix, job.ID))
+	if err != nil {
+		return fmt.Errorf("creando el workdir del job %d: %w", job.ID, err)
+	}
+	defer os.RemoveAll(workdir)
+
+	push, err := w.Store.GetDirectPush(ctx, args.PushID)
+	if err != nil {
+		return w.failFinal(ctx, job, fmt.Errorf("cargando el push %d: %w", args.PushID, err))
+	}
+	repoID := args.RepositoryID
+	if repoID == 0 {
+		repoID = push.RepositoryID // encolados sin repository_id
+	}
+	repo, err := w.Store.GetRepository(ctx, repoID)
+	if err != nil {
+		return w.failFinal(ctx, job, fmt.Errorf("cargando el repo %d: %w", repoID, err))
+	}
+
+	// El clon es la rama base (S3): ahí aterrizó el push — el SAST y el
+	// review.yaml del merge-base se leen del clon; el diff before..after
+	// lo trae review.Run desde el compare del VCS.
+	if err := w.Provider.FetchDefaultBranch(ctx, &repo, workdir); err != nil {
+		return w.failFinal(ctx, job, fmt.Errorf("clonando la rama base del repo %d: %w", repo.ID, err))
+	}
+
+	res, err := review.Run(ctx, w.Config, w.Store, w.Gateway, w.Analyzer, w.Provider, w.Retriever, w.Impact, review.ReviewInput{
+		DirectPushID: args.PushID,
+		RepositoryID: repoID,
+		Workdir:      workdir,
+	})
+	if err != nil {
+		return w.failFinal(ctx, job, err)
+	}
+	slog.Info("push review job completado", "job", job.ID, "push", args.PushID,
+		"review", res.Status, "findings", res.FindingsCount)
+
+	// §6 F4: un push a la rama base cambia el código indexado — mismo
+	// re-encolo best-effort que el ReviewJob (la guarda de proveedor
+	// embedding vive en EnqueueIndexJob).
+	if res.Status == review.StatusSuccess || res.Status == review.StatusPartial {
+		if err := EnqueueIndexJob(ctx, w.Store, w.Queue, repoID); err != nil {
+			slog.Warn("push review job: no se pudo encolar el IndexJob",
+				"repo", repoID, "push", args.PushID, "err", err)
+		}
+	}
+	return nil
+}
+
+// failFinal marca failed las corridas running del push cuando el error es
+// del último intento (§9.7): sin query por push en la store (el reintento
+// crea fila nueva, la última gana), TODA fila running de este push está
+// muerta al agotar intentos y se marca — ListDirectPushes trae el JOIN con
+// reviews. Antes del último intento, el error solo pide el reintento.
+func (w *PushReviewWorker) failFinal(ctx context.Context, job *river.Job[PushReviewJobArgs], cause error) error {
+	if job.Attempt < job.MaxAttempts {
+		return cause
+	}
+	if job.Args.RepositoryID == 0 {
+		return cause // sin repo no hay listado: la fila queda running huérfana (log del descarte)
+	}
+	rows, err := w.Store.ListDirectPushes(ctx, pgtype.Int8{Int64: job.Args.RepositoryID, Valid: true})
+	if err != nil {
+		slog.Warn("push review job: no se pudo marcar la corrida failed al agotar intentos",
+			"push", job.Args.PushID, "error", err)
+		return cause
+	}
+	for _, row := range rows {
+		if row.ID != job.Args.PushID || !row.LatestReviewStatus.Valid ||
+			row.LatestReviewStatus.String != review.StatusRunning || !row.LatestReviewID.Valid {
+			continue
+		}
+		if _, uerr := w.Store.UpdateReviewStatus(ctx, store.UpdateReviewStatusParams{
+			ID: row.LatestReviewID.Int64, Status: review.StatusFailed,
+		}); uerr != nil {
+			slog.Warn("push review job: no se pudo marcar la corrida failed al agotar intentos",
+				"review", row.LatestReviewID.Int64, "error", uerr)
+		}
+	}
+	return cause
+}
+
 // indexRetriever adapta index.Retrieve al contrato review.Retriever (§6 F4,
 // decisión 7: la interfaz vive en review y el acoplamiento apunta hacia
 // adentro — review no importa index). Dueño de su topK vía config del
@@ -910,24 +1026,26 @@ func lineasAgregadas(patch string) string {
 // Satisfacción de interfaces en tiempo de compilación: el worker consume
 // exactamente el contrato que declara.
 var (
-	_ river.Worker[ReviewJobArgs]    = (*ReviewJobWorker)(nil)
-	_ river.Worker[ChatJobArgs]      = (*ChatJobWorker)(nil)
-	_ river.Worker[CleanupJobArgs]   = (*CleanupJobWorker)(nil)
-	_ river.Worker[RotationJobArgs]  = (*RotationJobWorker)(nil)
-	_ river.Worker[ReconcileJobArgs] = (*ReconcileJobWorker)(nil)
-	_ river.Worker[IndexJobArgs]     = (*IndexJobWorker)(nil)
-	_ river.Worker[MetricsJobArgs]   = (*MetricsJobWorker)(nil)
-	_ Worker                         = (*ReviewJobWorker)(nil)
-	_ Worker                         = (*ChatJobWorker)(nil)
-	_ Worker                         = (*CleanupJobWorker)(nil)
-	_ Worker                         = (*RotationJobWorker)(nil)
-	_ Worker                         = (*ReconcileJobWorker)(nil)
-	_ Worker                         = (*IndexJobWorker)(nil)
-	_ Worker                         = (*MetricsJobWorker)(nil)
-	_ review.Gateway                 = (*llm.Gateway)(nil)
-	_ review.Analyzer                = (*analyze.Runner)(nil)
-	_ review.Retriever               = indexRetriever{}
-	_ review.ImpactProvider          = indexImpact{}
-	_ index.Gateway                  = (*llm.Gateway)(nil)
-	_ index.Extractor                = (*analyze.Runner)(nil)
+	_ river.Worker[ReviewJobArgs]     = (*ReviewJobWorker)(nil)
+	_ river.Worker[ChatJobArgs]       = (*ChatJobWorker)(nil)
+	_ river.Worker[CleanupJobArgs]    = (*CleanupJobWorker)(nil)
+	_ river.Worker[RotationJobArgs]   = (*RotationJobWorker)(nil)
+	_ river.Worker[ReconcileJobArgs]  = (*ReconcileJobWorker)(nil)
+	_ river.Worker[IndexJobArgs]      = (*IndexJobWorker)(nil)
+	_ river.Worker[MetricsJobArgs]    = (*MetricsJobWorker)(nil)
+	_ river.Worker[PushReviewJobArgs] = (*PushReviewWorker)(nil)
+	_ Worker                          = (*ReviewJobWorker)(nil)
+	_ Worker                          = (*ChatJobWorker)(nil)
+	_ Worker                          = (*CleanupJobWorker)(nil)
+	_ Worker                          = (*RotationJobWorker)(nil)
+	_ Worker                          = (*ReconcileJobWorker)(nil)
+	_ Worker                          = (*IndexJobWorker)(nil)
+	_ Worker                          = (*MetricsJobWorker)(nil)
+	_ Worker                          = (*PushReviewWorker)(nil)
+	_ review.Gateway                  = (*llm.Gateway)(nil)
+	_ review.Analyzer                 = (*analyze.Runner)(nil)
+	_ review.Retriever                = indexRetriever{}
+	_ review.ImpactProvider           = indexImpact{}
+	_ index.Gateway                   = (*llm.Gateway)(nil)
+	_ index.Extractor                 = (*analyze.Runner)(nil)
 )

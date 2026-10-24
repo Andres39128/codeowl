@@ -14,9 +14,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -88,6 +90,7 @@ type stubStore struct {
 	mu       sync.Mutex
 	repo     store.Repository
 	pr       store.PullRequest
+	pushes   []store.DirectPush // pushes directos sembrados (trazabilidad S2)
 	reviews  map[int64]*store.Review
 	nextRev  int64
 	findings []store.CreateFindingParams
@@ -130,7 +133,7 @@ func (s *stubStore) CreateReview(_ context.Context, arg store.CreateReviewParams
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextRev++
-	rev := store.Review{ID: s.nextRev, PullRequestID: arg.PullRequestID,
+	rev := store.Review{ID: s.nextRev, PullRequestID: arg.PullRequestID, DirectPushID: arg.DirectPushID,
 		HeadSha: arg.HeadSha, BaseSha: arg.BaseSha, Status: StatusRunning}
 	s.reviews[rev.ID] = &rev
 	return rev, nil
@@ -203,6 +206,61 @@ func (s *stubStore) GetCommentsSentByPRAndType(_ context.Context, arg store.GetC
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]store.CommentsSent(nil), s.comments[arg.Type]...), nil
+}
+
+// GetDirectPush sirve la fila del push sembrado (trazabilidad S2).
+func (s *stubStore) GetDirectPush(_ context.Context, id int64) (store.DirectPush, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.pushes {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return store.DirectPush{}, pgx.ErrNoRows
+}
+
+// ListDirectPushes espeja la query real: pushes del repo ordenados
+// created_at DESC (id DESC desempata) con el LEFT JOIN a reviews — cada
+// (push, review) es una fila; sin reviews, una fila con nulls.
+func (s *stubStore) ListDirectPushes(_ context.Context, repositoryID pgtype.Int8) ([]store.ListDirectPushesRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sorted := append([]store.DirectPush(nil), s.pushes...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if !sorted[i].CreatedAt.Time.Equal(sorted[j].CreatedAt.Time) {
+			return sorted[i].CreatedAt.Time.After(sorted[j].CreatedAt.Time)
+		}
+		return sorted[i].ID > sorted[j].ID
+	})
+	out := make([]store.ListDirectPushesRow, 0, len(sorted))
+	for _, p := range sorted {
+		if repositoryID.Valid && p.RepositoryID != repositoryID.Int64 {
+			continue
+		}
+		fila := func(rev *store.Review) store.ListDirectPushesRow {
+			row := store.ListDirectPushesRow{
+				ID: p.ID, RepositoryID: p.RepositoryID, Branch: p.Branch,
+				BeforeSha: p.BeforeSha, AfterSha: p.AfterSha, CreatedAt: p.CreatedAt,
+			}
+			if rev != nil {
+				row.LatestReviewID = pgtype.Int8{Int64: rev.ID, Valid: true}
+				row.LatestReviewStatus = pgtype.Text{String: rev.Status, Valid: true}
+			}
+			return row
+		}
+		var conReview bool
+		for _, r := range s.reviews {
+			if r.DirectPushID.Valid && r.DirectPushID.Int64 == p.ID {
+				conReview = true
+				out = append(out, fila(r))
+			}
+		}
+		if !conReview {
+			out = append(out, fila(nil))
+		}
+	}
+	return out, nil
 }
 
 func (s *stubStore) ListFindingsByReview(_ context.Context, reviewID int64) ([]store.Finding, error) {
@@ -387,6 +445,7 @@ type stubVCS struct {
 	diff         string
 	failInline   bool
 	mu           sync.Mutex
+	commitDiffs  []string // pares before..after servidos por GetCommitDiff (S2)
 	summaryBods  []string
 	summaryID    string
 	inlineReqs   []vcs.CommentPosition
@@ -408,6 +467,16 @@ func (s *stubVCS) FetchPRTimeline(context.Context, *store.Repository, *store.Pul
 	return &vcs.PRTimeline{}, nil
 }
 func (s *stubVCS) GetDiff(context.Context, *store.Repository, *store.PullRequest) (string, error) {
+	return s.diff, nil
+}
+
+// GetCommitDiff sirve el diff del push (trazabilidad S2) y graba el par
+// before..after que le pidieron — el test verifica que el pipeline pidió el
+// rango de la fila del push.
+func (s *stubVCS) GetCommitDiff(_ context.Context, _ *store.Repository, before, after string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commitDiffs = append(s.commitDiffs, before+".."+after)
 	return s.diff, nil
 }
 func (s *stubVCS) ListOpenPRs(context.Context, *store.Repository) ([]vcs.OpenPR, error) {
@@ -483,6 +552,40 @@ func newDeps() *deps {
 func (d *deps) run(t *testing.T) (*ReviewResult, error) {
 	t.Helper()
 	return Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, d.impact, testInput())
+}
+
+// Identidad del push directo de prueba (trazabilidad S2): same repo, rama
+// base, before/after hex-like.
+const (
+	testPushID     = int64(11)
+	testPushBefore = "pushbbbb"
+	testPushAfter  = "pushcccc"
+)
+
+// seedPush siembra el push directo en la store stub, una hora atrás.
+func seedPush(s *stubStore) store.DirectPush {
+	p := store.DirectPush{
+		ID: testPushID, RepositoryID: testRepoID, Branch: "main",
+		BeforeSha: testPushBefore, AfterSha: testPushAfter, Committer: "dev",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+	}
+	s.pushes = append(s.pushes, p)
+	return p
+}
+
+// pushInput es la entrada canónica del push: solo ids — la fila manda.
+func pushInput() ReviewInput {
+	return ReviewInput{
+		DirectPushID: testPushID,
+		RepositoryID: testRepoID,
+		Workdir:      "/nonexistent-codeowl-test", // merge-base cae a base_sha
+	}
+}
+
+// runPush ejecuta Run con la entrada de push sobre los mismos stubs.
+func (d *deps) runPush(t *testing.T) (*ReviewResult, error) {
+	t.Helper()
+	return Run(context.Background(), d.cfg, d.st, d.gw, d.az, d.vcs, d.retr, d.impact, pushInput())
 }
 
 // ---------------------------------------------------------------------------
@@ -724,6 +827,127 @@ func TestRunStale(t *testing.T) {
 	}
 	if rev := d.st.reviews[1]; rev.Status != StatusStale {
 		t.Errorf("review status = %q, querés stale", rev.Status)
+	}
+}
+
+// Push directo (trazabilidad-merges S2/S5): el pipeline corre idéntico al
+// de PR — diff before..after del provider, SAST + agentes + resumen con
+// mermaid — pero la review nace colgada del push (direct_push_id, head=
+// after, base=before), NADA se publica en el VCS (S5: sin comments_sent),
+// no hay risk/effort/impact (viven en pull_requests) ni veredicto
+// pre-merge (el push ya llegó a la rama base).
+func TestRunPushDirecto(t *testing.T) {
+	d := newDeps()
+	seedPush(d.st)
+	d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "inyección SQL", "")}
+	d.gw.summarizer = []string{summarizerJSON}
+	d.az.result.Findings = []analyze.Finding{{
+		File: "main.go", Line: 5, Severity: "low", Category: "style",
+		Body: "nombre corto", Source: "sast", Linter: "revive", Rule: "var-naming",
+	}}
+
+	res, err := d.runPush(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != StatusSuccess {
+		t.Errorf("status = %q, querés %q", res.Status, StatusSuccess)
+	}
+	if res.FindingsCount != 2 {
+		t.Errorf("FindingsCount = %d, querés 2 (LLM + SAST)", res.FindingsCount)
+	}
+
+	// Fila colgada del push con head=after, base=before (S6).
+	rev := d.st.reviews[1]
+	if !rev.DirectPushID.Valid || rev.DirectPushID.Int64 != testPushID {
+		t.Errorf("direct_push_id = %+v, querés %d", rev.DirectPushID, testPushID)
+	}
+	if rev.PullRequestID.Valid {
+		t.Errorf("pull_request_id = %+v, querés null en review de push", rev.PullRequestID)
+	}
+	if rev.HeadSha != testPushAfter || rev.BaseSha != testPushBefore {
+		t.Errorf("identidad = %s..%s, querés %s..%s (after..before)",
+			rev.BaseSha, rev.HeadSha, testPushBefore, testPushAfter)
+	}
+	if rev.Summary == "" || rev.Mermaid == "" {
+		t.Errorf("resumen/mermaid vacíos en la fila: %+v", rev)
+	}
+
+	// El diff salió del compare del VCS con el rango de la fila del push.
+	if len(d.vcs.commitDiffs) != 1 || d.vcs.commitDiffs[0] != testPushBefore+".."+testPushAfter {
+		t.Fatalf("GetCommitDiff = %v, querés [%s..%s]", d.vcs.commitDiffs, testPushBefore, testPushAfter)
+	}
+	if len(d.vcs.summaryBods) != 0 || len(d.vcs.inlineReqs) != 0 || len(d.vcs.suggestReqs) != 0 {
+		t.Errorf("hubo publicación en la corrida de push (S5: solo dashboard)")
+	}
+
+	// Hallazgos persistidos para auditoría, igual que un PR.
+	if len(d.st.findings) != 2 {
+		t.Errorf("findings persistidos = %d, querés 2", len(d.st.findings))
+	}
+	// S5: CERO comments_sent — no hay PR donde registrar publicación.
+	if n := len(d.st.comments["inline"]) + len(d.st.comments["summary"]); n != 0 {
+		t.Errorf("comments_sent = %d filas, querés 0 (S5)", n)
+	}
+
+	// Sin risk/effort/impact/change_stack: viven en pull_requests.
+	if len(d.st.riskScores) != 0 || len(d.st.triageScores) != 0 || len(d.st.changeStacks) != 0 {
+		t.Errorf("la corrida de push tocó scores de PR: risk=%d triage=%d stack=%d",
+			len(d.st.riskScores), len(d.st.triageScores), len(d.st.changeStacks))
+	}
+
+	// Sin veredicto pre-merge: reviewer + summarizer, nada más.
+	if d.gw.calls != 2 {
+		t.Errorf("gateway llamado %d veces, querés 2 (sin pre-merge en push)", d.gw.calls)
+	}
+}
+
+// Stale de push (trazabilidad S2): un push más nuevo del mismo repo (after
+// distinto, creado después) marca la corrida stale SIN gastar LLM ni diff.
+func TestRunPushStale(t *testing.T) {
+	d := newDeps()
+	push := seedPush(d.st)
+	d.st.pushes = append(d.st.pushes, store.DirectPush{
+		ID: testPushID + 1, RepositoryID: testRepoID, Branch: "main",
+		BeforeSha: testPushAfter, AfterSha: "pushnuevo000",
+		Committer: "dev",
+		CreatedAt: pgtype.Timestamptz{Time: push.CreatedAt.Time.Add(time.Minute), Valid: true},
+	})
+	d.gw.summarizer = []string{summarizerJSON}
+
+	res, err := d.runPush(t)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != StatusStale {
+		t.Errorf("status = %q, querés stale", res.Status)
+	}
+	if d.gw.calls != 0 {
+		t.Errorf("gateway llamado %d veces, querés 0 (stale sin LLM)", d.gw.calls)
+	}
+	if len(d.vcs.commitDiffs) != 0 {
+		t.Errorf("GetCommitDiff llamado en corrida stale: %v", d.vcs.commitDiffs)
+	}
+	if rev := d.st.reviews[1]; rev.Status != StatusStale {
+		t.Errorf("review status = %q, querés stale", rev.Status)
+	}
+}
+
+// Invariante del target (S6): exactamente uno de PullRequestID/DirectPushID
+// distinto de 0 — ninguno o ambos es input inválido y Run lo rechaza antes
+// de tocar la BD.
+func TestRunInputTargetInvalido(t *testing.T) {
+	d := newDeps()
+	for name, in := range map[string]ReviewInput{
+		"ninguno": {RepositoryID: testRepoID, Workdir: "/nonexistent"},
+		"ambos":   {PullRequestID: testPRID, DirectPushID: testPushID, RepositoryID: testRepoID},
+	} {
+		if _, err := Run(context.Background(), DefaultConfig(), d.st, d.gw, d.az, d.vcs, nil, nil, in); err == nil {
+			t.Errorf("input %q (ninguno/ambos targets) debe rechazarse, corrió sin error", name)
+		}
+	}
+	if len(d.st.reviews) != 0 {
+		t.Errorf("un input inválido no crea review: %d filas", len(d.st.reviews))
 	}
 }
 

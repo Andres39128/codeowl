@@ -560,7 +560,7 @@ func TestF5MetricsEndpoint(t *testing.T) {
 		t.Fatalf("UpsertPullRequest: %v", err)
 	}
 	rev, err := st.CreateReview(ctx, store.CreateReviewParams{
-		PullRequestID: pr.ID,
+		PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true},
 		HeadSha:       "f5metrics0000000000000000000000000000000a", BaseSha: fakeBase,
 	})
 	if err != nil {

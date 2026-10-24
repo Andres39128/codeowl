@@ -80,6 +80,10 @@ var defaultRiskSensitivePaths = []string{
 type Store interface {
 	GetRepository(ctx context.Context, id int64) (store.Repository, error)
 	GetPullRequest(ctx context.Context, id int64) (store.PullRequest, error)
+	// Pushes directos (trazabilidad-merges S2/S6): el pipeline de push carga
+	// su fila y resuelve el stale contra los pushes más nuevos del repo.
+	GetDirectPush(ctx context.Context, id int64) (store.DirectPush, error)
+	ListDirectPushes(ctx context.Context, repositoryID pgtype.Int8) ([]store.ListDirectPushesRow, error)
 	CreateReview(ctx context.Context, arg store.CreateReviewParams) (store.Review, error)
 	GetLatestReviewByPR(ctx context.Context, pullRequestID int64) (store.Review, error)
 	ListFindingsByReview(ctx context.Context, reviewID int64) ([]store.Finding, error)
@@ -213,13 +217,21 @@ func (c Config) normalized() Config {
 }
 
 // ReviewInput es la identidad de la corrida (§3.6.1): el job guarda
-// (head_sha, base_sha) del evento que la disparó.
+// (head_sha, base_sha) del evento que la disparó. Target polimórfico
+// (trazabilidad-merges S6): EXACTAMENTE uno de PullRequestID /
+// DirectPushID distinto de 0 — el otro queda en 0. Para un push directo la
+// fila direct_pushes manda: Run la carga y fija head=after_sha,
+// base=before_sha (el job solo trae ids).
 type ReviewInput struct {
 	PullRequestID int64
-	RepositoryID  int64
-	HeadSHA       string
-	BaseSHA       string
-	Workdir       string // path del clon shallow del job
+	// DirectPushID: push directo a la rama base (trazabilidad S2).
+	// Invariante: exactamente uno de PullRequestID/DirectPushID ≠ 0 — el
+	// CHECK de la migración 0011 lo exige en reviews y Run lo valida.
+	DirectPushID int64
+	RepositoryID int64
+	HeadSHA      string
+	BaseSHA      string
+	Workdir      string // path del clon shallow del job
 }
 
 // ReviewResult es el desenlace de la corrida para el caller (job/API).
@@ -247,11 +259,17 @@ type Finding struct {
 
 // Run ejecuta el pipeline completo para una corrida (§3.6): diff → SAST →
 // Reviewer → dedup → Summarizer → publicación en dos fases → re-edición del
-// resumen con el recuento final. Devuelve error solo ante fallos de
-// infraestructura reintentables (diff, BD) — el job reintenta y Run reusa la
-// fila running — o ante fallo de publicación, que ya marcó la corrida
-// failed (§9.7). Los recortes de cobertura NO son error: quedan partial y
-// declarados en el resumen (§9.6 — jamás recorte silencioso).
+// resumen con el recuento final. Para un push directo (trazabilidad-merges
+// S2/S5) el pipeline es idéntico hasta el resumen — SAST, agentes, dedup,
+// path_filters de review.yaml (§9.5) — pero el diff sale del compare del
+// VCS (before..after), la review cuelga del push y NADA se publica (S5:
+// resumen, hallazgos y diff viven en el dashboard), sin risk/effort/impact
+// (viven en pull_requests) ni veredicto pre-merge (el push ya llegó a la
+// rama base). Devuelve error solo ante fallos de infraestructura
+// reintentables (diff, BD) — el job reintenta — o ante fallo de publicación,
+// que ya marcó la corrida failed (§9.7). Los recortes de cobertura NO son
+// error: quedan partial y declarados en el resumen (§9.6 — jamás recorte
+// silencioso).
 //
 // retr (§6 F4) aporta el contexto simbólico del repo al Reviewer; nil →
 // sin bloque y el prompt queda como siempre. Un fallo del retriever JAMÁS
@@ -264,13 +282,35 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	cfg = cfg.normalized()
 	results.configure(cfg.CacheTTL, cfg.CacheMaxEntries)
 
+	// Target polimórfico (trazabilidad S6): exactamente uno de los dos —
+	// el resto del pipeline es compartido, el target decide diff, stale
+	// y publicación.
+	if (input.PullRequestID != 0) == (input.DirectPushID != 0) {
+		return nil, errors.New(
+			"ReviewInput inválido (S6): exactamente uno de PullRequestID/DirectPushID debe ser distinto de 0")
+	}
+	isPush := input.DirectPushID != 0
+
 	repo, err := st.GetRepository(ctx, input.RepositoryID)
 	if err != nil {
 		return nil, fmt.Errorf("cargando el repo %d: %w", input.RepositoryID, err)
 	}
-	pr, err := st.GetPullRequest(ctx, input.PullRequestID)
-	if err != nil {
-		return nil, fmt.Errorf("cargando el PR %d: %w", input.PullRequestID, err)
+	var (
+		pr   store.PullRequest
+		push store.DirectPush
+	)
+	if isPush {
+		push, err = st.GetDirectPush(ctx, input.DirectPushID)
+		if err != nil {
+			return nil, fmt.Errorf("cargando el push %d: %w", input.DirectPushID, err)
+		}
+		// La fila manda (S6): head=after, base=before — el job solo trae ids.
+		input.HeadSHA, input.BaseSHA = push.AfterSha, push.BeforeSha
+	} else {
+		pr, err = st.GetPullRequest(ctx, input.PullRequestID)
+		if err != nil {
+			return nil, fmt.Errorf("cargando el PR %d: %w", input.PullRequestID, err)
+		}
 	}
 
 	// (a) Fila de la corrida. Reuso idempotente: un reintento del job
@@ -287,15 +327,33 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	res := &ReviewResult{Status: StatusRunning}
 
 	// (b) Chequeo stale al iniciar (§3.6.1.3): identidad distinta o PR
-	// cerrado → stale sin gastar LLM ni diff.
-	if isStale(pr, input) {
+	// cerrado → stale sin gastar LLM ni diff. Push directo (trazabilidad
+	// S2): stale cuando ya existe un push MÁS NUEVO del mismo repo.
+	if isPush {
+		superseded, serr := isPushStale(ctx, st, push)
+		if serr != nil {
+			return nil, serr
+		}
+		if superseded {
+			return markStale(ctx, st, rev.ID, res)
+		}
+	} else if isStale(pr, input) {
 		return markStale(ctx, st, rev.ID, res)
 	}
 
-	// (c) Diff unificado base...head (tres puntos: contra el merge-base).
-	diff, err := provider.GetDiff(ctx, &repo, &pr)
-	if err != nil {
-		return nil, fmt.Errorf("obteniendo el diff del PR %d: %w", pr.Number, err)
+	// (c) Diff unificado: PR → tres puntos contra el merge-base; push
+	// directo (trazabilidad S2) → before..after del compare del VCS.
+	var diff string
+	if isPush {
+		diff, err = provider.GetCommitDiff(ctx, &repo, push.BeforeSha, push.AfterSha)
+		if err != nil {
+			return nil, fmt.Errorf("obteniendo el diff del push %d: %w", push.ID, err)
+		}
+	} else {
+		diff, err = provider.GetDiff(ctx, &repo, &pr)
+		if err != nil {
+			return nil, fmt.Errorf("obteniendo el diff del PR %d: %w", pr.Number, err)
+		}
 	}
 
 	var coverage []string // declaraciones de cobertura para el resumen (§9.6)
@@ -422,13 +480,18 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 
 	// Dedup: dentro de la corrida por huella exacta y contra comments_sent
 	// con tolerancia de drift (§3.6.3) — un push que corre líneas no
-	// republica el mismo hallazgo.
-	existing, err := st.GetCommentsSentByPRAndType(ctx, store.GetCommentsSentByPRAndTypeParams{
-		PullRequestID: input.PullRequestID,
-		Type:          "inline",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cargando comments_sent del PR: %w", err)
+	// republica el mismo hallazgo. Push directo (S5): nada se publica, no
+	// hay comments_sent contra qué deduplicar — queda solo la deduplicación
+	// interna de la corrida.
+	var existing []store.CommentsSent
+	if !isPush {
+		existing, err = st.GetCommentsSentByPRAndType(ctx, store.GetCommentsSentByPRAndTypeParams{
+			PullRequestID: input.PullRequestID,
+			Type:          "inline",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cargando comments_sent del PR: %w", err)
+		}
 	}
 
 	// Anclas de dedup por símbolo contenedor (§6 F4): segunda invocación del
@@ -576,6 +639,35 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 		}
 	}
 	res.Summary, res.Walkthrough, res.Mermaid = sum.Summary, sum.Walkthrough, sum.Mermaid
+
+	// Push directo (trazabilidad S2/S5): nada de lo de abajo aplica — no hay
+	// publicación que re-chequear (S5: la salida vive en el dashboard), el
+	// risk/effort/impact/change_stack viven en pull_requests y el veredicto
+	// pre-merge no existe: el push ya llegó a la rama base. Estado final y
+	// persistencia del resumen, igual que un PR.
+	if isPush {
+		res.FindingsCount = len(toPublish)
+		status := StatusSuccess
+		if len(coverage) > 0 {
+			status = StatusPartial
+		}
+		if _, err := st.UpdateReviewSummary(ctx, store.UpdateReviewSummaryParams{
+			ID:          rev.ID,
+			Summary:     sum.Summary,
+			Walkthrough: sum.Walkthrough,
+			Mermaid:     sum.Mermaid,
+		}); err != nil {
+			return nil, fmt.Errorf("actualizando la review %d: %w", rev.ID, err)
+		}
+		if _, err := st.UpdateReviewStatus(ctx, store.UpdateReviewStatusParams{ID: rev.ID, Status: status}); err != nil {
+			return nil, fmt.Errorf("marcando la review %d como %s: %w", rev.ID, status, err)
+		}
+		res.Status = status
+		if cacheable {
+			results.put(cacheKey(input, mb, cfg, rc), cacheEntry{findings: llmFindings, summary: sum})
+		}
+		return res, nil
+	}
 
 	// Re-chequeo stale pre-publicación (§3.6.1.3): incluye el cierre del PR
 	// — comentar un PR cerrado no aporta y quema cuota del VCS.
@@ -787,6 +879,20 @@ func isStale(pr store.PullRequest, input ReviewInput) bool {
 		pr.State != "open"
 }
 
+// isPushStale (trazabilidad S2): existe un push directo MÁS NUEVO del mismo
+// repo (after distinto) → esta corrida analizaría un estado ya reemplazado
+// y se marca stale sin gastar LLM. El listado viene ordenado created_at
+// DESC (id DESC desempata): la primer fila es el push más reciente del repo
+// y, como el upsert deduplica por (repo, after_sha), un after distinto en
+// ella es por definición un push más nuevo que el de esta corrida.
+func isPushStale(ctx context.Context, st Store, push store.DirectPush) (bool, error) {
+	rows, err := st.ListDirectPushes(ctx, pgtype.Int8{Int64: push.RepositoryID, Valid: true})
+	if err != nil {
+		return false, fmt.Errorf("listando los pushes del repo %d: %w", push.RepositoryID, err)
+	}
+	return len(rows) > 0 && rows[0].AfterSha != push.AfterSha, nil
+}
+
 // markStale marca la corrida stale y corta sin publicar (§3.6.1.3).
 func markStale(ctx context.Context, st Store, reviewID int64, res *ReviewResult) (*ReviewResult, error) {
 	if _, err := st.UpdateReviewStatus(ctx, store.UpdateReviewStatusParams{ID: reviewID, Status: StatusStale}); err != nil {
@@ -800,6 +906,21 @@ func markStale(ctx context.Context, st Store, reviewID int64, res *ReviewResult)
 // findOrCreateReview devuelve la fila running de esta identidad (reintento
 // del job, §9.7) o crea una nueva. Nace running con textos vacíos (§3.3).
 func findOrCreateReview(ctx context.Context, st Store, input ReviewInput) (store.Review, error) {
+	if input.DirectPushID != 0 {
+		// Push directo (trazabilidad S2/S6): sin query por push en la store,
+		// el reintento del job crea fila nueva — la última gana por id DESC
+		// en todo listado y el worker marca failed las running al agotar
+		// intentos (§9.7): jamás una running huérfana visible como vigente.
+		rev, err := st.CreateReview(ctx, store.CreateReviewParams{
+			DirectPushID: pgtype.Int8{Int64: input.DirectPushID, Valid: true},
+			HeadSha:      input.HeadSHA,
+			BaseSha:      input.BaseSHA,
+		})
+		if err != nil {
+			return store.Review{}, fmt.Errorf("creando la review del push %d: %w", input.DirectPushID, err)
+		}
+		return rev, nil
+	}
 	latest, err := st.GetLatestReviewByPR(ctx, input.PullRequestID)
 	switch {
 	case err == nil &&

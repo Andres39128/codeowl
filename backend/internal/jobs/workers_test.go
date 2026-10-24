@@ -121,6 +121,24 @@ func wPR(t *testing.T, st *store.Store, repoID, number int64) store.PullRequest 
 	return pr
 }
 
+// wPush crea un push directo efímero a la rama base del repo (trazabilidad
+// S2): SHAs únicos por corrida. La fila y sus reviews se van con el repo
+// (DeleteRepositoryCascade del cleanup de wRepo).
+func wPush(t *testing.T, st *store.Store, repoID int64) store.DirectPush {
+	t.Helper()
+	push, err := st.UpsertDirectPush(context.Background(), store.UpsertDirectPushParams{
+		RepositoryID: repoID,
+		Branch:       "main",
+		BeforeSha:    fmt.Sprintf("push-before-%d", wNano()),
+		AfterSha:     fmt.Sprintf("push-after-%d", wNano()),
+		Committer:    "dev",
+	})
+	if err != nil {
+		t.Fatalf("UpsertDirectPush: %v", err)
+	}
+	return push
+}
+
 // ---------------------------------------------------------------------------
 // Stubs (§4.5: stubs de pocas líneas, sin mocks)
 // ---------------------------------------------------------------------------
@@ -135,6 +153,9 @@ type wProvider struct {
 	defaultWorkdir string
 	diff           string
 	diffErr        error
+	commitDiff     string // GetCommitDiff: diff del push directo (trazabilidad S2)
+	commitDiffErr  error
+	commitDiffReq  string // par before..after que le pidieron
 	openPRs        []vcs.OpenPR
 	timeline       *vcs.PRTimeline // FetchPRTimeline: nil → timeline vacía
 	timelineErr    error
@@ -164,6 +185,14 @@ func (p *wProvider) FetchPRTimeline(context.Context, *store.Repository, *store.P
 }
 func (p *wProvider) GetDiff(context.Context, *store.Repository, *store.PullRequest) (string, error) {
 	return p.diff, p.diffErr
+}
+
+// GetCommitDiff sirve el diff del push directo y graba el rango pedido
+// (trazabilidad S2): el test del PushReviewWorker verifica que el pipeline
+// pidió before..after de la fila del push.
+func (p *wProvider) GetCommitDiff(_ context.Context, _ *store.Repository, before, after string) (string, error) {
+	p.commitDiffReq = before + ".." + after
+	return p.commitDiff, p.commitDiffErr
 }
 func (p *wProvider) ListOpenPRs(context.Context, *store.Repository) ([]vcs.OpenPR, error) {
 	return p.openPRs, nil
@@ -656,6 +685,123 @@ func (p *wPushDuranteCorrida) FetchPR(ctx context.Context, r *store.Repository, 
 		"UPDATE pull_requests SET head_sha = $1, base_sha = $2 WHERE id = $3",
 		p.head, p.base, p.prID)
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// PushReviewWorker (trazabilidad-merges S2/S5)
+// ---------------------------------------------------------------------------
+
+// Work corre la corrida del push con stubs: clona la rama base
+// (FetchDefaultBranch), el diff sale del compare del VCS (before..after de
+// la fila), la review queda colgada del direct_push con resumen y CERO
+// publicación (S5) — y success re-encola el índice como el ReviewJob (§6 F4).
+func TestPushReviewWorkerCorrida(t *testing.T) {
+	st := wStore(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	push := wPush(t, st, repo.ID)
+	wEmbeddingProvider(t, st)
+
+	prov := &wProvider{fetchDefault: true, commitDiff: ""} // diff vacío: sin reviewer LLM
+	cola := &wQueue{}
+	w := &PushReviewWorker{
+		Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{}, Provider: prov, Queue: cola,
+		Config: review.DefaultConfig(), WorkdirRoot: t.TempDir(),
+	}
+
+	if err := w.Work(ctx, wJob(PushReviewJobArgs{RepositoryID: repo.ID, PushID: push.ID}, 1, reviewMaxAttempts)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	// Review colgada del push, success con resumen (head=after, base=before).
+	var revID int64
+	var status, summary, head, base string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT id, status, summary, head_sha, base_sha FROM reviews WHERE direct_push_id = $1`,
+		push.ID).Scan(&revID, &status, &summary, &head, &base); err != nil {
+		t.Fatalf("la review del push debe existir: %v", err)
+	}
+	if status != review.StatusSuccess || summary == "" {
+		t.Errorf("la corrida del push debe quedar success con resumen: got %q / %q", status, summary)
+	}
+	if head != push.AfterSha || base != push.BeforeSha {
+		t.Errorf("identidad = %s..%s, querés %s..%s", base, head, push.BeforeSha, push.AfterSha)
+	}
+
+	// El diff salió del compare del VCS con el rango de la fila.
+	if prov.commitDiffReq != push.BeforeSha+".."+push.AfterSha {
+		t.Errorf("GetCommitDiff recibió %q, querés %s..%s", prov.commitDiffReq, push.BeforeSha, push.AfterSha)
+	}
+	// El clon fue por FetchDefaultBranch y el workdir se limpió.
+	if prov.defaultWorkdir == "" {
+		t.Fatal("FetchDefaultBranch no recibió workdir")
+	}
+	if _, err := os.Stat(prov.defaultWorkdir); !os.IsNotExist(err) {
+		t.Errorf("el workdir del job debe limpiarse al salir: %s (%v)", prov.defaultWorkdir, err)
+	}
+	// S5: sin publicación — cero comments_sent para la corrida.
+	var comentarios int
+	if err := st.Pool.QueryRow(ctx,
+		"SELECT COUNT(1) FROM comments_sent WHERE review_id = $1", revID).Scan(&comentarios); err != nil {
+		t.Fatalf("contando comments_sent: %v", err)
+	}
+	if comentarios != 0 {
+		t.Errorf("comments_sent = %d, querés 0 (S5: salida solo dashboard)", comentarios)
+	}
+	// §6 F4: success → re-encola el índice del repo.
+	if kinds := cola.encolados(); len(kinds) != 1 || kinds[0] != KindIndex {
+		t.Errorf("la corrida success del push debe encolar el IndexJob: %v", kinds)
+	}
+}
+
+// Al agotar intentos (§9.7): la corrida running del push queda failed —
+// sin query por push en la store, el worker la halla por ListDirectPushes.
+// Antes del último intento sigue running esperando el reintento, y una
+// corrida que falla NO encola el IndexJob.
+func TestPushReviewWorkerAgotaIntentos(t *testing.T) {
+	st := wStore(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	push := wPush(t, st, repo.ID)
+
+	prov := &wProvider{fetchDefault: true, commitDiffErr: errors.New("VCS caído")}
+	cola := &wQueue{}
+	w := &PushReviewWorker{
+		Store: st, Gateway: wGateway{}, Analyzer: wAnalyzer{}, Provider: prov, Queue: cola,
+		Config: review.DefaultConfig(), WorkdirRoot: t.TempDir(),
+	}
+	args := PushReviewJobArgs{RepositoryID: repo.ID, PushID: push.ID}
+
+	// Intento intermedio: error para que River reintente; la fila sigue
+	// running.
+	if err := w.Work(ctx, wJob(args, 1, reviewMaxAttempts)); err == nil {
+		t.Fatal("un fallo de infraestructura debe devolver error para reintentar")
+	}
+	var status string
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT status FROM reviews WHERE direct_push_id = $1 ORDER BY id DESC LIMIT 1`,
+		push.ID).Scan(&status); err != nil {
+		t.Fatalf("la review del push debe existir: %v", err)
+	}
+	if status != review.StatusRunning {
+		t.Errorf("antes del último intento la corrida sigue running: got %q", status)
+	}
+
+	// Último intento: error + corrida marcada failed (§9.7).
+	if err := w.Work(ctx, wJob(args, reviewMaxAttempts, reviewMaxAttempts)); err == nil {
+		t.Fatal("el último intento también debe devolver error (River lo descarta)")
+	}
+	if err := st.Pool.QueryRow(ctx,
+		`SELECT status FROM reviews WHERE direct_push_id = $1 ORDER BY id DESC LIMIT 1`,
+		push.ID).Scan(&status); err != nil {
+		t.Fatalf("releyendo la corrida: %v", err)
+	}
+	if status != review.StatusFailed {
+		t.Errorf("al agotar intentos la corrida queda failed (§9.7): got %q", status)
+	}
+	if kinds := cola.encolados(); len(kinds) != 0 {
+		t.Errorf("una corrida que falla no encola IndexJob: %v", kinds)
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -96,6 +96,13 @@ func main() {
 			Retriever: jobs.NewIndexRetriever(st, gateway, cfg.Stage2.RetrievalTopK),
 			Impact:    jobs.NewIndexImpact(st),
 		},
+		&jobs.PushReviewWorker{
+			// Trazabilidad de merges sin PR (trazabilidad-merges T3): mismo
+			// pipeline que el ReviewJob, sin publicación (S5).
+			Store: st, Gateway: gateway, Analyzer: analyzer, Provider: provider, Queue: q, Config: reviewCfg,
+			Retriever: jobs.NewIndexRetriever(st, gateway, cfg.Stage2.RetrievalTopK),
+			Impact:    jobs.NewIndexImpact(st),
+		},
 		&jobs.ChatJobWorker{
 			Store: st, Gateway: gateway, Provider: provider, Queue: q,
 			Config: review.ChatConfig{

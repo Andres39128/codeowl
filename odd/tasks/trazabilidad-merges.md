@@ -31,7 +31,7 @@ Salida solo en dashboard: no hay PR donde publicar.
   + tests. [184210af]
 - T3 (S2, S5): PushReviewJob — pipeline reutilizado con target push (diff
   before..after, SAST + agentes + resumen, sin publicación), stale si llega
-  push nuevo + tests de integración. [pending]
+  push nuevo + tests de integración. [793d60ff]
 - T4 (S1): API — GET /api/pushes (lista), GET /api/pushes/{id} (detalle:
   resumen, findings, diff) + tests. [184210af]
 - T5 (S1): dashboard — página Trazabilidad (lista + detalle + nav) reusando
