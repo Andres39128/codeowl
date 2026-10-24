@@ -211,6 +211,28 @@ func (q *Queries) ListRepositories(ctx context.Context) ([]Repository, error) {
 	return items, nil
 }
 
+const repoHealth = `-- name: RepoHealth :one
+SELECT
+    (SELECT count(*) FROM pull_requests AS pr WHERE pr.repository_id = $1 AND pr.state = 'open') AS open_prs,
+    (SELECT max(rv.created_at)::timestamptz FROM reviews rv
+     JOIN pull_requests p ON p.id = rv.pull_request_id
+     WHERE p.repository_id = $1) AS last_review_at
+`
+
+type RepoHealthRow struct {
+	OpenPrs      int64
+	LastReviewAt pgtype.Timestamptz
+}
+
+// Checks de salud del repo (§9.9): PRs abiertos y última corrida en una
+// sola consulta.
+func (q *Queries) RepoHealth(ctx context.Context, repositoryID int64) (RepoHealthRow, error) {
+	row := q.db.QueryRow(ctx, repoHealth, repositoryID)
+	var i RepoHealthRow
+	err := row.Scan(&i.OpenPrs, &i.LastReviewAt)
+	return i, err
+}
+
 const setRepositoryEnabled = `-- name: SetRepositoryEnabled :one
 UPDATE repositories
 SET enabled = $2,

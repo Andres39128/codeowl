@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -361,4 +362,133 @@ func writeGuardRejection(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "error interno")
+}
+
+// repoHealthView es la respuesta de GET /api/repos/{id}/health: los checks
+// que explican "¿por qué no se revisó mi PR?" (§9.9). app_installed null =
+// no aplica (GitLab) o no se pudo verificar (VCS inaccesible).
+type repoHealthView struct {
+	AppInstalled      *bool      `json:"app_installed"`
+	LastDeliveryAt    *time.Time `json:"last_delivery_at"`
+	HasReviewProvider bool       `json:"has_review_provider"`
+	OpenPRs           int64      `json:"open_prs"`
+	LastReviewAt      *time.Time `json:"last_review_at"`
+	LatestOpenPR      *struct {
+		Number  int64  `json:"number"`
+		HeadSha string `json:"head_sha"`
+		BaseSha string `json:"base_sha"`
+	} `json:"latest_open_pr"`
+}
+
+// handleRepoHealth: GET /api/repos/{id}/health — App instalada (GitHub, vía
+// repoResolver), última entrega de webhook por VCS, proveedor review, PRs
+// abiertos y última corrida. Cada check es el insumo de un remedio concreto
+// en el dashboard.
+func (s *Server) handleRepoHealth(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	repo, err := s.store.GetRepository(r.Context(), id)
+	if err != nil {
+		slog.Error("buscando repo para salud", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusNotFound, "repo inexistente")
+		return
+	}
+	health, err := s.store.RepoHealth(r.Context(), id)
+	if err != nil {
+		slog.Error("salud del repo", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	view := repoHealthView{HasReviewProvider: false, OpenPRs: health.OpenPrs}
+	if health.LastReviewAt.Valid {
+		t := health.LastReviewAt.Time
+		view.LastReviewAt = &t
+	}
+	providers, err := s.store.ListEnabledLlmProvidersByRole(r.Context(), "review")
+	if err == nil {
+		view.HasReviewProvider = len(providers) > 0
+	}
+	delivery, err := s.store.LastWebhookDeliveryAt(r.Context(), repo.Vcs)
+	if err == nil && delivery.Valid {
+		t := delivery.Time
+		view.LastDeliveryAt = &t
+	}
+	if repo.Vcs == "github" {
+		if res, ok := s.github.(repoResolver); ok {
+			_, found, err := res.ResolveRepo(r.Context(), repo.Owner, repo.Name)
+			switch {
+			case err == nil && found:
+				b := true
+				view.AppInstalled = &b
+			case err == nil:
+				b := false
+				view.AppInstalled = &b
+			default:
+				// GitHub inaccesible: desconocido, no falso — el remedio
+				// sería reintentar, no instalar.
+				slog.Warn("no se pudo verificar la instalación de la App", "repo", repo.ID, "err", err)
+			}
+		}
+	}
+	if pr, err := s.store.LatestOpenPullRequest(r.Context(), id); err == nil {
+		view.LatestOpenPR = &struct {
+			Number  int64  `json:"number"`
+			HeadSha string `json:"head_sha"`
+			BaseSha string `json:"base_sha"`
+		}{Number: pr.Number, HeadSha: pr.HeadSha, BaseSha: pr.BaseSha}
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// handleRepoReviewNow: POST /api/repos/{id}/review — encola la corrida del
+// PR abierto más reciente sin esperar un webhook (§9.9): es el remedio del
+// check de salud y la salida operativa mientras la instancia no tiene URL
+// pública. Misma guarda de rol que conectar (§9.6).
+func (s *Server) handleRepoReviewNow(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	repo, err := s.store.GetRepository(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "repo inexistente")
+		return
+	} else if err != nil {
+		slog.Error("buscando repo para revisar ahora", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	if !repo.Enabled {
+		writeError(w, http.StatusConflict, "el repo está desconectado: habilitarlo antes de revisar")
+		return
+	}
+	if err := s.requireReviewProvider(r); err != nil {
+		writeGuardRejection(w, err)
+		return
+	}
+	pr, err := s.store.LatestOpenPullRequest(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "sin PRs abiertos: no hay nada que revisar")
+		return
+	} else if err != nil {
+		slog.Error("buscando el PR a revisar", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	args, err := json.Marshal(jobs.ReviewJobArgs{
+		RepositoryID: repo.ID, PullRequestID: pr.ID,
+		HeadSha: pr.HeadSha, BaseSha: pr.BaseSha,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	if err := s.queue.Enqueue(r.Context(), jobs.KindReview, args); err != nil {
+		slog.Error("encolando la revisión manual", "repo", repo.ID, "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"enqueued": true, "pr_number": pr.Number})
 }

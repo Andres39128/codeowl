@@ -54,6 +54,20 @@ func (q *Queries) DeleteWebhookDeliveriesOlderThan(ctx context.Context, createdA
 	return result.RowsAffected(), nil
 }
 
+const lastWebhookDeliveryAt = `-- name: LastWebhookDeliveryAt :one
+SELECT max(created_at)::timestamptz AS last_at FROM webhook_deliveries WHERE vcs = $1
+`
+
+// La última entrega recibida por VCS: prueba de que el webhook alcanza la
+// instancia (salud del repo, §9.9). Es por VCS y no por repo — la tabla es
+// un registro de dedup global (§3.6).
+func (q *Queries) LastWebhookDeliveryAt(ctx context.Context, vcs string) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, lastWebhookDeliveryAt, vcs)
+	var last_at pgtype.Timestamptz
+	err := row.Scan(&last_at)
+	return last_at, err
+}
+
 const webhookDeliveryExists = `-- name: WebhookDeliveryExists :one
 SELECT EXISTS (
     SELECT 1 FROM webhook_deliveries

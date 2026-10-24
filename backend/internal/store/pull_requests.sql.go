@@ -72,6 +72,39 @@ func (q *Queries) GetPullRequestByRepoNumber(ctx context.Context, arg GetPullReq
 	return i, err
 }
 
+const latestOpenPullRequest = `-- name: LatestOpenPullRequest :one
+SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score, change_stack FROM pull_requests
+WHERE repository_id = $1 AND state = 'open'
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// El PR abierto más reciente del repo: el objetivo del "revisar ahora"
+// (§3.6 — la identidad (head, base) viaja completa para que la corrida
+// nazca con la identidad correcta).
+func (q *Queries) LatestOpenPullRequest(ctx context.Context, repositoryID int64) (PullRequest, error) {
+	row := q.db.QueryRow(ctx, latestOpenPullRequest, repositoryID)
+	var i PullRequest
+	err := row.Scan(
+		&i.ID,
+		&i.RepositoryID,
+		&i.Number,
+		&i.Author,
+		&i.State,
+		&i.HeadSha,
+		&i.BaseRef,
+		&i.BaseSha,
+		&i.MergedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RiskScore,
+		&i.EffortScore,
+		&i.ImpactScore,
+		&i.ChangeStack,
+	)
+	return i, err
+}
+
 const listOpenPullRequestsByRepo = `-- name: ListOpenPullRequestsByRepo :many
 SELECT id, repository_id, number, author, state, head_sha, base_ref, base_sha, merged_at, created_at, updated_at, risk_score, effort_score, impact_score, change_stack FROM pull_requests
 WHERE repository_id = $1 AND state = 'open'

@@ -112,3 +112,12 @@ LEFT JOIN LATERAL (
 LEFT JOIN findings f ON f.review_id = r.id
 GROUP BY pr.id, repo.id, r.id, r.status, r.created_at
 ORDER BY pr.updated_at DESC;
+
+-- name: LatestOpenPullRequest :one
+-- El PR abierto más reciente del repo: el objetivo del "revisar ahora"
+-- (§3.6 — la identidad (head, base) viaja completa para que la corrida
+-- nazca con la identidad correcta).
+SELECT * FROM pull_requests
+WHERE repository_id = $1 AND state = 'open'
+ORDER BY created_at DESC
+LIMIT 1;

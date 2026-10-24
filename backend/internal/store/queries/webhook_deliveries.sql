@@ -19,3 +19,9 @@ SELECT EXISTS (
 -- corte y devuelve la cantidad eliminada.
 DELETE FROM webhook_deliveries
 WHERE created_at < $1;
+
+-- name: LastWebhookDeliveryAt :one
+-- La última entrega recibida por VCS: prueba de que el webhook alcanza la
+-- instancia (salud del repo, §9.9). Es por VCS y no por repo — la tabla es
+-- un registro de dedup global (§3.6).
+SELECT max(created_at)::timestamptz AS last_at FROM webhook_deliveries WHERE vcs = $1;

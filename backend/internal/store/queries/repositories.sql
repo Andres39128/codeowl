@@ -71,3 +71,12 @@ WITH d_comments AS (
     DELETE FROM repo_index WHERE repository_id = $1 RETURNING 1
 )
 DELETE FROM repositories AS r WHERE r.id = $1;
+
+-- name: RepoHealth :one
+-- Checks de salud del repo (§9.9): PRs abiertos y última corrida en una
+-- sola consulta.
+SELECT
+    (SELECT count(*) FROM pull_requests AS pr WHERE pr.repository_id = $1 AND pr.state = 'open') AS open_prs,
+    (SELECT max(rv.created_at)::timestamptz FROM reviews rv
+     JOIN pull_requests p ON p.id = rv.pull_request_id
+     WHERE p.repository_id = $1) AS last_review_at;

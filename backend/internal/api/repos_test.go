@@ -12,6 +12,7 @@ import (
 
 	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Tests de repos conectados (guía §3.3/§3.5/§9.6): conectar exige proveedor
@@ -274,6 +275,99 @@ func TestResolveRepo(t *testing.T) {
 		a := e.admin(t)
 		if got := e.do(t, http.MethodGet, "/api/repos/github/resolve?owner=a&name=b", a.cookie, a.csrf, nil).StatusCode; got != http.StatusBadGateway {
 			t.Errorf("status = %d, querés 502", got)
+		}
+	})
+}
+
+// TestRepoSaludYRevisarAhora (S1): los checks que explican "¿por qué no se
+// revisó mi PR?" y la salida operativa de encolar la corrida manual.
+func TestRepoSaludYRevisarAhora(t *testing.T) {
+	e := newTestEnvVCS(t, 5, &resolverStub{id: 777, installed: true}, nil)
+	a := e.admin(t)
+	e.createProvider(t, "review", true)
+
+	resp := e.do(t, http.MethodPost, "/api/repos", a.cookie, a.csrf, repoRequest{
+		Vcs: "github", Owner: "acme", Name: "salud", ExternalID: 777,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("conectando el repo: %d", resp.StatusCode)
+	}
+	var repo repoView
+	if err := json.NewDecoder(resp.Body).Decode(&repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(context.Background(), "DELETE FROM river_job WHERE kind='review' AND args->>'pull_request_id' IN (SELECT id::text FROM pull_requests WHERE repository_id=$1)", repo.ID)
+		_, _ = e.st.Pool.Exec(context.Background(),
+			"DELETE FROM repositories WHERE id = $1", repo.ID)
+	})
+
+	// PR abierto con identidad completa: el objetivo del "revisar ahora".
+	pr, err := e.st.UpsertPullRequest(context.Background(), store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 7, Author: "ana", State: "open",
+		HeadSha: "head-salud", BaseRef: "main", BaseSha: "base-salud",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("salud con todo verde", func(t *testing.T) {
+		resp := e.do(t, http.MethodGet, fmt.Sprintf("/api/repos/%d/health", repo.ID), a.cookie, a.csrf, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		var h repoHealthView
+		if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
+			t.Fatal(err)
+		}
+		if h.AppInstalled == nil || !*h.AppInstalled {
+			t.Errorf("app_installed = %v, querés true (resolver instalado)", h.AppInstalled)
+		}
+		if !h.HasReviewProvider {
+			t.Error("hay un proveedor review creado: has_review_provider debe ser true")
+		}
+		if h.OpenPRs != 1 || h.LatestOpenPR == nil || h.LatestOpenPR.Number != 7 {
+			t.Errorf("open_prs/latest_open_pr = %+v, querés el PR 7", h.LatestOpenPR)
+		}
+		if h.LatestOpenPR.HeadSha != "head-salud" || h.LatestOpenPR.BaseSha != "base-salud" {
+			t.Errorf("la identidad del PR viaja incompleta: %+v", h.LatestOpenPR)
+		}
+	})
+
+	t.Run("revisar ahora encola con la identidad del PR", func(t *testing.T) {
+		antes := len(e.queue.kinds)
+		resp := e.do(t, http.MethodPost, fmt.Sprintf("/api/repos/%d/review", repo.ID), a.cookie, a.csrf, nil)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("status = %d, querés 202", resp.StatusCode)
+		}
+		if len(e.queue.kinds) != antes+1 {
+			t.Fatalf("encolados antes=%d después=%d", antes, len(e.queue.kinds))
+		}
+		if e.queue.kinds[len(e.queue.kinds)-1] != "review" {
+			t.Errorf("kind = %q, querés review", e.queue.kinds[len(e.queue.kinds)-1])
+		}
+		var rja jobs.ReviewJobArgs
+		if err := json.Unmarshal(e.queue.payloads[len(e.queue.payloads)-1], &rja); err != nil {
+			t.Fatal(err)
+		}
+		if rja.PullRequestID != pr.ID || rja.HeadSha != "head-salud" || rja.BaseSha != "base-salud" {
+			t.Errorf("args = %+v, querés la identidad del PR 7", rja)
+		}
+	})
+
+	t.Run("sin PRs abiertos lo dice y no encola", func(t *testing.T) {
+		if _, err := e.st.Pool.Exec(context.Background(),
+			"UPDATE pull_requests SET state='closed' WHERE repository_id=$1 AND number=7", repo.ID); err != nil {
+			t.Fatal(err)
+		}
+		antes := len(e.queue.kinds)
+		resp := e.do(t, http.MethodPost, fmt.Sprintf("/api/repos/%d/review", repo.ID), a.cookie, a.csrf, nil)
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("status = %d, querés 409", resp.StatusCode)
+		}
+		if len(e.queue.kinds) != antes {
+			t.Error("sin PR abierto no debe encolar nada")
 		}
 	})
 }

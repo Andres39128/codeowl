@@ -109,6 +109,10 @@ func (s *Server) Routes() *http.ServeMux {
 
 	mux.Handle("GET /api/repos", s.admin(s.handleListRepos))
 	mux.Handle("POST /api/repos", s.admin(s.handleCreateRepo))
+	// Salud y "revisar ahora" (§9.9): explicar por qué un repo no se revisa
+	// y encolar la corrida del PR abierto más reciente sin esperar webhook.
+	mux.Handle("GET /api/repos/{id}/health", s.admin(s.handleRepoHealth))
+	mux.Handle("POST /api/repos/{id}/review", s.admin(s.handleRepoReviewNow))
 	// Go 1.22 mux: el segmento literal "github" pisa {id} — sin colisión
 	// con GET /api/repos/{id}.
 	mux.Handle("GET /api/repos/github/resolve", s.admin(s.handleResolveRepo))
