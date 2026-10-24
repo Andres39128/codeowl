@@ -1,8 +1,9 @@
 /** App F1: sesión → login o shell con routing hash. #/ aterriza según rol
  * (admin → proveedores, member → cola); settings es exclusivo del admin y un
  * member que navega a #/settings/* es redirigido a la cola (§3.4). El triage
- * (F5) y la lista de PRs son visibles a member y admin; #/prs/<id> renderiza
- * el detalle (F3). */
+ * (F5), la lista de PRs y la trazabilidad de merges sin PR (S1) son visibles
+ * a member y admin; #/prs/<id> y #/trazabilidad/<id> renderizan el detalle
+ * (F3). */
 
 import { useEffect } from "preact/hooks";
 import { Layout } from "./components/Layout";
@@ -14,8 +15,10 @@ import { Queue } from "./features/queue/Queue";
 import { Providers } from "./features/settings/Providers";
 import { Repos } from "./features/settings/Repos";
 import { Users } from "./features/settings/Users";
+import { PushDetail } from "./features/trazabilidad/PushDetail";
+import { Trazabilidad } from "./features/trazabilidad/Trazabilidad";
 import { Triage } from "./features/triage/Triage";
-import { prIdFromHash, resolveRoute } from "./lib/router";
+import { prIdFromHash, pushIdFromHash, resolveRoute } from "./lib/router";
 import { useHashRoute } from "./lib/useHashRoute";
 import { useSession } from "./lib/useSession";
 
@@ -25,6 +28,7 @@ const PAGES = {
 	queue: Queue,
 	triage: Triage,
 	prs: Prs,
+	trazabilidad: Trazabilidad,
 	providers: Providers,
 	repos: Repos,
 	users: Users,
@@ -60,9 +64,11 @@ export function App() {
 
 	const route = resolveRoute(hash, isAdmin).route;
 	const Page = PAGES[route];
-	// El detalle de PR comparte la ruta prs con el id en el hash (#/prs/<id>);
-	// un id inválido ya viene redirigido a la lista por resolveRoute.
+	// Los detalles comparten la ruta de su lista con el id en el hash
+	// (#/prs/<id>, #/trazabilidad/<id>); un id inválido ya viene redirigido a
+	// la lista por resolveRoute.
 	const prId = prIdFromHash(hash);
+	const pushId = pushIdFromHash(hash);
 
 	return (
 		<Layout
@@ -71,7 +77,13 @@ export function App() {
 			onLogout={() => session.logout.mutate()}
 			logoutPending={session.logout.isPending}
 		>
-			{route === "prs" && prId !== null ? <PrDetail prId={prId} /> : <Page />}
+			{route === "prs" && prId !== null ? (
+				<PrDetail prId={prId} />
+			) : route === "trazabilidad" && pushId !== null ? (
+				<PushDetail pushId={pushId} />
+			) : (
+				<Page />
+			)}
 		</Layout>
 	);
 }

@@ -1,7 +1,7 @@
 /** Shell del dashboard: sidebar con navegación, marca, toggle de tema, usuario
  * y logout (reutiliza la identidad del shell F0). §3.4: la sección de
- * configuración solo se muestra al admin; cola, triage y PRs son de todo
- * usuario. */
+ * configuración solo se muestra al admin; cola, triage, PRs y trazabilidad
+ * son de todo usuario. */
 
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
@@ -67,6 +67,14 @@ export function Layout({
 						class={linkClass(route === "prs")}
 					>
 						PRs
+					</a>
+
+					<a
+						href="#/trazabilidad"
+						aria-current={ariaCurrent(route === "trazabilidad")}
+						class={linkClass(route === "trazabilidad")}
+					>
+						Trazabilidad
 					</a>
 
 					<a
