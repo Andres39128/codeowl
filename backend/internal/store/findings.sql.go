@@ -64,24 +64,73 @@ func (q *Queries) CreateFinding(ctx context.Context, arg CreateFindingParams) (F
 	return i, err
 }
 
+const getFinding = `-- name: GetFinding :one
+SELECT id, review_id, file, line, severity, category, body, suggestion, source, verified, created_at, accepted, github_comment_id FROM findings WHERE id = $1
+`
+
+func (q *Queries) GetFinding(ctx context.Context, id int64) (Finding, error) {
+	row := q.db.QueryRow(ctx, getFinding, id)
+	var i Finding
+	err := row.Scan(
+		&i.ID,
+		&i.ReviewID,
+		&i.File,
+		&i.Line,
+		&i.Severity,
+		&i.Category,
+		&i.Body,
+		&i.Suggestion,
+		&i.Source,
+		&i.Verified,
+		&i.CreatedAt,
+		&i.Accepted,
+		&i.GithubCommentID,
+	)
+	return i, err
+}
+
 const listFindingsByPR = `-- name: ListFindingsByPR :many
-SELECT f.id, f.review_id, f.file, f.line, f.severity, f.category, f.body, f.suggestion, f.source, f.verified, f.created_at, f.accepted, f.github_comment_id
+SELECT f.id, f.review_id, f.file, f.line, f.severity, f.category, f.body, f.suggestion, f.source, f.verified, f.created_at, f.accepted, f.github_comment_id, (fd.id IS NOT NULL)::bool AS dismissed
 FROM findings f
 JOIN reviews r ON r.id = f.review_id
+JOIN pull_requests pr ON pr.id = r.pull_request_id
+LEFT JOIN finding_dismissals fd
+       ON fd.repository_id = pr.repository_id
+      AND fd.file = f.file
+      AND fd.category = f.category
 WHERE r.pull_request_id = $1
 ORDER BY f.id
 `
 
+type ListFindingsByPRRow struct {
+	ID              int64
+	ReviewID        int64
+	File            string
+	Line            int32
+	Severity        string
+	Category        string
+	Body            string
+	Suggestion      pgtype.Text
+	Source          string
+	Verified        pgtype.Bool
+	CreatedAt       pgtype.Timestamptz
+	Accepted        pgtype.Bool
+	GithubCommentID pgtype.Text
+	Dismissed       bool
+}
+
 // Atribución por corrida: todos los hallazgos de todas las corridas del PR.
-func (q *Queries) ListFindingsByPR(ctx context.Context, pullRequestID int64) ([]Finding, error) {
+// dismissed marca la huella "no aplica" del repo (S4): el hallazgo viaja
+// igual (auditoría) y la UI lo atenúa.
+func (q *Queries) ListFindingsByPR(ctx context.Context, pullRequestID int64) ([]ListFindingsByPRRow, error) {
 	rows, err := q.db.Query(ctx, listFindingsByPR, pullRequestID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Finding
+	var items []ListFindingsByPRRow
 	for rows.Next() {
-		var i Finding
+		var i ListFindingsByPRRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ReviewID,
@@ -96,6 +145,7 @@ func (q *Queries) ListFindingsByPR(ctx context.Context, pullRequestID int64) ([]
 			&i.CreatedAt,
 			&i.Accepted,
 			&i.GithubCommentID,
+			&i.Dismissed,
 		); err != nil {
 			return nil, err
 		}
@@ -181,4 +231,46 @@ type UpdateFindingGithubCommentIDParams struct {
 func (q *Queries) UpdateFindingGithubCommentID(ctx context.Context, arg UpdateFindingGithubCommentIDParams) error {
 	_, err := q.db.Exec(ctx, updateFindingGithubCommentID, arg.ID, arg.GithubCommentID)
 	return err
+}
+
+const upsertFindingDismissal = `-- name: UpsertFindingDismissal :one
+INSERT INTO finding_dismissals (repository_id, file, category, dismissed_by, reason)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (repository_id, file, category)
+DO UPDATE SET dismissed_by = EXCLUDED.dismissed_by,
+              reason = EXCLUDED.reason,
+              created_at = now()
+RETURNING id, repository_id, file, category, dismissed_by, reason, created_at
+`
+
+type UpsertFindingDismissalParams struct {
+	RepositoryID int64
+	File         string
+	Category     string
+	DismissedBy  int64
+	Reason       string
+}
+
+// Marca la huella "no aplica" (S4): re-dismissar actualiza autor, motivo y
+// fecha (ON CONFLICT por la UNIQUE de huella+repo). El hallazgo original no
+// se toca — auditoría (§3.3).
+func (q *Queries) UpsertFindingDismissal(ctx context.Context, arg UpsertFindingDismissalParams) (FindingDismissal, error) {
+	row := q.db.QueryRow(ctx, upsertFindingDismissal,
+		arg.RepositoryID,
+		arg.File,
+		arg.Category,
+		arg.DismissedBy,
+		arg.Reason,
+	)
+	var i FindingDismissal
+	err := row.Scan(
+		&i.ID,
+		&i.RepositoryID,
+		&i.File,
+		&i.Category,
+		&i.DismissedBy,
+		&i.Reason,
+		&i.CreatedAt,
+	)
+	return i, err
 }

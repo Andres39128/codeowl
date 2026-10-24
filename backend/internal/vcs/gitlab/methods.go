@@ -40,8 +40,8 @@ type glAPICommit struct {
 type glDiscussionThread struct {
 	ID    string `json:"id"`
 	Notes []struct {
-		ID     int64  `json:"id"`
-		System bool   `json:"system"`
+		ID     int64 `json:"id"`
+		System bool  `json:"system"`
 		// Position presente ⇔ nota anclada al diff (inline). Solo importa
 		// la presencia: el shape ya está modelado en glPosition.
 		Position *glPosition `json:"position"`

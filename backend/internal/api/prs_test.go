@@ -915,3 +915,101 @@ func TestReviewDetalle(t *testing.T) {
 		t.Errorf("corrida inexistente = %d, querés 404", got)
 	}
 }
+
+// TestDismissFinding (S4): marcar "no aplica" registra la huella por
+// (repo, file, category); el hallazgo viaja igual con dismissed=true y un
+// hallazgo de otra corrida con la misma huella también llega marcado.
+func TestDismissFinding(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+	ctx := context.Background()
+
+	now := time.Now().UnixNano()
+	repo, err := e.st.CreateRepository(ctx, store.CreateRepositoryParams{
+		Vcs: "github", ExternalID: now, Owner: "test", Name: "dismiss",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 1, Author: "ana", State: "open",
+		HeadSha: "h1", BaseRef: "main", BaseSha: "b1",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f1, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: rev.ID, File: "a.go", Line: 1, Severity: "low",
+		Category: "style", Body: "no aplica", Source: "sast",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Segunda corrida, misma huella: debe llegar marcada tras el dismiss.
+	rev2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h2", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: rev2.ID, File: "a.go", Line: 1, Severity: "low",
+		Category: "style", Body: "otra vez", Source: "sast",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM finding_dismissals WHERE repository_id=$1", repo.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM findings WHERE review_id IN ($1,$2)", rev.ID, rev2.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM reviews WHERE id IN ($1,$2)", rev.ID, rev2.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM pull_requests WHERE id=$1", pr.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id=$1", repo.ID)
+	})
+
+	// Antes del dismiss: nadie marcado.
+	resp := e.do(t, http.MethodGet, fmt.Sprintf("/api/prs/%d", pr.ID), a.cookie, a.csrf, nil)
+	var detail struct {
+		Findings []findingView `json:"findings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range detail.Findings {
+		if f.Dismissed {
+			t.Fatal("sin dismiss previo, ningún hallazgo llega marcado")
+		}
+	}
+
+	// Dismiss del hallazgo de la primera corrida con motivo.
+	resp = e.do(t, http.MethodPost, fmt.Sprintf("/api/findings/%d/dismiss", f1.ID), a.cookie, a.csrf,
+		map[string]string{"reason": "fixture intencional"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dismiss = %d, querés 200", resp.StatusCode)
+	}
+
+	// Las dos corridas traen la huella marcada.
+	resp = e.do(t, http.MethodGet, fmt.Sprintf("/api/prs/%d", pr.ID), a.cookie, a.csrf, nil)
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	marcados := 0
+	for _, f := range detail.Findings {
+		if f.File == "a.go" && f.Category == "style" {
+			if !f.Dismissed {
+				t.Error("la huella (a.go, style) debe llegar marcada en todas las corridas")
+			}
+			marcados++
+		}
+	}
+	if marcados != 2 {
+		t.Errorf("hallazgos con la huella = %d, querés 2 (ambas corridas)", marcados)
+	}
+
+	// Hallazgo inexistente: 404.
+	if got := e.do(t, http.MethodPost, "/api/findings/999999/dismiss", a.cookie, a.csrf, nil).StatusCode; got != http.StatusNotFound {
+		t.Errorf("hallazgo inexistente = %d, querés 404", got)
+	}
+}

@@ -9,7 +9,7 @@ import "time"
 // Topes del contrato FetchPRTimeline (§6 F5): el insumo del MetricsJob es
 // heurístico — primeros 50 commits con patch acotado, no historia completa.
 const (
-	MaxTimelineCommits = 50      // commits por timeline
+	MaxTimelineCommits = 50       // commits por timeline
 	MaxPatchBytes      = 64 << 10 // patch por commit, truncado a 64KB
 )
 

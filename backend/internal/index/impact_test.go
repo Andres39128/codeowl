@@ -35,7 +35,7 @@ func grafoFixture() []store.ListRepoIndexImportsRow {
 	return []store.ListRepoIndexImportsRow{
 		{File: "pkg/util/util.go", Imports: []string{"fmt", "net/http"}}, // del sistema: no matchean nada
 		{File: "cmd/c.go", Imports: []string{"pkg/util"}},                // dir: path.Dir("pkg/util/util.go")
-		{File: "main.go", Imports: []string{"cmd"}},                     // dir: path.Dir("cmd/c.go")
+		{File: "main.go", Imports: []string{"cmd"}},                      // dir: path.Dir("cmd/c.go")
 		{File: "src/app.ts", Imports: nil},
 		{File: "web/app.ts", Imports: []string{"app.ts"}}, // sufijo: "/app.ts"
 		{File: "otro.go", Imports: []string{"otro"}},
@@ -263,7 +263,7 @@ func TestTestish(t *testing.T) {
 		{"tests/e2e.go", true},     // segmento de ruta tests
 		{"src/test/util.go", true}, // segmento de ruta test
 		{"main.go", false},
-		{"attest.go", false},       // contiene "test" pero sin delimitador
+		{"attest.go", false}, // contiene "test" pero sin delimitador
 		{"contest.py", false},
 		{"latest.go", false},
 	}

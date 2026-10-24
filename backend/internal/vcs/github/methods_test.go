@@ -33,8 +33,8 @@ import (
 type timelineStub struct {
 	mu sync.Mutex
 
-	commits []ghAPICommit      // fixture del listado de commits
-	patches map[string]string  // sha → diff crudo; sha ausente ⇒ 500
+	commits    []ghAPICommit     // fixture del listado de commits
+	patches    map[string]string // sha → diff crudo; sha ausente ⇒ 500
 	diffAccept map[string]string // sha → Accept recibido en /commits/{sha}
 
 	graphqlStatus int
@@ -208,8 +208,8 @@ func TestFetchPRTimelineCaps(t *testing.T) {
 // errores GraphQL) ⇒ timeline completa con Threads vacío.
 func TestFetchPRTimelineBestEffort(t *testing.T) {
 	st := &timelineStub{
-		commits: []ghAPICommit{ghCommit("sha-1", "m", "a", "2026-10-01T10:00:00Z")},
-		patches: map[string]string{}, // todo /commits/{sha} responde 500
+		commits:    []ghAPICommit{ghCommit("sha-1", "m", "a", "2026-10-01T10:00:00Z")},
+		patches:    map[string]string{}, // todo /commits/{sha} responde 500
 		diffAccept: map[string]string{},
 	}
 	ad := newTimelineEnv(t, st)

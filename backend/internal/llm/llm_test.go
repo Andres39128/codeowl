@@ -751,7 +751,6 @@ func TestCompleteStripThinkTags(t *testing.T) {
 	}
 }
 
-
 // El chat lleva max_tokens explícito: los modelos de razonamiento queman el
 // presupuesto pensando y devuelven content vacío si el default del proveedor
 // es chico. El valor viaja desde Limits hasta el body del request.

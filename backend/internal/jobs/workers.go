@@ -786,9 +786,20 @@ func (w *MetricsJobWorker) markApplied(ctx context.Context, prID int64, commits 
 	if err != nil {
 		return 0, fmt.Errorf("cargando los comentarios inline del PR %d: %w", prID, err)
 	}
-	findings, err := w.Store.ListFindingsByPR(ctx, prID)
+	filas, err := w.Store.ListFindingsByPR(ctx, prID)
 	if err != nil {
 		return 0, fmt.Errorf("cargando los hallazgos del PR %d: %w", prID, err)
+	}
+	// La fila trae el flag dismissed (S4) que el metrics job no usa: se
+	// proyecta a Finding, el tipo que consume la huella.
+	findings := make([]store.Finding, 0, len(filas))
+	for _, f := range filas {
+		findings = append(findings, store.Finding{
+			ID: f.ID, ReviewID: f.ReviewID, File: f.File, Line: f.Line,
+			Severity: f.Severity, Category: f.Category, Body: f.Body,
+			Suggestion: f.Suggestion, Source: f.Source, Verified: f.Verified,
+			CreatedAt: f.CreatedAt, Accepted: f.Accepted, GithubCommentID: f.GithubCommentID,
+		})
 	}
 
 	// Huella (review, file, categoría) → hallazgos con sugerencia. El ancla

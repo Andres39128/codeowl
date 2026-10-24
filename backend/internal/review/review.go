@@ -234,7 +234,7 @@ type ReviewResult struct {
 // Finding es el hallazgo unificado del pipeline — de LLM o SAST — antes de
 // persistir y publicar (§3.3).
 type Finding struct {
-	ID         int64  // id de la fila en findings (asignado al persistir); 0 si el hallazgo aún no se persistió
+	ID         int64 // id de la fila en findings (asignado al persistir); 0 si el hallazgo aún no se persistió
 	File       string
 	Line       int32
 	Severity   string // high | medium | low (§3.3, conjunto cerrado)
@@ -680,7 +680,7 @@ func Run(ctx context.Context, cfg Config, st Store, gw Gateway, analyzer Analyze
 	if err := st.UpdatePullRequestTriageScores(ctx, store.UpdatePullRequestTriageScoresParams{
 		ID:          input.PullRequestID,
 		EffortScore: pgtype.Int4{Int32: int32(effort), Valid: true},
-		ImpactScore:  impactScore,
+		ImpactScore: impactScore,
 	}); err != nil {
 		slog.Warn("review: persistiendo los scores de triage falló (la corrida sigue)", "error", err, "review", rev.ID)
 	}

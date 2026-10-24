@@ -85,21 +85,21 @@ const summarizerJSON = `{"summary":"Agrega un import y cambia un saludo.","walkt
 
 // stubStore es la store en memoria: las operaciones que consume Run.
 type stubStore struct {
-	mu             sync.Mutex
-	repo           store.Repository
-	pr             store.PullRequest
-	reviews        map[int64]*store.Review
-	nextRev        int64
-	findings       []store.CreateFindingParams
+	mu       sync.Mutex
+	repo     store.Repository
+	pr       store.PullRequest
+	reviews  map[int64]*store.Review
+	nextRev  int64
+	findings []store.CreateFindingParams
 	// commentIDs: id del hallazgo → id del comentario publicado en el VCS.
-	commentIDs map[int64]string
+	commentIDs     map[int64]string
 	comments       map[string][]store.CommentsSent // indexadas por type
 	nextCmt        int64
-	cheapProviders []store.LlmProvider                            // cola del rol cheap (verifier)
-	riskScores     []store.UpdatePullRequestRiskScoreParams        // captura del score (F5 §6)
-	triageScores   []store.UpdatePullRequestTriageScoresParams     // captura effort/impact (F6 §6)
-	changeStacks   []store.UpdatePullRequestChangeStackParams      // captura del change stack (F6 §6, T4)
-	failRisk       bool                                            // fuerza el error de persistencia del score
+	cheapProviders []store.LlmProvider                         // cola del rol cheap (verifier)
+	riskScores     []store.UpdatePullRequestRiskScoreParams    // captura del score (F5 §6)
+	triageScores   []store.UpdatePullRequestTriageScoresParams // captura effort/impact (F6 §6)
+	changeStacks   []store.UpdatePullRequestChangeStackParams  // captura del change stack (F6 §6, T4)
+	failRisk       bool                                        // fuerza el error de persistencia del score
 }
 
 func newStubStore() *stubStore {
@@ -289,10 +289,10 @@ type stubGateway struct {
 	testgenSeen  []string // prompts de usuario de testgen recibidos
 	verifier     []string // respuestas encoladas para el verifier (rol cheap)
 	verifierSeen []string // prompts de usuario del verifier recibidos
-premerge     []string // respuestas encoladas para el pre-merge (§6 F5)
-premergeSeen []string // prompts de usuario del pre-merge recibidos
-slop         []string // respuestas encoladas para el SlopDetector (§6 F6)
-slopSeen     []string // prompts de usuario del slop recibidos
+	premerge     []string // respuestas encoladas para el pre-merge (§6 F5)
+	premergeSeen []string // prompts de usuario del pre-merge recibidos
+	slop         []string // respuestas encoladas para el SlopDetector (§6 F6)
+	slopSeen     []string // prompts de usuario del slop recibidos
 }
 
 func newStubGateway() *stubGateway {
@@ -899,7 +899,7 @@ func TestRunTriageScoresPersistido(t *testing.T) {
 		}
 	})
 
-		t.Run("fallo del provider no degrada la corrida", func(t *testing.T) {
+	t.Run("fallo del provider no degrada la corrida", func(t *testing.T) {
 		d := newDeps()
 		d.gw.reviewer["main.go"] = []string{reviewerFindings(3, "high", "security", "x", "")}
 		d.gw.summarizer = []string{summarizerJSON}

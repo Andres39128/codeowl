@@ -91,6 +91,17 @@ type Finding struct {
 	GithubCommentID pgtype.Text
 }
 
+// Hallazgos marcados "no aplica" por un humano: la huella marca las apariciones futuras
+type FindingDismissal struct {
+	ID           int64
+	RepositoryID int64
+	File         string
+	Category     string
+	DismissedBy  int64
+	Reason       string
+	CreatedAt    pgtype.Timestamptz
+}
+
 type LlmProvider struct {
 	ID        int64
 	BaseUrl   string

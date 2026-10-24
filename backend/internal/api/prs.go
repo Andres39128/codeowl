@@ -260,6 +260,10 @@ type findingView struct {
 	// VCS. Con él el dashboard permalinkea al comentario real, donde el
 	// bloque suggestion de GitHub se aplica con un clic.
 	GithubCommentID *string `json:"github_comment_id"`
+	// Dismissed: la huella (repo, file, category) fue marcada "no aplica"
+	// por un humano (S4). El hallazgo viaja igual (auditoría §3.3); la UI
+	// lo atenúa.
+	Dismissed bool `json:"dismissed"`
 }
 
 // prDetailView es el cuerpo de GET /api/prs/{id}: PR + última corrida +
@@ -362,7 +366,7 @@ func (s *Server) handlePRDetail(w http.ResponseWriter, r *http.Request) {
 
 // findingViewsOf proyecta y ordena los hallazgos: severity (high → low) y
 // dentro de cada severidad file/line — el triage ataca primero lo grave.
-func findingViewsOf(findings []store.Finding) []findingView {
+func findingViewsOf(findings []store.ListFindingsByPRRow) []findingView {
 	views := make([]findingView, 0, len(findings))
 	for _, f := range findings {
 		v := findingView{
@@ -391,6 +395,7 @@ func findingViewsOf(findings []store.Finding) []findingView {
 			s := f.GithubCommentID.String
 			v.GithubCommentID = &s
 		}
+		v.Dismissed = f.Dismissed
 		views = append(views, v)
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -533,4 +538,59 @@ func (s *Server) handleReviewDetail(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// handleDismissFinding: POST /api/findings/{id}/dismiss — marca la huella
+// del hallazgo "no aplica" (S4): las corridas futuras del mismo repo traen
+// la huella marcada y la UI la atenúa. El hallazgo no se toca (auditoría
+// §3.3). Cualquier usuario autenticado: el triage es de member también (§3.4).
+func (s *Server) handleDismissFinding(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	finding, err := s.store.GetFinding(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "hallazgo inexistente")
+		return
+	} else if err != nil {
+		slog.Error("buscando hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	// El repo del hallazgo: el dismiss es por (repo, file, category).
+	review, err := s.store.GetReview(r.Context(), finding.ReviewID)
+	if err != nil {
+		slog.Error("buscando la corrida del hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	pr, err := s.store.GetPullRequest(r.Context(), review.PullRequestID)
+	if err != nil {
+		slog.Error("buscando el PR del hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	// Cuerpo opcional: el motivo mejora la auditoría pero no es requisito.
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	sess := sessionOf(r)
+	if sess == nil {
+		writeError(w, http.StatusUnauthorized, "no autenticado")
+		return
+	}
+	if _, err := s.store.UpsertFindingDismissal(r.Context(), store.UpsertFindingDismissalParams{
+		RepositoryID: pr.RepositoryID,
+		File:         finding.File,
+		Category:     finding.Category,
+		DismissedBy:  sess.Row.UserID,
+		Reason:       body.Reason,
+	}); err != nil {
+		slog.Error("marcando el hallazgo", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"dismissed": true})
 }

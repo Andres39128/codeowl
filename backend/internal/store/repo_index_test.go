@@ -57,12 +57,12 @@ func riVecLiteral(v []float32) string {
 func riInsert(t *testing.T, st *Store, repoID int64, file, symbol, kind string, start, end int32, v []float32, imports []string) {
 	t.Helper()
 	if _, err := st.CreateRepoIndexRow(context.Background(), CreateRepoIndexRowParams{
-		RepositoryID: repoID,
-		File:         file,
-		Symbol:       symbol,
-		Kind:         kind,
-		StartLine:    start,
-		EndLine:      end,
+		RepositoryID:   repoID,
+		File:           file,
+		Symbol:         symbol,
+		Kind:           kind,
+		StartLine:      start,
+		EndLine:        end,
 		Column7:        riVecLiteral(v),
 		EmbeddingModel: "test-embed-model",
 		Dims:           riDims,

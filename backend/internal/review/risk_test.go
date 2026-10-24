@@ -96,8 +96,8 @@ func TestComputeEffort(t *testing.T) {
 		{"banda media al borde", EffortInput{ChangedLines: 600}, 45},
 		{"banda grande al borde", EffortInput{ChangedLines: 1500}, 60},
 		{"diff enorme", EffortInput{ChangedLines: 9000}, 70},
-		{"archivos suman", EffortInput{ChangedLines: 30, Files: 3}, 16}, // 10 + 6
-		{"archivos saturan en 15", EffortInput{ChangedLines: 30, Files: 40}, 40}, // 10 + 30
+		{"archivos suman", EffortInput{ChangedLines: 30, Files: 3}, 16},            // 10 + 6
+		{"archivos saturan en 15", EffortInput{ChangedLines: 30, Files: 40}, 40},   // 10 + 30
 		{"máximo natural exacto", EffortInput{ChangedLines: 9000, Files: 40}, 100}, // 70 + 30
 		{"negativos clampan a 0", EffortInput{ChangedLines: -5, Files: -3}, 0},
 	}

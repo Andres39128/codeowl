@@ -12,9 +12,16 @@ SELECT * FROM findings WHERE review_id = $1 ORDER BY id;
 
 -- name: ListFindingsByPR :many
 -- Atribución por corrida: todos los hallazgos de todas las corridas del PR.
-SELECT f.*
+-- dismissed marca la huella "no aplica" del repo (S4): el hallazgo viaja
+-- igual (auditoría) y la UI lo atenúa.
+SELECT f.*, (fd.id IS NOT NULL)::bool AS dismissed
 FROM findings f
 JOIN reviews r ON r.id = f.review_id
+JOIN pull_requests pr ON pr.id = r.pull_request_id
+LEFT JOIN finding_dismissals fd
+       ON fd.repository_id = pr.repository_id
+      AND fd.file = f.file
+      AND fd.category = f.category
 WHERE r.pull_request_id = $1
 ORDER BY f.id;
 
@@ -33,3 +40,18 @@ WHERE id = $1;
 UPDATE findings
 SET github_comment_id = $2
 WHERE id = $1;
+
+-- name: UpsertFindingDismissal :one
+-- Marca la huella "no aplica" (S4): re-dismissar actualiza autor, motivo y
+-- fecha (ON CONFLICT por la UNIQUE de huella+repo). El hallazgo original no
+-- se toca — auditoría (§3.3).
+INSERT INTO finding_dismissals (repository_id, file, category, dismissed_by, reason)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (repository_id, file, category)
+DO UPDATE SET dismissed_by = EXCLUDED.dismissed_by,
+              reason = EXCLUDED.reason,
+              created_at = now()
+RETURNING *;
+
+-- name: GetFinding :one
+SELECT * FROM findings WHERE id = $1;

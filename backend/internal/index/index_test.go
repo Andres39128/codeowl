@@ -38,11 +38,11 @@ var (
 // stubStore es la store en memoria: solo el subconjunto index.Store.
 type stubStore struct {
 	mu         sync.Mutex
-	providers  []store.LlmProvider             // cola del rol embedding
-	dims       int32                           // typmod del catálogo (default 1536)
-	indexFiles []store.ListRepoIndexFilesRow   // estado previo del índice
-	wiped      bool                            // DeleteRepoIndexByRepo recibido
-	deleted    [][]string                      // archivos borrados por re-index
+	providers  []store.LlmProvider              // cola del rol embedding
+	dims       int32                            // typmod del catálogo (default 1536)
+	indexFiles []store.ListRepoIndexFilesRow    // estado previo del índice
+	wiped      bool                             // DeleteRepoIndexByRepo recibido
+	deleted    [][]string                       // archivos borrados por re-index
 	rows       []store.CreateRepoIndexRowParams // filas creadas
 }
 
@@ -227,7 +227,7 @@ func TestIndexFullFlow(t *testing.T) {
 	}
 	byKey := map[string]store.CreateRepoIndexRowParams{}
 	for _, r := range st.rows {
-		byKey[r.File + "/" + r.Symbol] = r
+		byKey[r.File+"/"+r.Symbol] = r
 	}
 	// Dedupe: Alpha aparece UNA vez; Ghost (kind fuera del conjunto) filtrado.
 	if _, ok := byKey["src/a.go/Ghost"]; ok {
