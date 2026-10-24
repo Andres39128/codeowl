@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
 )
@@ -1011,5 +1012,96 @@ func TestDismissFinding(t *testing.T) {
 	// Hallazgo inexistente: 404.
 	if got := e.do(t, http.MethodPost, "/api/findings/999999/dismiss", a.cookie, a.csrf, nil).StatusCode; got != http.StatusNotFound {
 		t.Errorf("hallazgo inexistente = %d, querés 404", got)
+	}
+}
+
+// TestPRReintentarCorrida (S5): POST /api/prs/{id}/review re-encola la
+// revisión de ESTE PR con su identidad actual — el botón del detalle para
+// corridas con error.
+func TestPRReintentarCorrida(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+	ctx := context.Background()
+
+	now := time.Now().UnixNano()
+	repo, err := e.st.CreateRepository(ctx, store.CreateRepositoryParams{
+		Vcs: "github", ExternalID: now, Owner: "test", Name: "reintento",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 9, Author: "ana", State: "open",
+		HeadSha: "head-reintento", BaseRef: "main", BaseSha: "base-reintento",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM pull_requests WHERE id=$1", pr.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id=$1", repo.ID)
+	})
+
+	// Estado previo: apagar los review enabled que haya (otros tests dejan
+	// uno) y restaurarlos al final — la guarda §9.6 tiene que ser
+	// determinista.
+	var previos []int64
+	rows, err := e.st.Pool.Query(ctx, "SELECT id FROM llm_providers WHERE role = 'review' AND enabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var pid int64
+		if err := rows.Scan(&pid); err != nil {
+			t.Fatal(err)
+		}
+		previos = append(previos, pid)
+	}
+	rows.Close()
+	if _, err := e.st.Pool.Exec(ctx, "UPDATE llm_providers SET enabled = false WHERE role = 'review'"); err != nil {
+		t.Fatal(err)
+	}
+	if len(previos) > 0 {
+		t.Cleanup(func() {
+			_, _ = e.st.Pool.Exec(ctx, "UPDATE llm_providers SET enabled = true WHERE id = ANY($1)", previos)
+		})
+	}
+
+	// Sin proveedor review: la guarda §9.6.
+	if got := e.do(t, http.MethodPost, fmt.Sprintf("/api/prs/%d/review", pr.ID), a.cookie, a.csrf, nil).StatusCode; got != http.StatusUnprocessableEntity {
+		t.Fatalf("sin proveedor review = %d, querés 422", got)
+	}
+	if _, err := e.st.Pool.Exec(ctx, "UPDATE llm_providers SET enabled = true WHERE id = ANY($1)", previos); len(previos) > 0 && err != nil {
+		t.Fatal(err)
+	}
+	e.createProvider(t, "review", true)
+
+	resp := e.do(t, http.MethodPost, fmt.Sprintf("/api/prs/%d/review", pr.ID), a.cookie, a.csrf, nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, querés 202", resp.StatusCode)
+	}
+	if len(e.queue.kinds) == 0 || e.queue.kinds[len(e.queue.kinds)-1] != "review" {
+		t.Fatalf("debe encolar un job review: %v", e.queue.kinds)
+	}
+	var rja jobs.ReviewJobArgs
+	if err := json.Unmarshal(e.queue.payloads[len(e.queue.payloads)-1], &rja); err != nil {
+		t.Fatal(err)
+	}
+	if rja.PullRequestID != pr.ID || rja.HeadSha != "head-reintento" || rja.BaseSha != "base-reintento" {
+		t.Errorf("args = %+v, querés la identidad del PR", rja)
+	}
+
+	// Repo desconectado: 409.
+	if _, err := e.st.SetRepositoryEnabled(ctx, store.SetRepositoryEnabledParams{ID: repo.ID, Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.do(t, http.MethodPost, fmt.Sprintf("/api/prs/%d/review", pr.ID), a.cookie, a.csrf, nil).StatusCode; got != http.StatusConflict {
+		t.Errorf("repo desconectado = %d, querés 409", got)
+	}
+
+	// PR inexistente: 404.
+	if got := e.do(t, http.MethodPost, "/api/prs/999999/review", a.cookie, a.csrf, nil).StatusCode; got != http.StatusNotFound {
+		t.Errorf("PR inexistente = %d, querés 404", got)
 	}
 }

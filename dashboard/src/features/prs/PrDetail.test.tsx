@@ -666,3 +666,49 @@ describe("creador de prompts (S1)", () => {
 		vi.unstubAllGlobals();
 	});
 });
+
+describe("reintentar corrida (S5)", () => {
+	it("con corrida failed muestra el botón y encola el reintento", async () => {
+		const fallida: PrDetailView = {
+			...detail,
+			review: detail.review
+				? { ...detail.review, status: "failed" as const }
+				: null,
+		};
+		apiMock.mockImplementation((path: string, opts?: { method?: string }) => {
+			if (path === "/api/prs/7/review" && opts?.method === "POST") {
+				return Promise.resolve({ enqueued: true });
+			}
+			if (path === "/api/prs/7") return Promise.resolve(fallida);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		fireEvent.click(
+			await screen.findByRole("button", { name: /reintentar corrida/i }),
+		);
+
+		await waitFor(() => {
+			expect(apiMock).toHaveBeenCalledWith(
+				"/api/prs/7/review",
+				expect.objectContaining({ method: "POST" }),
+			);
+		});
+		expect(await screen.findByText(/encolada/i)).toBeTruthy();
+	});
+
+	it("con corrida exitosa no muestra el botón", async () => {
+		apiMock.mockImplementation((path: string) => {
+			if (path === "/api/prs/7") return Promise.resolve(detail);
+			if (path === "/api/prs/7/diff") return Promise.resolve({ diff });
+			return Promise.reject(new Error(`path inesperado: ${path}`));
+		});
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Cuerpo alto");
+		expect(
+			screen.queryByRole("button", { name: /reintentar corrida/i }),
+		).toBeNull();
+	});
+});

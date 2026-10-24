@@ -369,6 +369,14 @@ export function PrDetail({ prId }: { prId: number }) {
 	// agrupación por archivo colapsa listas largas.
 	const [mostrarMarcados, setMostrarMarcados] = useState(false);
 	const [agruparPorArchivo, setAgruparPorArchivo] = useState(false);
+	const queryClient = useQueryClient();
+	// Reintentar corrida (S5): el remedio del detalle cuando la última
+	// corrida terminó failed o partial.
+	const reintentar = useMutation({
+		mutationFn: () =>
+			api<{ enqueued: boolean }>(`/api/prs/${prId}/review`, { method: "POST" }),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["pr", prId] }),
+	});
 	const latestReviewID = review?.id ?? null;
 
 	const fileOptions = useMemo(
@@ -466,7 +474,31 @@ export function PrDetail({ prId }: { prId: number }) {
 							<span class="text-xs text-text-muted">
 								{new Date(review.created_at).toLocaleString("es-AR")}
 							</span>
+							{(review.status === "failed" || review.status === "partial") && (
+								<button
+									type="button"
+									disabled={reintentar.isPending}
+									class="ml-auto rounded border border-border-subtle px-2 py-1 text-xs text-action-primary hover:bg-bg-elevated disabled:opacity-50"
+									title="Encola una nueva revisión de este PR con su identidad actual, sin esperar webhook."
+									onClick={() => reintentar.mutate()}
+								>
+									{reintentar.isPending ? "Encolando…" : "Reintentar corrida"}
+								</button>
+							)}
 						</div>
+						{reintentar.isSuccess && (
+							<Banner tone="success" class="mb-2">
+								Revisión encolada: la nueva corrida aparece acá cuando el worker
+								la toma.
+							</Banner>
+						)}
+						{reintentar.isError && (
+							<Banner tone="error" class="mb-2">
+								{reintentar.error instanceof ApiError
+									? reintentar.error.message
+									: "No se pudo encolar la revisión."}
+							</Banner>
+						)}
 						<p class="text-sm whitespace-pre-wrap">{review.summary}</p>
 						{review.walkthrough !== "" && (
 							<>

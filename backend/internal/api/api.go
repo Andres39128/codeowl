@@ -140,6 +140,9 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /api/prs", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleListPRs)))))
 	mux.Handle("GET /api/prs/{id}", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePRDetail)))))
 	mux.Handle("GET /api/prs/{id}/diff", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePRDiff)))))
+	// Reintentar corrida (S5): encola la revisión de este PR sin esperar
+	// webhook — el remedio del detalle cuando la última corrida falló.
+	mux.Handle("POST /api/prs/{id}/review", s.admin(s.handlePRReviewNow))
 
 	// Métricas (guía §6 F5): resumen de la ventana para el dashboard.
 	// Member-visible como los PRs — el member opera el triage (§3.4).

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/Andres39128/codeowl/backend/internal/jobs"
 	"github.com/Andres39128/codeowl/backend/internal/store"
 	"github.com/Andres39128/codeowl/backend/internal/vcs"
 )
@@ -593,4 +594,52 @@ func (s *Server) handleDismissFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"dismissed": true})
+}
+
+// handlePRReviewNow: POST /api/prs/{id}/review — re-encola la revisión de
+// ESTE PR con su identidad actual (§9.9): el "reintentar" del detalle cuando
+// la última corrida terminó failed o partial. Misma guarda de rol que la
+// variante por repo (§9.6) y exige el repo habilitado.
+func (s *Server) handlePRReviewNow(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	pr, err := s.store.GetPullRequest(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "PR inexistente")
+		return
+	} else if err != nil {
+		slog.Error("buscando PR para reintentar", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	repo, err := s.store.GetRepository(r.Context(), pr.RepositoryID)
+	if err != nil {
+		slog.Error("buscando repo del PR", "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	if !repo.Enabled {
+		writeError(w, http.StatusConflict, "el repo está desconectado: habilitarlo antes de revisar")
+		return
+	}
+	if err := s.requireReviewProvider(r); err != nil {
+		writeGuardRejection(w, err)
+		return
+	}
+	args, err := json.Marshal(jobs.ReviewJobArgs{
+		RepositoryID: repo.ID, PullRequestID: pr.ID,
+		HeadSha: pr.HeadSha, BaseSha: pr.BaseSha,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	if err := s.queue.Enqueue(r.Context(), jobs.KindReview, args); err != nil {
+		slog.Error("encolando el reintento", "pr", pr.ID, "err", err, "req_id", r.Context().Value(requestIDKey))
+		writeError(w, http.StatusInternalServerError, "error interno")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"enqueued": true})
 }
