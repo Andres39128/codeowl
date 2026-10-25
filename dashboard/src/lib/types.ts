@@ -174,6 +174,10 @@ export interface FindingView {
 	 * (S4). El hallazgo viaja igual (auditoría); la UI lo oculta por
 	 * defecto. */
 	dismissed: boolean;
+	/** Persistent: la huella (file, category) reapareció de la corrida
+	 * anterior del PR (resolucion-hallazgos S2). Solo llega true en
+	 * findings de la última corrida; false en el resto. */
+	persistent: boolean;
 	source: "llm" | "sast";
 	verified: boolean | null;
 }
@@ -192,6 +196,10 @@ export interface PrDetailView {
 	pr: PrView;
 	review: ReviewView | null;
 	findings: FindingView[];
+	/** Resueltos: hallazgos de la corrida anterior cuya huella desapareció
+	 * de la última (S2). Huellas dismissadas no viajan acá: ya tienen
+	 * veredicto humano (S4). */
+	resolved: FindingView[];
 	/** Cohortes de dependencia del diff (F6): ausente o null sin índice del
 	 * repo — degradación visible, la Card no se renderiza. */
 	change_stack?: StackCohort[] | null;
@@ -218,4 +226,16 @@ export interface MetricsView {
 	reviews_with_cost: number;
 	avg_tokens_per_review: number | null;
 	reviews_per_week: ReviewsPerWeekPoint[];
+	/** Tasa de resolución por repo/semana (resolucion-hallazgos S3): pares
+	 * corrida nueva + inmediata anterior con hallazgos. Huellas dismissadas
+	 * excluidas (veredicto humano); la tasa por fila tiene denominador ≥ 1. */
+	resolution_per_week: ResolutionPerWeekPoint[];
+}
+
+export interface ResolutionPerWeekPoint {
+	week: string;
+	repository: string;
+	resolved: number;
+	persistent: number;
+	resolution_rate: number;
 }

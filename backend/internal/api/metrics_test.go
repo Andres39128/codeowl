@@ -9,6 +9,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -415,5 +416,104 @@ func TestMetricsSerieSemanal(t *testing.T) {
 	}
 	if sembradaPoint.Reviews != 3 {
 		t.Errorf("reviews = %d, querés 3 corridas", sembradaPoint.Reviews)
+	}
+}
+
+// Tasa de resolución por repo/semana (resolucion-hallazgos S3): hallazgos
+// de la corrida anterior que desaparecieron (resueltos) vs los que
+// reaparecieron (persistentes). Huellas dismissadas no cuentan (S4).
+func TestMetricsResolucionPorSemana(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+	ctx := context.Background()
+
+	now := time.Now().UnixNano()
+	repo, err := e.st.CreateRepository(ctx, store.CreateRepositoryParams{
+		Vcs: "github", ExternalID: now, Owner: "acme", Name: "resolucion-metrics-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := e.st.DeleteRepositoryCascade(ctx, repo.ID); err != nil {
+			t.Errorf("borrando el repo de test: %v", err)
+		}
+	})
+	pr, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 7, Author: "ana", State: "open",
+		HeadSha: "h1", BaseRef: "main", BaseSha: "b1",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h2", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	crear := func(reviewID int64, file string, line int32, sev, cat string) {
+		t.Helper()
+		if _, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+			ReviewID: reviewID, File: file, Line: line, Severity: sev,
+			Category: cat, Body: "cuerpo", Source: "sast",
+		}); err != nil {
+			t.Fatalf("CreateFinding(%s): %v", file, err)
+		}
+	}
+	// Corrida anterior: uno persistirá, uno se resolverá, uno se dismissa.
+	crear(r1.ID, "pers.go", 1, "low", "style")
+	crear(r1.ID, "reso.go", 2, "medium", "style")
+	fdisc, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: r1.ID, File: "disc.go", Line: 3, Severity: "high", Category: "security", Body: "no aplica", Source: "sast",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Última corrida: solo reaparece pers.go.
+	crear(r2.ID, "pers.go", 9, "low", "style")
+
+	// Dismiss por la interfaz pública.
+	if resp := e.do(t, http.MethodPost, fmt.Sprintf("/api/findings/%d/dismiss", fdisc.ID), a.cookie, a.csrf,
+		map[string]string{"reason": "falso positivo"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("dismiss = %d, querés 200", resp.StatusCode)
+	}
+
+	resp := e.do(t, http.MethodGet, "/api/metrics?days=365", a.cookie, a.csrf, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/metrics = %d, querés 200", resp.StatusCode)
+	}
+	var view metricsView
+	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
+		t.Fatal(err)
+	}
+
+	// Solo la fila del repo sembrado: la BD de desarrollo puede tener más.
+	var fila *resolutionPoint
+	for i := range view.ResolutionPerWeek {
+		if view.ResolutionPerWeek[i].Repository == "acme/resolucion-metrics-test" {
+			fila = &view.ResolutionPerWeek[i]
+			break
+		}
+	}
+	if fila == nil {
+		t.Fatalf("falta la fila del repo sembrado: %+v", view.ResolutionPerWeek)
+	}
+	// pers.go persiste, reso.go se resuelve; disc.go dismissado no cuenta
+	// (si contara, resolved sería 2).
+	if fila.Resolved != 1 || fila.Persistent != 1 {
+		t.Errorf("resolved=%d persistent=%d, querés 1 y 1 (disc.go excluido)", fila.Resolved, fila.Persistent)
+	}
+	if fila.ResolutionRate != 0.5 {
+		t.Errorf("resolution_rate = %v, querés 0.5", fila.ResolutionRate)
+	}
+	// Semana ISO (lunes) de la corrida NUEVA: r2 cayó ahora.
+	n := time.Now().UTC()
+	lunes := n.AddDate(0, 0, -((int(n.Weekday()) + 6) % 7)).Format("2006-01-02")
+	if fila.Week != lunes {
+		t.Errorf("week = %s, querés %s (lunes de esta semana)", fila.Week, lunes)
 	}
 }

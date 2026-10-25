@@ -265,6 +265,10 @@ type findingView struct {
 	// por un humano (S4). El hallazgo viaja igual (auditoría §3.3); la UI
 	// lo atenúa.
 	Dismissed bool `json:"dismissed"`
+	// Persistent: la huella (file, category) reapareció de la corrida
+	// anterior del PR (resolucion-hallazgos S2). Solo se computa para
+	// findings de la última corrida; false en el resto.
+	Persistent bool `json:"persistent"`
 }
 
 // prDetailView es el cuerpo de GET /api/prs/{id}: PR + última corrida +
@@ -274,9 +278,13 @@ type findingView struct {
 // index — y omitempty las omite cuando no hay (null/ausente sin índice del
 // repo, degradación visible).
 type prDetailView struct {
-	PR          prView          `json:"pr"`
-	Review      *reviewView     `json:"review"`
-	Findings    []findingView   `json:"findings"`
+	PR       prView        `json:"pr"`
+	Review   *reviewView   `json:"review"`
+	Findings []findingView `json:"findings"`
+	// Resueltos: hallazgos de la corrida anterior cuya huella desapareció
+	// de la última (S2). Huellas dismissadas no viajan acá: ya tienen
+	// veredicto humano (S4).
+	Resolved    []findingView   `json:"resolved"`
 	ChangeStack json.RawMessage `json:"change_stack,omitempty"`
 }
 
@@ -362,7 +370,63 @@ func (s *Server) handlePRDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out.Findings = findingViewsOf(findings)
+	out.Resolved = []findingView{}
+	// Resolución entre corridas (S2): si hay corrida anterior, marcar
+	// persistentes en la última y armar los resueltos. Vista computada:
+	// las filas históricas no se tocan (§3.3).
+	if out.Review != nil {
+		prev, perr := s.store.GetPreviousReviewByPR(r.Context(), id)
+		switch {
+		case perr == nil:
+			persistent, resueltos := resolucionEntre(findings, review.ID, prev.ID)
+			for i := range out.Findings {
+				if out.Findings[i].ReviewID == review.ID {
+					out.Findings[i].Persistent = persistent[out.Findings[i].ID]
+				}
+			}
+			out.Resolved = findingViewsOf(resueltos)
+		case errors.Is(perr, pgx.ErrNoRows):
+			// PR con una sola corrida: sin comparación posible.
+		default:
+			slog.Error("buscando corrida anterior del PR", "err", perr, "req_id", r.Context().Value(requestIDKey))
+			writeError(w, http.StatusInternalServerError, "error interno")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// resolucionEntre compara huellas (file+category — el MISMO match que los
+// dismissals 0010 y el metrics job §6 F5) entre la última corrida y su
+// inmediata anterior. Devuelve: persistent (por id de finding de la última
+// corrida: su huella ya estaba en la anterior) y resueltos (filas de la
+// anterior cuya huella no reapareció). Huellas dismissadas no cuentan en
+// ninguno: ya tienen veredicto humano (S4).
+func resolucionEntre(rows []store.ListFindingsByPRRow, latestID, prevID int64) (map[int64]bool, []store.ListFindingsByPRRow) {
+	ultimas := map[string]bool{}
+	previas := map[string]bool{}
+	for _, f := range rows {
+		switch f.ReviewID {
+		case latestID:
+			ultimas[f.File+"\x00"+f.Category] = true
+		case prevID:
+			previas[f.File+"\x00"+f.Category] = true
+		}
+	}
+	persistent := map[int64]bool{}
+	var resueltos []store.ListFindingsByPRRow
+	for _, f := range rows {
+		h := f.File + "\x00" + f.Category
+		switch f.ReviewID {
+		case latestID:
+			persistent[f.ID] = previas[h] && !f.Dismissed
+		case prevID:
+			if !ultimas[h] && !f.Dismissed {
+				resueltos = append(resueltos, f)
+			}
+		}
+	}
+	return persistent, resueltos
 }
 
 // findingViewsOf proyecta y ordena los hallazgos: severity (high → low) y

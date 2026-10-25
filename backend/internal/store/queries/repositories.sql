@@ -49,7 +49,8 @@ DELETE FROM repositories WHERE id = $1;
 
 -- name: DeleteRepositoryCascade :exec
 -- Borrado real del repo con sus dependientes: comments_sent, findings,
--- reviews, pull_requests y repo_index. Las FKs no tienen ON DELETE CASCADE
+-- finding_dismissals, reviews, pull_requests y repo_index. Las FKs no
+-- tienen ON DELETE CASCADE
 -- (§3.3) y el producto nunca borra un repo — la baja es el flag enabled
 -- (§3.5). Esta query la usa la limpieza de los fixtures de test, que de
 -- otro modo dejan repos basura en la base de desarrollo.
@@ -67,6 +68,8 @@ WITH d_comments AS (
     RETURNING 1
 ), d_pulls AS (
     DELETE FROM pull_requests WHERE repository_id = $1 RETURNING 1
+), d_dismissals AS (
+    DELETE FROM finding_dismissals WHERE repository_id = $1 RETURNING 1
 ), d_index AS (
     DELETE FROM repo_index WHERE repository_id = $1 RETURNING 1
 )

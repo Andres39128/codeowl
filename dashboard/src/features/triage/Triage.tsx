@@ -13,7 +13,12 @@ import { Banner } from "../../components/Banner";
 import { Card } from "../../components/Card";
 import { type Column, Table } from "../../components/Table";
 import { api } from "../../lib/apiClient";
-import type { MetricsView, PrView, ReviewsPerWeekPoint } from "../../lib/types";
+import type {
+	MetricsView,
+	PrView,
+	ResolutionPerWeekPoint,
+	ReviewsPerWeekPoint,
+} from "../../lib/types";
 import { reviewStatusOf } from "../prs/view";
 import { riskBandOf } from "./view";
 
@@ -103,9 +108,60 @@ function WeeklyBars({ points }: { points: ReviewsPerWeekPoint[] }) {
 	);
 }
 
+/** Resolución entre corridas por repo (S3, resolucion-hallazgos): agrega
+ * las filas semana+repo a un total por repo — resueltos (huellas que
+ * desaparecieron de la corrida nueva) vs persistentes (reaparecieron).
+ * El title lleva los números exactos; la tasa se recalcula sobre los
+ * totales del repo, no como promedio de tasas semanales. */
+function ResolutionByRepo({ points }: { points: ResolutionPerWeekPoint[] }) {
+	if (points.length === 0) return null;
+	const porRepo = new Map<string, { resolved: number; persistent: number }>();
+	for (const p of points) {
+		const acc = porRepo.get(p.repository) ?? { resolved: 0, persistent: 0 };
+		acc.resolved += p.resolved;
+		acc.persistent += p.persistent;
+		porRepo.set(p.repository, acc);
+	}
+	return (
+		<div>
+			<h3 class="mb-2 text-xs font-semibold text-text-muted">
+				Resueltos vs persistentes por repo
+			</h3>
+			<ul class="flex flex-col gap-1">
+				{[...porRepo.entries()].map(([repo, acc]) => {
+					const total = acc.resolved + acc.persistent;
+					const pct = ((total > 0 ? acc.resolved / total : 0) * 100).toLocaleString(
+						"es-AR",
+						{ maximumFractionDigits: 1 },
+					);
+					return (
+						<li
+							key={repo}
+							class="flex flex-wrap items-center gap-2"
+							title={`${repo}: ${acc.resolved} resueltos, ${acc.persistent} persistentes (${pct}%)`}
+						>
+							<span class="font-mono text-xs">{repo}</span>
+							<span class="text-xs text-text-muted">{`${acc.resolved} resueltos · ${acc.persistent} persistentes`}</span>
+							<span class="text-xs font-semibold">{`${pct}%`}</span>
+						</li>
+					);
+				})}
+			</ul>
+		</div>
+	);
+}
+
 /** Strip de métricas (§6 F5): cycle time, % aceptados, tasa FP, costo medio
  * y serie semanal de PRs revisados (S3). Solo números y barras CSS. */
 function MetricsCard({ metrics }: { metrics: MetricsView }) {
+	// Tasa de resolución agregada de la ventana (S3): sobre los totales de
+	// resueltos y persistentes, no promedio de tasas por semana.
+	const resTotal = metrics.resolution_per_week.reduce(
+		(a, p) => ({ resolved: a.resolved + p.resolved, persistent: a.persistent + p.persistent }),
+		{ resolved: 0, persistent: 0 },
+	);
+	const resDenom = resTotal.resolved + resTotal.persistent;
+	const resolutionRate = resDenom > 0 ? resTotal.resolved / resDenom : null;
 	return (
 		<Card title="Métricas (últimos 30 días)" class="mb-4">
 			<dl class="flex flex-wrap gap-x-8 gap-y-2">
@@ -127,6 +183,12 @@ function MetricsCard({ metrics }: { metrics: MetricsView }) {
 						{metricRate(metrics.false_positive_rate)}
 					</dd>
 				</div>
+				{resolutionRate !== null && (
+					<div>
+						<dt class="text-xs text-text-muted">Tasa de resolución</dt>
+						<dd class="text-lg font-semibold">{metricRate(resolutionRate)}</dd>
+					</div>
+				)}
 				<div>
 					<dt class="text-xs text-text-muted">Costo medio (tokens/review)</dt>
 					<dd class="text-lg font-semibold">
@@ -137,6 +199,11 @@ function MetricsCard({ metrics }: { metrics: MetricsView }) {
 			{metrics.reviews_per_week.length > 0 && (
 				<div class="mt-4 border-t border-border-subtle pt-3">
 					<WeeklyBars points={metrics.reviews_per_week} />
+				</div>
+			)}
+			{metrics.resolution_per_week.length > 0 && (
+				<div class="mt-4 border-t border-border-subtle pt-3">
+					<ResolutionByRepo points={metrics.resolution_per_week} />
 				</div>
 			)}
 		</Card>

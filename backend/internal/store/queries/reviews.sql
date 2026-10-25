@@ -34,3 +34,12 @@ SELECT * FROM reviews
 WHERE pull_request_id = $1
 ORDER BY id DESC
 LIMIT 1;
+
+-- name: GetPreviousReviewByPR :one
+-- Corrida inmediatamente anterior a la última del PR (resolucion-hallazgos
+-- S2): misma clave de orden que GetLatestReviewByPR, OFFSET 1. Sin filas con
+-- una sola corrida → ErrNoRows: no hay comparación posible.
+SELECT * FROM reviews
+WHERE pull_request_id = $1
+ORDER BY id DESC
+LIMIT 1 OFFSET 1;

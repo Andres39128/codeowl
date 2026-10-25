@@ -19,6 +19,7 @@ export interface PrDetailState {
 	pr: PrView | null;
 	review: ReviewView | null;
 	findings: FindingView[];
+	resolved: FindingView[];
 	changeStack: StackCohort[] | null;
 	diff: string | null;
 	isLoading: boolean;
@@ -43,6 +44,7 @@ export function usePR(prId: number): PrDetailState {
 		pr: detail.data?.pr ?? null,
 		review: detail.data?.review ?? null,
 		findings: detail.data?.findings ?? [],
+		resolved: detail.data?.resolved ?? [],
 		changeStack: detail.data?.change_stack ?? null,
 		diff: diff.data?.diff ?? null,
 		isLoading: detail.isPending,

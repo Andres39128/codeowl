@@ -102,6 +102,15 @@ backend:
       - "GET /api/reviews/{id} (auth, S4-usabilidad): auditoría de una corrida — uso LLM por rol (tokens in/out), duración (updated_at − created_at), hallazgos por severidad"
       - "POST /api/findings/{id}/dismiss (member, S4-usabilidad): marca la huella (repo, file, category) 'no aplica' — finding_dismissals (migración 0010), el hallazgo original no se toca (auditoría §3.3); ListFindingsByPR expone dismissed"
       - "GET /api/metrics suma reviews_per_week: PRs revisados por semana ISO (DISTINCT pull_request_id — un PR con varios push cuenta una vez)"
+      - >-
+        GET /api/prs/{id} suma resolución entre corridas (S2): persistent en
+        findings de la última corrida (huella en la corrida anterior —
+        GetPreviousReviewByPR) y resolved[]; huellas dismissadas excluidas;
+        vista computada
+      - >-
+        GET /api/metrics suma resolution_per_week (S3): resueltos vs
+        persistentes por repo/semana — ListResolutionPerWeek por self-join;
+        tasa computada en la api
       - "usuarios: GET/POST /api/users, PUT /api/users/{id} (F1, admin) — invitación, reset de contraseña, desactivación (guía §3.4)"
       - "cola de jobs: GET /api/jobs (F1) — lectura del panel de cola: pending/running/discarded por tipo (guía §9.9)"
       - "detalle de PR: GET /api/prs, GET /api/prs/{id}, GET /api/prs/{id}/diff (F3, member) — lista + findings + diff resuelto por el adapter (GetDiff) bajo demanda, sin copia en BD (guía §6 F3); GET /api/prs gana query params sort/state/repo/severity y risk_score en la lista (F5, T7)"

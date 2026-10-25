@@ -1105,3 +1105,142 @@ func TestPRReintentarCorrida(t *testing.T) {
 		t.Errorf("PR inexistente = %d, querés 404", got)
 	}
 }
+
+// Resolución entre corridas (resolucion-hallazgos S1/S2): el detalle marca
+// persistentes (misma huella en la corrida anterior) y lista los resueltos
+// (huellas de la anterior que ya no están). Huellas dismissadas no cuentan
+// en ningún lado: ya tienen veredicto humano (S4).
+func TestPRDetalleResueltosYPersistentes(t *testing.T) {
+	e := newTestEnv(t, 5)
+	a := e.admin(t)
+	ctx := context.Background()
+
+	now := time.Now().UnixNano()
+	repo, err := e.st.CreateRepository(ctx, store.CreateRepositoryParams{
+		Vcs: "github", ExternalID: now, Owner: "test", Name: "resolucion",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 1, Author: "ana", State: "open",
+		HeadSha: "h1", BaseRef: "main", BaseSha: "b1",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pr2 con una sola corrida: sin anterior no hay resueltos ni persistentes.
+	pr2, err := e.st.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+		RepositoryID: repo.ID, Number: 2, Author: "ana", State: "open",
+		HeadSha: "h2", BaseRef: "main", BaseSha: "b1",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rSolo, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr2.ID, HeadSha: "h2", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: rSolo.ID, File: "s.go", Line: 1, Severity: "low",
+		Category: "style", Body: "solo corrida", Source: "sast",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	crear := func(reviewID int64, file string, line int32, sev, cat, body string) {
+		t.Helper()
+		if _, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+			ReviewID: reviewID, File: file, Line: line, Severity: sev,
+			Category: cat, Body: body, Source: "sast",
+		}); err != nil {
+			t.Fatalf("CreateFinding(%s): %v", file, err)
+		}
+	}
+	// Corrida anterior: x (persistirá), y (se resolverá), z (se dismissa).
+	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	crear(r1.ID, "x.go", 5, "low", "style", "persistente")
+	crear(r1.ID, "y.go", 9, "medium", "style", "se resuelve")
+	fz, err := e.st.CreateFinding(ctx, store.CreateFindingParams{
+		ReviewID: r1.ID, File: "z.go", Line: 3, Severity: "high", Category: "security", Body: "dismissed", Source: "sast",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Última corrida: x reaparece (persistente), w es nuevo.
+	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h3", BaseSha: "b1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	crear(r2.ID, "x.go", 8, "low", "style", "sigue acá")
+	crear(r2.ID, "w.go", 2, "low", "performance", "nuevo")
+
+	// Dismiss de z por la interfaz pública: huella con veredicto humano.
+	if resp := e.do(t, http.MethodPost, fmt.Sprintf("/api/findings/%d/dismiss", fz.ID), a.cookie, a.csrf,
+		map[string]string{"reason": "falso positivo"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("dismiss = %d, querés 200", resp.StatusCode)
+	}
+
+	t.Cleanup(func() {
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM finding_dismissals WHERE repository_id=$1", repo.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM findings WHERE review_id IN ($1,$2,$3)", r1.ID, r2.ID, rSolo.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM reviews WHERE id IN ($1,$2,$3)", r1.ID, r2.ID, rSolo.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM pull_requests WHERE id IN ($1,$2)", pr.ID, pr2.ID)
+		_, _ = e.st.Pool.Exec(ctx, "DELETE FROM repositories WHERE id=$1", repo.ID)
+	})
+
+	leer := func(prID int64) prDetailView {
+		t.Helper()
+		resp := e.do(t, http.MethodGet, fmt.Sprintf("/api/prs/%d", prID), a.cookie, a.csrf, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET detalle = %d, querés 200", resp.StatusCode)
+		}
+		var out prDetailView
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	out := leer(pr.ID)
+	// persistent solo para findings de la última corrida (r2).
+	for _, f := range out.Findings {
+		switch {
+		case f.ReviewID == r2.ID && f.File == "x.go":
+			if !f.Persistent {
+				t.Error("x.go en la última corrida: misma huella que r1, debe ser persistente")
+			}
+		case f.ReviewID == r2.ID && f.File == "w.go":
+			if f.Persistent {
+				t.Error("w.go es nuevo en r2: no es persistente")
+			}
+		default:
+			if f.Persistent {
+				t.Errorf("%s:%d (corrida %d): persistent solo se marca en la última corrida", f.File, f.Line, f.ReviewID)
+			}
+		}
+	}
+	// Resueltos: solo y.go — z.go está dismissado y no cuenta.
+	if len(out.Resolved) != 1 {
+		t.Fatalf("resueltos = %d ( %+v ), querés 1 (y.go)", len(out.Resolved), out.Resolved)
+	}
+	if out.Resolved[0].File != "y.go" || out.Resolved[0].Category != "style" || out.Resolved[0].Line != 9 {
+		t.Errorf("el resuelto debe ser y.go:9 style, fue %+v", out.Resolved[0])
+	}
+
+	// PR con una sola corrida: sin resueltos y sin persistentes.
+	out2 := leer(pr2.ID)
+	if len(out2.Resolved) != 0 {
+		t.Errorf("PR con una corrida: resueltos = %d, querés 0", len(out2.Resolved))
+	}
+	for _, f := range out2.Findings {
+		if f.Persistent {
+			t.Errorf("PR con una corrida: %s no debe ser persistente", f.File)
+		}
+	}
+}

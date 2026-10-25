@@ -70,6 +70,34 @@ func (q *Queries) GetLatestReviewByPR(ctx context.Context, pullRequestID int64) 
 	return i, err
 }
 
+const getPreviousReviewByPR = `-- name: GetPreviousReviewByPR :one
+SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at FROM reviews
+WHERE pull_request_id = $1
+ORDER BY id DESC
+LIMIT 1 OFFSET 1
+`
+
+// Corrida inmediatamente anterior a la última del PR (resolucion-hallazgos
+// S2): misma clave de orden que GetLatestReviewByPR, OFFSET 1. Sin filas con
+// una sola corrida → ErrNoRows: no hay comparación posible.
+func (q *Queries) GetPreviousReviewByPR(ctx context.Context, pullRequestID int64) (Review, error) {
+	row := q.db.QueryRow(ctx, getPreviousReviewByPR, pullRequestID)
+	var i Review
+	err := row.Scan(
+		&i.ID,
+		&i.PullRequestID,
+		&i.HeadSha,
+		&i.BaseSha,
+		&i.Summary,
+		&i.Walkthrough,
+		&i.Mermaid,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getReview = `-- name: GetReview :one
 SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at FROM reviews WHERE id = $1
 `

@@ -54,6 +54,7 @@ const findings: FindingView[] = [
 		accepted: null,
 		github_comment_id: null,
 		dismissed: false,
+		persistent: false,
 	},
 	{
 		id: 2,
@@ -69,6 +70,7 @@ const findings: FindingView[] = [
 		accepted: null,
 		github_comment_id: null,
 		dismissed: false,
+		persistent: false,
 	},
 	{
 		id: 3,
@@ -84,6 +86,7 @@ const findings: FindingView[] = [
 		accepted: null,
 		github_comment_id: null,
 		dismissed: false,
+		persistent: false,
 	},
 	{
 		id: 4,
@@ -99,6 +102,7 @@ const findings: FindingView[] = [
 		accepted: null,
 		github_comment_id: null,
 		dismissed: false,
+		persistent: false,
 	},
 ];
 
@@ -119,6 +123,7 @@ const detail: PrDetailView = {
 	},
 	review,
 	findings,
+	resolved: [],
 };
 
 // Incluye la línea ancla del primer finding (src/foo.go:2 → fila +).
@@ -325,6 +330,7 @@ describe("filtros de hallazgos", () => {
 			accepted: null,
 			github_comment_id: null,
 			dismissed: false,
+			persistent: false,
 		};
 		const dosCorridas: PrDetailView = {
 			...detail,
@@ -533,6 +539,7 @@ describe("triage de hallazgos (S4)", () => {
 			accepted: null,
 			github_comment_id: null,
 			dismissed: true,
+			persistent: false,
 		};
 		apiMock.mockImplementation((path: string) => {
 			if (path === "/api/prs/7")
@@ -710,5 +717,74 @@ describe("reintentar corrida (S5)", () => {
 		expect(
 			screen.queryByRole("button", { name: /reintentar corrida/i }),
 		).toBeNull();
+	});
+});
+
+// Resolución entre corridas (resolucion-hallazgos S2): badge Persistente en
+// los hallazgos que reaparecieron y sección colapsada con los resueltos de la
+// corrida anterior.
+describe("resolución entre corridas", () => {
+	it("marca el hallazgo persistente y no al nuevo", async () => {
+		const conPersistente: PrDetailView = {
+			...detail,
+			findings: [
+				...findings,
+				{
+					id: 9,
+					review_id: 1,
+					file: "src/reaparece.go",
+					line: 7,
+					severity: "medium",
+					category: "style",
+					body: "Otra vez lo mismo",
+					suggestion: null,
+					source: "sast",
+					verified: null,
+					accepted: null,
+					github_comment_id: null,
+					dismissed: false,
+					persistent: true,
+				} as FindingView,
+			],
+			resolved: [],
+		};
+		mockApi({ detail: conPersistente, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Otra vez lo mismo");
+		// El badge viaja solo con el hallazgo persistente.
+		expect(screen.getByText(/persistente/i)).toBeTruthy();
+		// Sin resueltos, la sección no existe.
+		expect(screen.queryByText(/resueltos en esta corrida/i)).toBeNull();
+	});
+
+	it("lista colapsada los resueltos de la corrida anterior", async () => {
+		const conResueltos: PrDetailView = {
+			...detail,
+			resolved: [
+				{
+					id: 99,
+					review_id: 1,
+					file: "src/viejo.go",
+					line: 4,
+					severity: "medium",
+					category: "style",
+					body: "Ya no está en la última corrida",
+					suggestion: null,
+					source: "sast",
+					verified: null,
+					accepted: null,
+					github_comment_id: null,
+					dismissed: false,
+					persistent: false,
+				} as FindingView,
+			],
+		};
+		mockApi({ detail: conResueltos, diff });
+		render(<PrDetail prId={7} />, { wrapper: createWrapper() });
+
+		await screen.findByText("Resueltos en esta corrida (1)");
+		expect(screen.getByText("src/viejo.go:4")).toBeTruthy();
+		expect(screen.getByText("Ya no está en la última corrida")).toBeTruthy();
 	});
 });
