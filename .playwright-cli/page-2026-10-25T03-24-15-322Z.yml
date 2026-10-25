@@ -1,0 +1,106 @@
+- generic [ref=f2e3]:
+  - complementary [ref=f2e4]:
+    - generic [ref=f2e5]: codeowl
+    - navigation "Navegación principal" [ref=f2e6]:
+      - link "Cola de Jobs" [ref=f2e7] [cursor=pointer]:
+        - /url: "#/queue"
+      - link "Triage" [ref=f2e8] [cursor=pointer]:
+        - /url: "#/triage"
+      - link "PRs" [ref=f2e9] [cursor=pointer]:
+        - /url: "#/prs"
+      - link "Trazabilidad" [ref=f2e10] [cursor=pointer]:
+        - /url: "#/trazabilidad"
+      - link "Guía" [ref=f2e11] [cursor=pointer]:
+        - /url: "#/guia"
+      - paragraph [ref=f2e12]: Configuración
+      - link "Proveedores" [ref=f2e13] [cursor=pointer]:
+        - /url: "#/settings/providers"
+      - link "Repos" [ref=f2e14] [cursor=pointer]:
+        - /url: "#/settings/repos"
+      - link "Usuarios" [ref=f2e15] [cursor=pointer]:
+        - /url: "#/settings/users"
+    - generic [ref=f2e16]:
+      - button "Cambiar a modo oscuro" [ref=f2e17]: Modo oscuro
+      - generic [ref=f2e18]: admin · admin
+      - button "Salir" [ref=f2e19]
+  - main [ref=f2e20]:
+    - generic [ref=f2e22]:
+      - link "← Volver a trazabilidad" [ref=f2e23] [cursor=pointer]:
+        - /url: "#/trazabilidad"
+      - generic [ref=f2e24]:
+        - heading "Merge directo · Andres39128/codeowl" [level=2] [ref=f2e26]
+        - paragraph [ref=f2e27]: Andres39128 · main · 1970491 → 77ec3f1
+      - generic [ref=f2e28]:
+        - heading "Resumen" [level=2] [ref=f2e30]
+        - generic [ref=f2e31]:
+          - generic [ref=f2e32]: ● Exitosa
+          - generic [ref=f2e33]: 24/10/2026, 09:45:19
+        - paragraph [ref=f2e34]: "Modifica `odd/nota-push-directo.md` con 2 líneas cambiadas. La revisión reportó 1 hallazgo de severidad alta y 2 de severidad media. Se recomienda atenderlos antes de aprobar o fusionar el PR."
+        - heading "Walkthrough" [level=3] [ref=f2e35]
+        - paragraph [ref=f2e36]: "- `odd/nota-push-directo.md`: 2 líneas cambiadas."
+      - generic [ref=f2e37]:
+        - heading "Diff" [level=2] [ref=f2e39]
+        - generic [ref=f2e42]:
+          - generic [ref=f2e43]: odd/nota-push-directo.md
+          - generic [ref=f2e44]:
+            - generic [ref=f2e45]: "@@ -1,3 +1,5 @@"
+            - generic [ref=f2e46]:
+              - generic [ref=f2e47]: "1"
+              - generic [ref=f2e48]: "1"
+              - generic [ref=f2e50]: "# Nota de prueba"
+            - generic [ref=f2e51]:
+              - generic [ref=f2e52]: "2"
+              - generic [ref=f2e53]: "2"
+            - generic [ref=f2e56]:
+              - generic [ref=f2e57]: "3"
+              - generic [ref=f2e58]: "3"
+              - generic [ref=f2e60]: Push directo a main para verificar la página Trazabilidad (2026-10-24).
+            - generic [ref=f2e61]:
+              - generic [ref=f2e63]: "4"
+              - generic [ref=f2e64]: +
+            - generic [ref=f2e66]:
+              - generic [ref=f2e68]: "5"
+              - generic [ref=f2e69]: +
+              - generic [ref=f2e70]: Segundo push directo (21:42) — evento Push ya suscripto en la App.
+      - generic [ref=f2e76]:
+        - heading "Hallazgos (3)" [level=2] [ref=f2e78]
+        - list [ref=f2e79]:
+          - listitem [ref=f2e80]:
+            - generic [ref=f2e81]:
+              - 'generic "Severidad del hallazgo: Alta rompe la corrección, Media la debería, Baja es ajuste menor." [ref=f2e82]': ● Alta
+              - generic "No encaja en otra categoría" [ref=f2e83]: Otro
+              - generic "Lo detectó un linter determinista (ESLint, Ruff, golangci-lint, Clippy, Gitleaks)." [ref=f2e84]: SAST
+              - 'generic "Alguien marcó esta huella como no aplica: queda para auditoría y no vuelve a molestar." [ref=f2e107]': ✕ No aplica
+              - button "analyzer/src/test/testdata/app.ts:3" [ref=f2e85]
+              - button "Arreglar con IA" [active] [ref=f2e87]
+              - dialog "Arreglar con IA" [ref=f2e109]:
+                - generic [ref=f2e110]:
+                  - heading "Arreglar con IA" [level=2] [ref=f2e111]
+                  - button "Cerrar" [ref=f2e112]: ✕
+                - tablist [ref=f2e113]:
+                  - tab "Corregir" [selected] [ref=f2e114]
+                  - tab "Explicar" [ref=f2e115]
+                - paragraph [ref=f2e116]: Pegá este prompt en tu asistente de IA favorito (ChatGPT, Claude, Gemini…). Ya trae todo el contexto del hallazgo.
+                - code [ref=f2e118]: "Sos un desarrollador senior. Una herramienta de revisión de código detectó un problema en un pull request y necesito que me ayudes a corregirlo. No sé programar: explicame todo en lenguaje simple. ## El proyecto Repositorio Andres39128/codeowl: cambios integrados directo a la rama base del repo (sin pull request). ## El problema detectado - Archivo: analyzer/src/test/testdata/app.ts, línea 3 - Severidad: alta (puede romper algo importante) - Detectado por: un linter (análisis automático del código) - Tipo de problema: other - Descripción de la herramienta: 'hola' is defined but never used. (regla: eslint/@typescript-eslint/no-unused-vars) ## Fragmento del cambio (el diff del archivo) ```diff (el archivo no aparece en el diff) ``` ## Qué necesito de vos 1. El código corregido, listo para reemplazar (solo la parte que cambia, claramente delimitada). 2. Una explicación en lenguaje simple: qué estaba mal, por qué importaba y qué hace tu corrección. 3. Los pasos exactos para aplicar el cambio en GitHub (dónde hacer clic, qué pegar). 4. Si con esta información no alcanza para corregirlo, decime exactamente qué me falta pedirte."
+                - generic [ref=f2e119]:
+                  - button "Cerrar" [ref=f2e120]
+                  - button "Copiar prompt" [ref=f2e121]
+            - paragraph [ref=f2e88]: "'hola' is defined but never used. (regla: eslint/@typescript-eslint/no-unused-vars)"
+          - listitem [ref=f2e89]:
+            - generic [ref=f2e90]:
+              - 'generic "Severidad del hallazgo: Alta rompe la corrección, Media la debería, Baja es ajuste menor." [ref=f2e91]': ● Media
+              - generic "No encaja en otra categoría" [ref=f2e92]: Otro
+              - generic "Lo detectó un linter determinista (ESLint, Ruff, golangci-lint, Clippy, Gitleaks)." [ref=f2e93]: SAST
+              - button "analyzer/src/test/testdata/app.py:2" [ref=f2e94]
+              - button "No aplica" [ref=f2e95]
+              - button "Arreglar con IA" [ref=f2e96]
+            - paragraph [ref=f2e97]: "`os` imported but unused (regla: ruff/F401)"
+          - listitem [ref=f2e98]:
+            - generic [ref=f2e99]:
+              - 'generic "Severidad del hallazgo: Alta rompe la corrección, Media la debería, Baja es ajuste menor." [ref=f2e100]': ● Media
+              - generic "No encaja en otra categoría" [ref=f2e101]: Otro
+              - generic "Lo detectó un linter determinista (ESLint, Ruff, golangci-lint, Clippy, Gitleaks)." [ref=f2e102]: SAST
+              - button "analyzer/src/test/testdata/app.py:3" [ref=f2e103]
+              - button "No aplica" [ref=f2e104]
+              - button "Arreglar con IA" [ref=f2e105]
+            - paragraph [ref=f2e106]: "`collections.OrderedDict` imported but unused (regla: ruff/F401)"

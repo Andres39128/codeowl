@@ -188,7 +188,7 @@ func TestF6GapsEnLaCorrida(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListFindingsByPR: %v", err)
 	}
-	var slop *store.Finding
+	var slop *store.ListFindingsByPRRow
 	for i := range findings {
 		if findings[i].Category == "slop" {
 			slop = &findings[i]

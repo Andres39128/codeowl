@@ -58,7 +58,10 @@ const historyView: Record<
 	discarded: { label: "Descartado", tone: "alta" },
 };
 
-function historyStateOf(row: JobHistoryRow): { label: string; tone: BadgeTone } {
+function historyStateOf(row: JobHistoryRow): {
+	label: string;
+	tone: BadgeTone;
+} {
 	return historyView[row.state] ?? { label: row.state, tone: "neutral" };
 }
 
@@ -67,7 +70,8 @@ function historyStateOf(row: JobHistoryRow): { label: string; tone: BadgeTone } 
 function duracion(ms: number): string {
 	if (ms < 1000) return `${ms} ms`;
 	const seg = ms / 1000;
-	if (seg < 60) return `${seg.toLocaleString("es-AR", { maximumFractionDigits: 1 })}s`;
+	if (seg < 60)
+		return `${seg.toLocaleString("es-AR", { maximumFractionDigits: 1 })}s`;
 	const min = Math.floor(seg / 60);
 	if (min < 60) return `${min}m ${Math.round(seg - min * 60)}s`;
 	return `${(min / 60).toLocaleString("es-AR", { maximumFractionDigits: 1 })}h`;

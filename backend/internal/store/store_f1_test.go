@@ -101,7 +101,7 @@ func TestLlmProvidersCRUDYOrdenFailover(t *testing.T) {
 		t.Fatalf("el proveedor %d no aparece en el listado del rol", p.ID)
 		return -1
 	}
-	if !(pos(pAlta) < pos(pEmpate) && pos(pEmpate) < pos(pBaja)) {
+	if pos(pAlta) >= pos(pEmpate) || pos(pEmpate) >= pos(pBaja) {
 		t.Errorf("el orden de failover debe ser priority asc, id asc: alta=%d empate=%d baja=%d", pos(pAlta), pos(pEmpate), pos(pBaja))
 	}
 
@@ -351,7 +351,7 @@ func TestReviewsYFindings(t *testing.T) {
 	pr := f1PR(t, st, repo.ID, 11)
 
 	// La corrida nace running con textos vacíos; head/base son su identidad.
-	rev, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h11", BaseSha: "b11"})
+	rev, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h11", BaseSha: "b11"})
 	if err != nil {
 		t.Fatalf("CreateReview: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestReviewsYFindings(t *testing.T) {
 	}
 
 	// Segunda corrida del PR: GetLatestByPR apunta a la última.
-	rev2, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h12", BaseSha: "b12"})
+	rev2, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h12", BaseSha: "b12"})
 	if err != nil {
 		t.Fatalf("CreateReview 2: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestCommentsSentDedupYTipos(t *testing.T) {
 	ctx := context.Background()
 	repo := f1Repo(t, st)
 	pr := f1PR(t, st, repo.ID, 12)
-	rev, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h12", BaseSha: "b12"})
+	rev, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h12", BaseSha: "b12"})
 	if err != nil {
 		t.Fatal(err)
 	}

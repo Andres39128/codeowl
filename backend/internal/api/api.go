@@ -144,6 +144,14 @@ func (s *Server) Routes() *http.ServeMux {
 	// webhook — el remedio del detalle cuando la última corrida falló.
 	mux.Handle("POST /api/prs/{id}/review", s.admin(s.handlePRReviewNow))
 
+	// Trazabilidad de merges sin PR (trazabilidad-merges S1): pushes directos
+	// a la rama base analizados con el pipeline completo (T3) — lista,
+	// detalle con findings y diff vía GetCommitDiff (T2). Solo lectura,
+	// member-visible como los PRs (§3.4) — auth sin csrf.
+	mux.Handle("GET /api/pushes", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleListPushes)))))
+	mux.Handle("GET /api/pushes/{id}", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePushDetail)))))
+	mux.Handle("GET /api/pushes/{id}/diff", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handlePushDiff)))))
+
 	// Métricas (guía §6 F5): resumen de la ventana para el dashboard.
 	// Member-visible como los PRs — el member opera el triage (§3.4).
 	mux.Handle("GET /api/metrics", s.withLogging(s.withRecover(s.withAuth(http.HandlerFunc(s.handleMetrics)))))

@@ -51,7 +51,7 @@ func TestF5OutcomeRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	repo := f1Repo(t, st)
 	pr := f1PR(t, st, repo.ID, 1)
-	rev, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	rev, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h1", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,11 +130,11 @@ func TestF5MetricsSummary(t *testing.T) {
 	sembrar(3, "open", since.Add(-24*time.Hour), time.Time{}, false)             // abierto: fuera
 	sembrar(4, "closed", since.Add(-200*time.Hour), since.Add(-time.Hour), true) // merged antes de since: fuera
 
-	revSlow, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: prSlow.ID, HeadSha: "hs", BaseSha: "bs"})
+	revSlow, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pgtype.Int8{Int64: prSlow.ID, Valid: true}, HeadSha: "hs", BaseSha: "bs"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	revFast, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: prFast.ID, HeadSha: "hf", BaseSha: "bf"})
+	revFast, err := st.CreateReview(ctx, CreateReviewParams{PullRequestID: pgtype.Int8{Int64: prFast.ID, Valid: true}, HeadSha: "hf", BaseSha: "bf"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -130,10 +130,9 @@ function ResolutionByRepo({ points }: { points: ResolutionPerWeekPoint[] }) {
 			<ul class="flex flex-col gap-1">
 				{[...porRepo.entries()].map(([repo, acc]) => {
 					const total = acc.resolved + acc.persistent;
-					const pct = ((total > 0 ? acc.resolved / total : 0) * 100).toLocaleString(
-						"es-AR",
-						{ maximumFractionDigits: 1 },
-					);
+					const pct = (
+						(total > 0 ? acc.resolved / total : 0) * 100
+					).toLocaleString("es-AR", { maximumFractionDigits: 1 });
 					return (
 						<li
 							key={repo}
@@ -157,7 +156,10 @@ function MetricsCard({ metrics }: { metrics: MetricsView }) {
 	// Tasa de resolución agregada de la ventana (S3): sobre los totales de
 	// resueltos y persistentes, no promedio de tasas por semana.
 	const resTotal = metrics.resolution_per_week.reduce(
-		(a, p) => ({ resolved: a.resolved + p.resolved, persistent: a.persistent + p.persistent }),
+		(a, p) => ({
+			resolved: a.resolved + p.resolved,
+			persistent: a.persistent + p.persistent,
+		}),
 		{ resolved: 0, persistent: 0 },
 	);
 	const resDenom = resTotal.resolved + resTotal.persistent;

@@ -185,6 +185,9 @@ func (s *stubVCS) ListOpenPRs(context.Context, *store.Repository) ([]vcs.OpenPR,
 func (s *stubVCS) GetDiff(context.Context, *store.Repository, *store.PullRequest) (string, error) {
 	return s.diff, nil
 }
+func (s *stubVCS) GetCommitDiff(context.Context, *store.Repository, string, string) (string, error) {
+	return s.diff, nil // trazabilidad S2: el diff del push es el mismo fixture
+}
 func (s *stubVCS) PostSuggestion(_ context.Context, _ *store.Repository, _ *store.PullRequest, pos vcs.CommentPosition, _ string) (string, error) {
 	return s.recordInline(pos), nil
 }

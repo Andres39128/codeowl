@@ -3,9 +3,10 @@
 
 -- name: CreateReview :one
 -- Nace running con textos vacíos: summary/walkthrough/mermaid se completan al
--- finalizar la corrida.
-INSERT INTO reviews (pull_request_id, head_sha, base_sha)
-VALUES ($1, $2, $3)
+-- finalizar la corrida. Target polimórfico (S6): exactamente uno de
+-- pull_request_id / direct_push_id — el CHECK de la migración 0011 lo exige.
+INSERT INTO reviews (pull_request_id, direct_push_id, head_sha, base_sha)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetReview :one
@@ -31,7 +32,7 @@ RETURNING *;
 -- name: GetLatestReviewByPR :one
 -- Última corrida del PR: el id es monotónico, ordenar por id DESC es estable.
 SELECT * FROM reviews
-WHERE pull_request_id = $1
+WHERE pull_request_id = sqlc.arg('pull_request_id')::bigint
 ORDER BY id DESC
 LIMIT 1;
 
@@ -40,6 +41,6 @@ LIMIT 1;
 -- S2): misma clave de orden que GetLatestReviewByPR, OFFSET 1. Sin filas con
 -- una sola corrida → ErrNoRows: no hay comparación posible.
 SELECT * FROM reviews
-WHERE pull_request_id = $1
+WHERE pull_request_id = sqlc.arg('pull_request_id')::bigint
 ORDER BY id DESC
 LIMIT 1 OFFSET 1;

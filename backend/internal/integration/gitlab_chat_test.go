@@ -134,6 +134,9 @@ func (s *chatStubVCS) ListOpenPRs(context.Context, *store.Repository) ([]vcs.Ope
 func (s *chatStubVCS) GetDiff(context.Context, *store.Repository, *store.PullRequest) (string, error) {
 	return s.diff, nil
 }
+func (s *chatStubVCS) GetCommitDiff(context.Context, *store.Repository, string, string) (string, error) {
+	return s.diff, nil // trazabilidad S2: mismo fixture para el diff del push
+}
 func (s *chatStubVCS) PostSuggestion(context.Context, *store.Repository, *store.PullRequest, vcs.CommentPosition, string) (string, error) {
 	return "", nil
 }

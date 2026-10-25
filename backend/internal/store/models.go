@@ -74,6 +74,17 @@ type CommentsSent struct {
 	Applied         pgtype.Bool
 }
 
+// Pushes/merges directos a la rama base sin PR: se analizan con el pipeline completo, salida solo dashboard
+type DirectPush struct {
+	ID           int64
+	RepositoryID int64
+	Branch       string
+	BeforeSha    string
+	AfterSha     string
+	Committer    string
+	CreatedAt    pgtype.Timestamptz
+}
+
 type Finding struct {
 	ID         int64
 	ReviewID   int64
@@ -182,7 +193,7 @@ type Repository struct {
 
 type Review struct {
 	ID            int64
-	PullRequestID int64
+	PullRequestID pgtype.Int8
 	HeadSha       string
 	BaseSha       string
 	Summary       string
@@ -191,6 +202,7 @@ type Review struct {
 	Status        string
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
+	DirectPushID  pgtype.Int8
 }
 
 type RiverJob struct {

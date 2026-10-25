@@ -87,12 +87,12 @@ func seedPRs(t *testing.T, e *testEnv) *prFixture {
 	prA := crearPR("a")
 
 	// Corrida vieja de prA: high + dos low (verifican orden del detalle).
-	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: prA.ID, HeadSha: prA.HeadSha, BaseSha: prA.BaseSha})
+	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: prA.ID, Valid: true}, HeadSha: prA.HeadSha, BaseSha: prA.BaseSha})
 	if err != nil {
 		t.Fatalf("CreateReview r1: %v", err)
 	}
 	// Corrida más reciente (id mayor): la "latest" del listado y del detalle.
-	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: prA.ID, HeadSha: prA.HeadSha, BaseSha: prA.BaseSha})
+	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: prA.ID, Valid: true}, HeadSha: prA.HeadSha, BaseSha: prA.BaseSha})
 	if err != nil {
 		t.Fatalf("CreateReview r2: %v", err)
 	}
@@ -463,7 +463,7 @@ func seedTriage(t *testing.T, e *testEnv) *triageFx {
 	corrida := func(nombre, sev string) {
 		t.Helper()
 		pr := fx.prs[nombre]
-		rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: pr.HeadSha, BaseSha: pr.BaseSha})
+		rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: pr.HeadSha, BaseSha: pr.BaseSha})
 		if err != nil {
 			t.Fatalf("CreateReview(%s): %v", nombre, err)
 		}
@@ -853,7 +853,7 @@ func TestReviewDetalle(t *testing.T) {
 	}
 	inicio := time.Now().Add(-3 * time.Minute)
 	rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{
-		PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1",
+		PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h1", BaseSha: "b1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -940,7 +940,7 @@ func TestDismissFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h1", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -952,7 +952,7 @@ func TestDismissFinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Segunda corrida, misma huella: debe llegar marcada tras el dismiss.
-	rev2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h2", BaseSha: "b1"})
+	rev2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h2", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1139,7 +1139,7 @@ func TestPRDetalleResueltosYPersistentes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rSolo, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr2.ID, HeadSha: "h2", BaseSha: "b1"})
+	rSolo, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr2.ID, Valid: true}, HeadSha: "h2", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1160,7 +1160,7 @@ func TestPRDetalleResueltosYPersistentes(t *testing.T) {
 		}
 	}
 	// Corrida anterior: x (persistirá), y (se resolverá), z (se dismissa).
-	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h1", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1173,7 +1173,7 @@ func TestPRDetalleResueltosYPersistentes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Última corrida: x reaparece (persistente), w es nuevo.
-	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h3", BaseSha: "b1"})
+	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h3", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}

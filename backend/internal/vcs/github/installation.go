@@ -204,13 +204,13 @@ func (tm *tokenManager) InstallationStatus(ctx context.Context, owner, name stri
 	if err != nil {
 		return 0, false, fmt.Errorf("resolviendo instalación de la App para %s: %w", full, err)
 	}
-	switch {
-	case status == http.StatusOK:
+	switch status {
+	case http.StatusOK:
 		tm.mu.Lock()
 		tm.inst[full] = cachedInstallation{id: out.ID, fetchedAt: time.Now()}
 		tm.mu.Unlock()
 		return out.ID, true, nil
-	case status == http.StatusNotFound:
+	case http.StatusNotFound:
 		return 0, false, nil
 	default:
 		return 0, false, fmt.Errorf("resolviendo instalación de la App para %s: status %d", full, status)

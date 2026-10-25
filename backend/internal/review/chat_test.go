@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/Andres39128/codeowl/backend/internal/store"
 )
 
@@ -40,7 +42,7 @@ func chatRows(d *deps) []store.CommentsSent {
 func seedReviewWithFindings(t *testing.T, d *deps, fs ...store.CreateFindingParams) {
 	t.Helper()
 	rev, err := d.st.CreateReview(context.Background(), store.CreateReviewParams{
-		PullRequestID: testPRID, HeadSha: testHead, BaseSha: testBase,
+		PullRequestID: pgtype.Int8{Int64: testPRID, Valid: true}, HeadSha: testHead, BaseSha: testBase,
 	})
 	if err != nil {
 		t.Fatalf("seed review: %v", err)

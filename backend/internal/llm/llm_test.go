@@ -65,7 +65,7 @@ func newStub(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 func stubOK(content string, tokensIn, tokensOut int) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":%q}}],"usage":{"prompt_tokens":%d,"completion_tokens":%d}}`,
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":%q}}],"usage":{"prompt_tokens":%d,"completion_tokens":%d}}`,
 			content, tokensIn, tokensOut)
 	}
 }
@@ -540,7 +540,7 @@ func TestEmbedDimsInconsistentesFalla(t *testing.T) {
 		calls++
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data":[{"embedding":[1,2],"index":0},{"embedding":[1,2,3],"index":1}]}`)
+		_, _ = fmt.Fprint(w, `{"data":[{"embedding":[1,2],"index":0},{"embedding":[1,2,3],"index":1}]}`)
 	})
 	fs := &fakeStore{providers: []store.LlmProvider{provider(t, srv.URL, "embedding", 1)}}
 	g := newGateway(t, fs, testLimits())
@@ -566,7 +566,7 @@ func TestEmbedMalformadoConmutaAlSiguiente(t *testing.T) {
 		calls1++
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `esto no es json`)
+		_, _ = fmt.Fprint(w, `esto no es json`)
 	})
 	srv2 := newStub(t, stubEmbeddingsOK(3, nil))
 	fs := &fakeStore{providers: []store.LlmProvider{

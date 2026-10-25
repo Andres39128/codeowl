@@ -573,7 +573,8 @@ describe("triage de hallazgos (S4)", () => {
 		await screen.findByText("Cuerpo medio");
 
 		const botones = screen.getAllByRole("button", { name: /no aplica/i });
-		fireEvent.click(botones[0]!);
+		expect(botones.length).toBeGreaterThan(0);
+		fireEvent.click(botones[0] as HTMLElement);
 
 		await waitFor(() => {
 			expect(apiMock).toHaveBeenCalledWith(
@@ -614,7 +615,9 @@ describe("creador de prompts (S1)", () => {
 		await screen.findByText("Cuerpo alto");
 
 		fireEvent.click(
-			screen.getAllByRole("button", { name: /arreglar con ia/i })[0]!,
+			screen.getAllByRole("button", {
+				name: /arreglar con ia/i,
+			})[0] as HTMLElement,
 		);
 
 		// El modal trae el prompt con el contexto del hallazgo.
@@ -637,7 +640,9 @@ describe("creador de prompts (S1)", () => {
 		await screen.findByText("Cuerpo alto");
 
 		fireEvent.click(
-			screen.getAllByRole("button", { name: /arreglar con ia/i })[0]!,
+			screen.getAllByRole("button", {
+				name: /arreglar con ia/i,
+			})[0] as HTMLElement,
 		);
 		fireEvent.click(await screen.findByRole("tab", { name: /explicar/i }));
 
@@ -658,7 +663,9 @@ describe("creador de prompts (S1)", () => {
 		await screen.findByText("Cuerpo alto");
 
 		fireEvent.click(
-			screen.getAllByRole("button", { name: /arreglar con ia/i })[0]!,
+			screen.getAllByRole("button", {
+				name: /arreglar con ia/i,
+			})[0] as HTMLElement,
 		);
 		fireEvent.click(
 			await screen.findByRole("button", { name: /^copiar prompt$/i }),
@@ -666,7 +673,7 @@ describe("creador de prompts (S1)", () => {
 
 		await waitFor(() => {
 			expect(writeText).toHaveBeenCalled();
-			const prompt = writeText.mock.calls[0]![0] as string;
+			const prompt = writeText.mock.calls[0]?.[0] as string;
 			expect(prompt).toContain("Cuerpo alto");
 			expect(prompt).toContain("src/foo.go");
 		});

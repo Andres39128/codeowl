@@ -1,0 +1,65 @@
+- generic [ref=e11]:
+  - complementary [ref=e12]:
+    - generic [ref=e13]: codeowl
+    - navigation "Navegación principal" [ref=e14]:
+      - link "Cola de Jobs" [ref=e15] [cursor=pointer]:
+        - /url: "#/queue"
+      - link "Triage" [ref=e16] [cursor=pointer]:
+        - /url: "#/triage"
+      - link "PRs" [ref=e17] [cursor=pointer]:
+        - /url: "#/prs"
+      - link "Trazabilidad" [ref=e18] [cursor=pointer]:
+        - /url: "#/trazabilidad"
+      - link "Guía" [ref=e19] [cursor=pointer]:
+        - /url: "#/guia"
+      - paragraph [ref=e20]: Configuración
+      - link "Proveedores" [ref=e21] [cursor=pointer]:
+        - /url: "#/settings/providers"
+      - link "Repos" [ref=e22] [cursor=pointer]:
+        - /url: "#/settings/repos"
+      - link "Usuarios" [ref=e23] [cursor=pointer]:
+        - /url: "#/settings/users"
+    - generic [ref=e24]:
+      - button "Cambiar a modo oscuro" [ref=e25]: Modo oscuro
+      - generic [ref=e26]: admin · admin
+      - button "Salir" [ref=e27]
+  - main [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e30]:
+        - heading "Proveedores LLM" [level=1] [ref=e31]
+        - button "Agregar proveedor" [ref=e32]
+      - table [ref=e34]:
+        - caption [ref=e35]: Proveedores LLM configurados
+        - rowgroup [ref=e36]:
+          - row [ref=e37]:
+            - columnheader "Modelo" [ref=e38]
+            - columnheader "Base URL" [ref=e39]
+            - columnheader "Rol" [ref=e40]
+            - columnheader "Prioridad" [ref=e41]
+            - columnheader "Habilitado" [ref=e42]
+            - columnheader "Acciones" [ref=e43]
+        - rowgroup [ref=e44]:
+          - row [ref=e45]:
+            - cell "Qwen3.8-27B" [ref=e46]
+            - cell "http://localhost:8081" [ref=e47]
+            - cell "review" [ref=e49]
+            - cell "1" [ref=e51]
+            - cell [ref=e52]:
+              - checkbox "Habilitar proveedor Qwen3.8-27B" [checked] [ref=e53]
+            - cell [ref=e54]:
+              - generic [ref=e55]:
+                - button "Probar" [ref=e56]
+                - button "Editar" [ref=e57]
+                - button "Eliminar" [ref=e58]
+          - row [ref=e59]:
+            - cell "MiniMax-M3.1-Flash" [ref=e60]
+            - cell "https://api.minimax.io" [ref=e61]
+            - cell "review" [ref=e63]
+            - cell "2" [ref=e65]
+            - cell [ref=e66]:
+              - checkbox "Habilitar proveedor MiniMax-M3.1-Flash" [checked] [ref=e67]
+            - cell [ref=e68]:
+              - generic [ref=e69]:
+                - button "Probar" [ref=e70]
+                - button "Editar" [ref=e71]
+                - button "Eliminar" [ref=e72]

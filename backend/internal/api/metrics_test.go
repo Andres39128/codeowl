@@ -159,11 +159,11 @@ func TestMetricsVentanaSembrada(t *testing.T) {
 	prSlow := sembrar(1, "closed", inicio.Add(-48*time.Hour), true)
 	prFast := sembrar(2, "closed", inicio.Add(-12*time.Hour), true)
 
-	revSlow, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: prSlow.ID, HeadSha: "hs", BaseSha: "bs"})
+	revSlow, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: prSlow.ID, Valid: true}, HeadSha: "hs", BaseSha: "bs"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	revFast, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: prFast.ID, HeadSha: "hf", BaseSha: "bf"})
+	revFast, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: prFast.ID, Valid: true}, HeadSha: "hf", BaseSha: "bf"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestMetricsSerieSemanal(t *testing.T) {
 	creadas := []int64{}
 	for _, pr := range []store.PullRequest{pr1, pr1, pr2} {
 		rev, err := e.st.CreateReview(ctx, store.CreateReviewParams{
-			PullRequestID: pr.ID, HeadSha: pr.HeadSha, BaseSha: pr.BaseSha,
+			PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: pr.HeadSha, BaseSha: pr.BaseSha,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -447,11 +447,11 @@ func TestMetricsResolucionPorSemana(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h1", BaseSha: "b1"})
+	r1, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h1", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pr.ID, HeadSha: "h2", BaseSha: "b1"})
+	r2, err := e.st.CreateReview(ctx, store.CreateReviewParams{PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true}, HeadSha: "h2", BaseSha: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}

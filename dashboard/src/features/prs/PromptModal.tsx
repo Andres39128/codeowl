@@ -13,7 +13,7 @@ import type { FindingView } from "../../lib/types";
 export function hunkOf(diff: string, file: string): string {
 	const marker = `diff --git a/${file} b/${file}`;
 	const start = diff.indexOf(marker);
-	if (start === -1) return "(el archivo no aparece en el diff del PR)";
+	if (start === -1) return "(el archivo no aparece en el diff)";
 	const end = diff.indexOf("\ndiff --git ", start + 1);
 	const hunk = end === -1 ? diff.slice(start) : diff.slice(start, end);
 	const lines = hunk.split("\n");
@@ -29,16 +29,31 @@ const severityPlain: Record<string, string> = {
 
 interface PromptModalProps {
 	finding: FindingView;
-	repo: { owner: string; name: string; number: number };
+	/** number presente = hallazgo de PR; ausente = hallazgo de un push
+	 * directo (trazabilidad) — el prompt no inventa un número de PR. */
+	repo: { owner: string; name: string; number?: number };
 	diff: string;
 	onClose: () => void;
+}
+
+/** Línea de contexto del repo: con PR nombra el pull request; para un push
+ * directo lo dice honestamente (sin PR). */
+function contextoDeRepo(repo: {
+	owner: string;
+	name: string;
+	number?: number;
+}): string {
+	if (repo.number !== undefined && repo.number > 0) {
+		return `Repositorio ${repo.owner}/${repo.name}, pull request #${repo.number}.`;
+	}
+	return `Repositorio ${repo.owner}/${repo.name}: cambios integrados directo a la rama base del repo (sin pull request).`;
 }
 
 /** Prompt de corrección: rol + contexto + qué pedir (el fix y la
  * explicación en lenguaje simple). */
 export function promptCorregir(
 	finding: FindingView,
-	repo: { owner: string; name: string; number: number },
+	repo: { owner: string; name: string; number?: number },
 	diff: string,
 ): string {
 	const sev = severityPlain[finding.severity] ?? finding.severity;
@@ -46,11 +61,12 @@ export function promptCorregir(
 		finding.source === "sast"
 			? "un linter (análisis automático del código)"
 			: "un modelo de lenguaje que leyó los cambios";
+	const enPr = repo.number !== undefined && repo.number > 0;
 	const partes = [
 		"Sos un desarrollador senior. Una herramienta de revisión de código detectó un problema en un pull request y necesito que me ayudes a corregirlo. No sé programar: explicame todo en lenguaje simple.",
 		"",
 		`## El proyecto`,
-		`Repositorio ${repo.owner}/${repo.name}, pull request #${repo.number}.`,
+		contextoDeRepo(repo),
 		"",
 		`## El problema detectado`,
 		`- Archivo: ${finding.file}, línea ${finding.line}`,
@@ -72,7 +88,9 @@ export function promptCorregir(
 		);
 	}
 	partes.push(
-		"## Fragmento del cambio en el PR (el diff del archivo)",
+		enPr
+			? "## Fragmento del cambio en el PR (el diff del archivo)"
+			: "## Fragmento del cambio (el diff del archivo)",
 		"```diff",
 		hunkOf(diff, finding.file),
 		"```",

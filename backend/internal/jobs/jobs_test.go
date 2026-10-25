@@ -204,6 +204,15 @@ func TestInsertOptsPorKind(t *testing.T) {
 		t.Errorf("IndexJob: unicidad ByArgs con 5 estados activos: got %+v", opts.UniqueOpts)
 	}
 
+	// PushReviewJob (trazabilidad S4): espejo del ReviewJob — misma cola y
+	// tope, único por args mientras viva (la ventana de cada push es única
+	// por (repo, after) vía UpsertDirectPush).
+	if opts := insertOpts(KindPushReview); opts.Queue != QueueReview || opts.MaxAttempts != reviewMaxAttempts {
+		t.Errorf("PushReviewJob: cola e intentos espejo del review: got %+v", opts)
+	} else if !opts.UniqueOpts.ByArgs || len(opts.UniqueOpts.ByState) != 5 {
+		t.Errorf("PushReviewJob: unicidad ByArgs con 5 estados activos: got %+v", opts.UniqueOpts)
+	}
+
 	// MetricsJob (§6 F5): cola ops con reintentos baratos y SIN unicidad —
 	// cada cierre encola el suyo y el recompute del worker es idempotente.
 	if opts := insertOpts(KindMetrics); opts.Queue != QueueOps || opts.MaxAttempts != metricsMaxAttempts {
@@ -294,7 +303,7 @@ func TestEnqueueIndexJobGuardYUnicidad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.DeleteLlmProvider(ctx, prov.ID)
+	defer func() { _ = st.DeleteLlmProvider(ctx, prov.ID) }()
 
 	for i := 0; i < 2; i++ {
 		if err := EnqueueIndexJob(ctx, st, q, repoA); err != nil {

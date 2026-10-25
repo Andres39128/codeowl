@@ -1,0 +1,8 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - heading "codeowl" [level=1] [ref=e5]
+    - generic [ref=e6]: Usuario
+    - textbox "Usuario" [ref=e7]
+    - generic [ref=e8]: Contraseña
+    - textbox "Contraseña" [ref=e9]
+    - button "Iniciar sesión" [ref=e10]

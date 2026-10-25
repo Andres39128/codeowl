@@ -7,17 +7,20 @@ package store
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createReview = `-- name: CreateReview :one
 
-INSERT INTO reviews (pull_request_id, head_sha, base_sha)
-VALUES ($1, $2, $3)
-RETURNING id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at
+INSERT INTO reviews (pull_request_id, direct_push_id, head_sha, base_sha)
+VALUES ($1, $2, $3, $4)
+RETURNING id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at, direct_push_id
 `
 
 type CreateReviewParams struct {
-	PullRequestID int64
+	PullRequestID pgtype.Int8
+	DirectPushID  pgtype.Int8
 	HeadSha       string
 	BaseSha       string
 }
@@ -25,9 +28,15 @@ type CreateReviewParams struct {
 // Reviews (guía §3.3): una por corrida; head_sha + base_sha son la identidad
 // de la corrida (§3.6).
 // Nace running con textos vacíos: summary/walkthrough/mermaid se completan al
-// finalizar la corrida.
+// finalizar la corrida. Target polimórfico (S6): exactamente uno de
+// pull_request_id / direct_push_id — el CHECK de la migración 0011 lo exige.
 func (q *Queries) CreateReview(ctx context.Context, arg CreateReviewParams) (Review, error) {
-	row := q.db.QueryRow(ctx, createReview, arg.PullRequestID, arg.HeadSha, arg.BaseSha)
+	row := q.db.QueryRow(ctx, createReview,
+		arg.PullRequestID,
+		arg.DirectPushID,
+		arg.HeadSha,
+		arg.BaseSha,
+	)
 	var i Review
 	err := row.Scan(
 		&i.ID,
@@ -40,13 +49,14 @@ func (q *Queries) CreateReview(ctx context.Context, arg CreateReviewParams) (Rev
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DirectPushID,
 	)
 	return i, err
 }
 
 const getLatestReviewByPR = `-- name: GetLatestReviewByPR :one
-SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at FROM reviews
-WHERE pull_request_id = $1
+SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at, direct_push_id FROM reviews
+WHERE pull_request_id = $1::bigint
 ORDER BY id DESC
 LIMIT 1
 `
@@ -66,13 +76,14 @@ func (q *Queries) GetLatestReviewByPR(ctx context.Context, pullRequestID int64) 
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DirectPushID,
 	)
 	return i, err
 }
 
 const getPreviousReviewByPR = `-- name: GetPreviousReviewByPR :one
-SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at FROM reviews
-WHERE pull_request_id = $1
+SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at, direct_push_id FROM reviews
+WHERE pull_request_id = $1::bigint
 ORDER BY id DESC
 LIMIT 1 OFFSET 1
 `
@@ -94,12 +105,13 @@ func (q *Queries) GetPreviousReviewByPR(ctx context.Context, pullRequestID int64
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DirectPushID,
 	)
 	return i, err
 }
 
 const getReview = `-- name: GetReview :one
-SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at FROM reviews WHERE id = $1
+SELECT id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at, direct_push_id FROM reviews WHERE id = $1
 `
 
 func (q *Queries) GetReview(ctx context.Context, id int64) (Review, error) {
@@ -116,6 +128,7 @@ func (q *Queries) GetReview(ctx context.Context, id int64) (Review, error) {
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DirectPushID,
 	)
 	return i, err
 }
@@ -125,7 +138,7 @@ UPDATE reviews
 SET status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at
+RETURNING id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at, direct_push_id
 `
 
 type UpdateReviewStatusParams struct {
@@ -148,6 +161,7 @@ func (q *Queries) UpdateReviewStatus(ctx context.Context, arg UpdateReviewStatus
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DirectPushID,
 	)
 	return i, err
 }
@@ -159,7 +173,7 @@ SET summary = $2,
     mermaid = $4,
     updated_at = now()
 WHERE id = $1
-RETURNING id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at
+RETURNING id, pull_request_id, head_sha, base_sha, summary, walkthrough, mermaid, status, created_at, updated_at, direct_push_id
 `
 
 type UpdateReviewSummaryParams struct {
@@ -188,6 +202,7 @@ func (q *Queries) UpdateReviewSummary(ctx context.Context, arg UpdateReviewSumma
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DirectPushID,
 	)
 	return i, err
 }

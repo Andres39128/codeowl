@@ -16,7 +16,10 @@ import (
 // encola — jamás llama LLM ni ejecuta análisis (§3.5); FetchPR clona shallow
 // el PR al workdir del job; FetchDefaultBranch clona la rama por defecto;
 // FetchPRTimeline trae commits (y en F5, threads); GetDiff produce el diff
-// unificado bajo demanda; ListOpenPRs alimenta la reconciliación de estado;
+// unificado bajo demanda; GetCommitDiff el diff before...after de un push
+// directo a la rama base (trazabilidad-merges S4: compare del VCS — el
+// análisis vive en el dashboard, sin publicación); ListOpenPRs alimenta la
+// reconciliación de estado;
 // Post* publican comentarios (inline con posición, sugerencia aplicable y
 // resumen editado in place, §3.6) y la respuesta de chat en el hilo del
 // comentario que disparó la mención (F2).
@@ -26,6 +29,7 @@ type VCSProvider interface {
 	FetchDefaultBranch(ctx context.Context, repo *store.Repository, workdir string) error
 	FetchPRTimeline(ctx context.Context, repo *store.Repository, pr *store.PullRequest) (*PRTimeline, error)
 	GetDiff(ctx context.Context, repo *store.Repository, pr *store.PullRequest) (string, error)
+	GetCommitDiff(ctx context.Context, repo *store.Repository, before, after string) (string, error)
 	ListOpenPRs(ctx context.Context, repo *store.Repository) ([]OpenPR, error)
 	PostInlineComment(ctx context.Context, repo *store.Repository, pr *store.PullRequest, pos CommentPosition, body string) (commentID string, err error)
 	PostSuggestion(ctx context.Context, repo *store.Repository, pr *store.PullRequest, pos CommentPosition, body string) (commentID string, err error)

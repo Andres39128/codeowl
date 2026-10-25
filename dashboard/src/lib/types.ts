@@ -210,6 +210,46 @@ export interface PrDiffView {
 	diff: string;
 }
 
+/** Corrida más reciente de un push directo, versión lista (GET /api/pushes):
+ * sin textos — el detalle los trae completos (internal/api/pushes.go). */
+export interface PushLatestReviewView {
+	id: number;
+	status: ReviewStatus;
+	created_at: string;
+}
+
+/** Push directo a la rama base en el listado y bloque "push" del detalle
+ * (internal/api/pushes.go: pushView — trazabilidad-merges S1). Los SHAs
+ * viajan completos: son la identidad del merge (before...after); el recorte
+ * a 7 chars es solo de display. */
+export interface PushListItem {
+	id: number;
+	repo: PrRepoView;
+	branch: string;
+	before_sha: string;
+	after_sha: string;
+	committer: string;
+	created_at: string;
+	/** Última corrida con sus conteos por severidad: null = aún sin corridas
+	 * (en cola) — estado válido del listado. */
+	latest_review: PushLatestReviewView | null;
+	findings_count: ReviewCounts;
+}
+
+/** Cuerpo de GET /api/pushes/{id}: el push + la última corrida completa
+ * (textos incluidos) + los hallazgos de TODAS sus corridas — misma forma que
+ * el detalle de PR (trazabilidad-merges S1). */
+export interface PushDetailView {
+	push: PushListItem;
+	review: ReviewView | null;
+	findings: FindingView[];
+}
+
+/** Cuerpo de GET /api/pushes/{id}/diff (proxy al adapter vía GetCommitDiff). */
+export interface PushDiffView {
+	diff: string;
+}
+
 /** Cuerpo de GET /api/metrics (F5): agregados de outcome y costo LLM de los
  * últimos N días. Las tasas viajan 0..1 o null cuando el denominador es 0 —
  * null honesto, no 0% disfrazado de dato (decisión 8). */

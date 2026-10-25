@@ -194,9 +194,3 @@ func (a *Adapter) branchTip(ctx context.Context, repo *store.Repository, branch 
 	a.mu.Unlock()
 	return out.Commit.ID, nil
 }
-
-// apiError describe una respuesta no exitosa con un recorte del body.
-func apiError(method, path string, status int, body io.Reader) error {
-	b, _ := io.ReadAll(io.LimitReader(body, 512))
-	return fmt.Errorf("%s %s: status %d: %s", method, path, status, string(b))
-}
