@@ -76,3 +76,10 @@ los descubre por el VCS y encola su review, sin túnel ni comando manual.
   paquete `jobs` pasa completo: ninguno de los dos fallos es preexistente.
   Lección: los tests que escriben en la BD compartida no pueden correr con un
   worker vivo contra la misma base.
+- L8: entrega — PR #19 (`feature/sync-prs-periodico` → `main`, commit
+  `083b6f37a26d`) y PR #20 (`feature/sync-clis` → `feature/sync-prs-periodico`,
+  commit `949e2eb72611`, depende de #19 por `prsync`). CI verde en ambas
+  (backend + dashboard). Verificado en vivo: 37 ticks del sync cada 5 min
+  exactos, 0 reviews re-encoladas en los últimos ticks (idempotencia), y el
+  PR #14 de codeowl + el head nuevo del #114 de EdTech-scann trayados por el
+  job.
