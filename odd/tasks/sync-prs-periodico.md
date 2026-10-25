@@ -83,3 +83,11 @@ los descubre por el VCS y encola su review, sin túnel ni comando manual.
   exactos, 0 reviews re-encoladas en los últimos ticks (idempotencia), y el
   PR #14 de codeowl + el head nuevo del #114 de EdTech-scann trayados por el
   job.
+- L9: review nativo (RDD) iniciado sobre el candidato (lineage
+  `review-89309a03471f4dc2`, 4 lentes, tier medium, 1208 líneas) pero
+  **incompleto por cuota externa**: la corrida del reviewer falló con 429 del
+  proveedor del modelo reviewer (límite semanal/mensual, se resetea el
+  2026-10-27 07:09). Sin mutaciones: la autoridad quedó en `reviewing` con
+  los slots re-anunciados → reanudable tras el reset. La verificación propia
+  (lint 0 issues, build, 14/14 tests, CI verde en ambas PRs, comportamiento en
+  vivo) no depende del review nativo.
