@@ -55,3 +55,6 @@ no se tocan (auditoría §3.3).
 - L5: preexistente en dashboard: biome marca 2 errores a11y en
   PrDetail.tsx L741 (role="group" redundante en details, S4) — están en
   main; reportado al usuario, fuera del alcance de este feature.
+- L6: entrega — PRs encadenadas a pedido del usuario: #18 (esta rama →
+  main, ~876 líneas) y #17 (trazabilidad-merges apilada sobre esta).
+  Orden de merge: #18 → #17.
