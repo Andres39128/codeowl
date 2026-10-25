@@ -91,7 +91,8 @@ principal por fuera del flujo normal.
 
 Cada entrada muestra quién subió (committer), qué rango de commits
 (before → after) y el estado del análisis; los hallazgos se marcan
-"No aplica" igual que en un PR.
+"No aplica" igual que en un PR y traen el mismo botón **Arreglar con IA**
+para pedirle la corrección a tu asistente de IA.
 
 ## Si algo no funciona
 
