@@ -73,3 +73,8 @@ Salida solo en dashboard: no hay PR donde publicar.
   push. RED→GREEN (1 test nuevo; suite 142/142, tsc+biome limpios).
   El hallazgo informativo de review `duplicated-hallazgo-item` sigue
   abierto: el modal ya es compartido, queda extraer HallazgoItem.
+- L8: entrega — PRs encadenadas a pedido del usuario: #17 (esta rama →
+  resolucion-hallazgos, ~4.2k líneas; el corte por feature es el split
+  cohesivo mínimo, feature vertical T1→T6) apilada sobre #18
+  (resolución entre corridas → main). Orden de merge: #18 → #17.
+  Último commit de docs: 5f1c3275d206.
