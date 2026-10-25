@@ -87,7 +87,7 @@ func (w *ReviewJobWorker) Work(ctx context.Context, job *river.Job[ReviewJobArgs
 	if err != nil {
 		return fmt.Errorf("creando el workdir del job %d: %w", job.ID, err)
 	}
-	defer os.RemoveAll(workdir)
+	defer func() { _ = os.RemoveAll(workdir) }()
 
 	pr, err := w.Store.GetPullRequest(ctx, args.PullRequestID)
 	if err != nil {
@@ -159,7 +159,7 @@ func (w *ReviewJobWorker) completeTx(ctx context.Context, job *river.Job[ReviewJ
 	if err != nil {
 		return fmt.Errorf("abriendo la tx de finalización del job %d: %w", job.ID, err)
 	}
-	defer tx.Rollback(ctx) // no-op tras el Commit
+	defer func() { _ = tx.Rollback(ctx) }() // no-op tras el Commit
 
 	// La transición a completed va PRIMERO (§3.6.1.5): el job completado ya
 	// no bloquea la unicidad y el insert del re-encolo pasa.
@@ -270,7 +270,7 @@ func (w *PushReviewWorker) Work(ctx context.Context, job *river.Job[PushReviewJo
 	if err != nil {
 		return fmt.Errorf("creando el workdir del job %d: %w", job.ID, err)
 	}
-	defer os.RemoveAll(workdir)
+	defer func() { _ = os.RemoveAll(workdir) }()
 
 	push, err := w.Store.GetDirectPush(ctx, args.PushID)
 	if err != nil {
@@ -771,7 +771,7 @@ func (w *IndexJobWorker) Work(ctx context.Context, job *river.Job[IndexJobArgs])
 	if err != nil {
 		return fmt.Errorf("creando el workdir del job %d: %w", job.ID, err)
 	}
-	defer os.RemoveAll(workdir)
+	defer func() { _ = os.RemoveAll(workdir) }()
 
 	if err := w.Provider.FetchDefaultBranch(ctx, &repo, workdir); err != nil {
 		return fmt.Errorf("clonando la rama default del repo %d: %w", repo.ID, err)

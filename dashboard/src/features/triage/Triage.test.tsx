@@ -360,7 +360,9 @@ describe("tasa de resolución", () => {
 
 		// Desglose por repo: acá se agregan las semanas del repo.
 		expect(screen.getByText("Resueltos vs persistentes por repo")).toBeTruthy();
-		const codeowl = screen.getByTitle("acme/codeowl: 6 resueltos, 2 persistentes (75%)");
+		const codeowl = screen.getByTitle(
+			"acme/codeowl: 6 resueltos, 2 persistentes (75%)",
+		);
 		expect(codeowl).toBeTruthy();
 		expect(
 			screen.getByTitle("acme/otro: 0 resueltos, 2 persistentes (0%)"),
@@ -373,6 +375,8 @@ describe("tasa de resolución", () => {
 
 		await screen.findByText("Métricas (últimos 30 días)");
 		expect(screen.queryByText("Resueltos vs persistentes por repo")).toBeNull();
-		expect(screen.queryByText("Tasa de resolución", { exact: false })).toBeNull();
+		expect(
+			screen.queryByText("Tasa de resolución", { exact: false }),
+		).toBeNull();
 	});
 });

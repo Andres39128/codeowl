@@ -38,7 +38,11 @@ interface PromptModalProps {
 
 /** Línea de contexto del repo: con PR nombra el pull request; para un push
  * directo lo dice honestamente (sin PR). */
-function contextoDeRepo(repo: { owner: string; name: string; number?: number }): string {
+function contextoDeRepo(repo: {
+	owner: string;
+	name: string;
+	number?: number;
+}): string {
 	if (repo.number !== undefined && repo.number > 0) {
 		return `Repositorio ${repo.owner}/${repo.name}, pull request #${repo.number}.`;
 	}

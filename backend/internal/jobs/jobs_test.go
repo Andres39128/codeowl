@@ -303,7 +303,7 @@ func TestEnqueueIndexJobGuardYUnicidad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.DeleteLlmProvider(ctx, prov.ID)
+	defer func() { _ = st.DeleteLlmProvider(ctx, prov.ID) }()
 
 	for i := 0; i < 2; i++ {
 		if err := EnqueueIndexJob(ctx, st, q, repoA); err != nil {

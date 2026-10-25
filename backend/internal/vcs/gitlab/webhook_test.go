@@ -571,7 +571,7 @@ func crearEmbeddingProvider(t *testing.T, st *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.DeleteLlmProvider(context.Background(), p.ID) })
+	t.Cleanup(func() { _ = st.DeleteLlmProvider(context.Background(), p.ID) })
 }
 
 func TestWebhookMRCloseSinJobYMergeEncolaIndice(t *testing.T) {

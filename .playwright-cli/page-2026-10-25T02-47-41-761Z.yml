@@ -1,0 +1,57 @@
+- generic [ref=e11]:
+  - complementary [ref=e12]:
+    - generic [ref=e13]: codeowl
+    - navigation "Navegación principal" [ref=e14]:
+      - link "Cola de Jobs" [ref=e15] [cursor=pointer]:
+        - /url: "#/queue"
+      - link "Triage" [ref=e16] [cursor=pointer]:
+        - /url: "#/triage"
+      - link "PRs" [ref=e17] [cursor=pointer]:
+        - /url: "#/prs"
+      - link "Trazabilidad" [active] [ref=e18] [cursor=pointer]:
+        - /url: "#/trazabilidad"
+      - link "Guía" [ref=e19] [cursor=pointer]:
+        - /url: "#/guia"
+      - paragraph [ref=e20]: Configuración
+      - link "Proveedores" [ref=e21] [cursor=pointer]:
+        - /url: "#/settings/providers"
+      - link "Repos" [ref=e22] [cursor=pointer]:
+        - /url: "#/settings/repos"
+      - link "Usuarios" [ref=e23] [cursor=pointer]:
+        - /url: "#/settings/users"
+    - generic [ref=e24]:
+      - button "Cambiar a modo oscuro" [ref=e25]: Modo oscuro
+      - generic [ref=e26]: admin · admin
+      - button "Salir" [ref=e27]
+  - main [ref=e28]:
+    - generic [ref=e73]:
+      - heading "Trazabilidad" [level=1] [ref=e74]
+      - paragraph [ref=e75]: Merges y pushes directos a la rama base, analizados igual que un PR.
+      - table [ref=e77]:
+        - caption [ref=e78]: Pushes directos con estado de corrida y hallazgos
+        - rowgroup [ref=e79]:
+          - row [ref=e80]:
+            - columnheader "Repo" [ref=e81]
+            - columnheader "Committer" [ref=e82]
+            - columnheader "Merge (before → after)" [ref=e83]
+            - columnheader "Fecha" [ref=e84]
+            - columnheader "Última corrida" [ref=e85]
+            - columnheader "Hallazgos" [ref=e86]
+        - rowgroup [ref=e87]:
+          - row [ref=e88] [cursor=pointer]:
+            - cell "Andres39128/codeowl main" [ref=e89]:
+              - generic [ref=e90]:
+                - link "Andres39128/codeowl" [ref=e91]:
+                  - /url: "#/trazabilidad/81"
+                - generic [ref=e92]: main
+            - cell "Andres39128" [ref=e93]
+            - cell "1970491 → 77ec3f1" [ref=e94]
+            - cell "24/10/2026, 09:45:17" [ref=e95]
+            - cell "● Exitosa 24/10/2026, 09:45:19" [ref=e96]:
+              - generic [ref=e97]:
+                - generic [ref=e98]: ● Exitosa
+                - generic [ref=e99]: 24/10/2026, 09:45:19
+            - cell "1 alta 2 media" [ref=e100]:
+              - generic [ref=e101]:
+                - generic [ref=e102]: 1 alta
+                - generic [ref=e103]: 2 media

@@ -1029,8 +1029,8 @@ func diffStats(total int, changed map[string]int) string {
 // — la cache es una optimización, no una promesa.
 func cacheKey(input ReviewInput, mb string, cfg Config, rc repoconfig.RepoConfig) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%+v", cfg) // topes normalizados: configs distintas son corridas distintas
-	fmt.Fprintf(h, "%+v", rc)  // config efectiva del repo: language/profile/filtros/instrucciones (§9.5)
+	_, _ = fmt.Fprintf(h, "%+v", cfg) // topes normalizados: configs distintas son corridas distintas
+	_, _ = fmt.Fprintf(h, "%+v", rc)  // config efectiva del repo: language/profile/filtros/instrucciones (§9.5)
 	return input.HeadSHA + "|" + mb + "|" + prompts.Version() + "|" + hex.EncodeToString(h.Sum(nil))
 }
 

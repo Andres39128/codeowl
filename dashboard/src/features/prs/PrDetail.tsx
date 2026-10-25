@@ -738,7 +738,7 @@ export function PrDetail({ prId }: { prId: number }) {
 						) : agruparPorArchivo ? (
 							<div class="flex flex-col gap-2">
 								{porArchivo(visible).map(([archivo, grupo]) => (
-									<details key={archivo} open={true} role="group">
+									<details key={archivo} open={true}>
 										<summary class="cursor-pointer rounded-md border border-border-subtle px-3 py-1.5 text-sm">
 											<span class="font-mono text-xs">{archivo}</span>
 											<span class="ml-2 text-xs text-text-muted">{`${grupo.length} hallazgo${grupo.length === 1 ? "" : "s"}`}</span>
@@ -795,7 +795,9 @@ export function PrDetail({ prId }: { prId: number }) {
 									<div class="mb-1 flex flex-wrap items-center gap-2">
 										<Badge tone={sev.tone}>{`● ${sev.label}`}</Badge>
 										<span class="font-mono text-xs text-action-primary">{`${f.file}:${f.line}`}</span>
-										<span class="text-xs text-text-muted">{categoryOf(f.category)}</span>
+										<span class="text-xs text-text-muted">
+											{categoryOf(f.category)}
+										</span>
 									</div>
 									<p class="text-sm text-text-muted break-words">{f.body}</p>
 								</li>

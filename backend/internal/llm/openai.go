@@ -124,7 +124,7 @@ func chatCompletion(ctx context.Context, client *http.Client, baseURL, apiKey, m
 	if err != nil {
 		return chatResponse{}, fmt.Errorf("llamando a %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
@@ -193,7 +193,7 @@ func embeddings(ctx context.Context, client *http.Client, baseURL, apiKey, model
 	if err != nil {
 		return embedResult{}, fmt.Errorf("llamando a %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))

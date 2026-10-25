@@ -1,7 +1,13 @@
 /** RepoModal: el flujo "Detectar ID con la App" completa el external_id sin
  * salir del dashboard — el requisito para conectar repos privados (§3.3). */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/apiClient";
 import { createWrapper } from "../../test/createWrapper";

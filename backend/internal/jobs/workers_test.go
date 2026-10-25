@@ -345,7 +345,7 @@ func wEmbeddingProvider(t *testing.T, st *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.DeleteLlmProvider(context.Background(), prov.ID) })
+	t.Cleanup(func() { _ = st.DeleteLlmProvider(context.Background(), prov.ID) })
 }
 
 // ---------------------------------------------------------------------------
@@ -634,10 +634,7 @@ func TestReviewJobWorkerReencoloTransaccionalInterleaving(t *testing.T) {
 	// El job B con la identidad que aterrizó en vuelo debe existir: nació en
 	// la tx que completó al A (§3.6.1.5).
 	deadline := time.Now().Add(15 * time.Second)
-	for {
-		if wJobsReviewConHead(t, st, head2) >= 1 {
-			break
-		}
+	for wJobsReviewConHead(t, st, head2) < 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("el re-encolo transaccional no apareció: la review del push se pierde (§3.6.1.6)")
 		}
@@ -954,7 +951,7 @@ func TestRotationJobWorkerRecifrado(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.DeleteLlmProvider(ctx, provider.ID)
+	defer func() { _ = st.DeleteLlmProvider(ctx, provider.ID) }()
 	repo := wRepo(t, st)
 	defer wDropRepo(t, st, repo.ID)
 	// Webhook secret bajo la clave vieja; api token ya bajo la nueva (caso
@@ -1076,7 +1073,7 @@ func TestIndexJobWorkerCorridaYWorkdir(t *testing.T) {
 	repo := wRepo(t, st)
 	defer wDropRepo(t, st, repo.ID)
 	// repo_index referencia al repo: la limpieza corre ANTES del drop (LIFO).
-	defer st.Pool.Exec(ctx, "DELETE FROM repo_index WHERE repository_id = $1", repo.ID)
+	defer func() { _, _ = st.Pool.Exec(ctx, "DELETE FROM repo_index WHERE repository_id = $1", repo.ID) }()
 	wEmbeddingProvider(t, st) // el core re-valida el rol embedding al correr
 
 	prov := &wProvider{fetchDefault: true}
@@ -1181,90 +1178,6 @@ func TestReviewJobArgsJSON(t *testing.T) {
 	if _, ok := got["repository_id"]; ok {
 		t.Error("repository_id en cero debe omitirse (compatibilidad con encolados viejos)")
 	}
-}
-
-// reparaJunkCifrado restaura el invariante de producción en la BD compartida
-// (columna cifrada = salida de store.Encrypt) sobre filas anteriores a
-// inicio: un valor no vacío que no descifra con la clave vieja de prueba se
-// re-envuelve como ciphertext de esa clave. Sin esto, el RotationJob aborta
-// ante plaintext heredado de otros tests (comportamiento correcto en
-// producción, §9.2).
-func reparaJunkCifrado(t *testing.T, st *store.Store, oldKey []byte, inicio time.Time) {
-	t.Helper()
-	ctx := context.Background()
-
-	descifrable := func(s string) bool {
-		if s == "" {
-			return true
-		}
-		_, err := store.Decrypt(oldKey, s)
-		return err == nil
-	}
-	repara := func(table, col string, ids []int64, vals []pgtype.Text) {
-		for i, v := range vals {
-			if !v.Valid || descifrable(v.String) {
-				continue
-			}
-			fixed, err := store.Encrypt(oldKey, []byte(v.String))
-			if err != nil {
-				t.Fatalf("reparando %s.%d.%s: %v", table, ids[i], col, err)
-			}
-			if _, err := st.Pool.Exec(ctx,
-				fmt.Sprintf("UPDATE %s SET %s = $1 WHERE id = $2", table, col),
-				fixed, ids[i]); err != nil {
-				t.Fatalf("reparando %s.%d.%s: %v", table, ids[i], col, err)
-			}
-		}
-	}
-
-	rows, err := st.Pool.Query(ctx, `SELECT id, webhook_secret, secret_token, api_token, deploy_key
-		FROM repositories WHERE created_at < $1`, inicio)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var ids []int64
-	var wh, stTok, api, dk []pgtype.Text
-	for rows.Next() {
-		var id int64
-		var a, b, c, d pgtype.Text
-		if err := rows.Scan(&id, &a, &b, &c, &d); err != nil {
-			t.Fatal(err)
-		}
-		ids = append(ids, id)
-		wh = append(wh, a)
-		stTok = append(stTok, b)
-		api = append(api, c)
-		dk = append(dk, d)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	repara("repositories", "webhook_secret", ids, wh)
-	repara("repositories", "secret_token", ids, stTok)
-	repara("repositories", "api_token", ids, api)
-	repara("repositories", "deploy_key", ids, dk)
-
-	prows, err := st.Pool.Query(ctx, `SELECT id, api_key FROM llm_providers WHERE created_at < $1`, inicio)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer prows.Close()
-	var pids []int64
-	var keys []pgtype.Text
-	for prows.Next() {
-		var id int64
-		var k pgtype.Text
-		if err := prows.Scan(&id, &k); err != nil {
-			t.Fatal(err)
-		}
-		pids = append(pids, id)
-		keys = append(keys, k)
-	}
-	if err := prows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	repara("llm_providers", "api_key", pids, keys)
 }
 
 // ---------------------------------------------------------------------------

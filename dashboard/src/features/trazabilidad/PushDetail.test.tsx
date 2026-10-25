@@ -261,13 +261,12 @@ describe("arreglar con IA en pushes", () => {
 		const botones = await screen.findAllByRole("button", {
 			name: /arreglar con ia/i,
 		});
-		fireEvent.click(botones[0]!);
+		expect(botones.length).toBeGreaterThan(0);
+		fireEvent.click(botones[0] as HTMLElement);
 
 		// El modal trae el prompt completo con el contexto del repo.
 		expect(screen.getByRole("dialog")).toBeTruthy();
-		expect(
-			screen.getByText(/Repositorio acme\/codeowl/),
-		).toBeTruthy();
+		expect(screen.getByText(/Repositorio acme\/codeowl/)).toBeTruthy();
 		// Sin PR el prompt no inventa número.
 		expect(screen.queryByText(/pull request #/)).toBeNull();
 		// Trae el hallazgo y el hunk del diff del archivo.
@@ -276,6 +275,8 @@ describe("arreglar con IA en pushes", () => {
 
 		// Tab Explicar cambia el prompt.
 		fireEvent.click(screen.getByRole("tab", { name: "Explicar" }));
-		expect(screen.getByText(/Explicame como si no supiera programar/)).toBeTruthy();
+		expect(
+			screen.getByText(/Explicame como si no supiera programar/),
+		).toBeTruthy();
 	});
 });

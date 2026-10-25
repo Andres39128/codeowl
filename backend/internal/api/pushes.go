@@ -124,22 +124,7 @@ type pushDetailView struct {
 func toPRFindingRows(rows []store.ListFindingsByDirectPushRow) []store.ListFindingsByPRRow {
 	out := make([]store.ListFindingsByPRRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, store.ListFindingsByPRRow{
-			ID:              r.ID,
-			ReviewID:        r.ReviewID,
-			File:            r.File,
-			Line:            r.Line,
-			Severity:        r.Severity,
-			Category:        r.Category,
-			Body:            r.Body,
-			Suggestion:      r.Suggestion,
-			Source:          r.Source,
-			Verified:        r.Verified,
-			CreatedAt:       r.CreatedAt,
-			Accepted:        r.Accepted,
-			GithubCommentID: r.GithubCommentID,
-			Dismissed:       r.Dismissed,
-		})
+		out = append(out, store.ListFindingsByPRRow(r))
 	}
 	return out
 }

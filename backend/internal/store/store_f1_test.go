@@ -101,7 +101,7 @@ func TestLlmProvidersCRUDYOrdenFailover(t *testing.T) {
 		t.Fatalf("el proveedor %d no aparece en el listado del rol", p.ID)
 		return -1
 	}
-	if !(pos(pAlta) < pos(pEmpate) && pos(pEmpate) < pos(pBaja)) {
+	if pos(pAlta) >= pos(pEmpate) || pos(pEmpate) >= pos(pBaja) {
 		t.Errorf("el orden de failover debe ser priority asc, id asc: alta=%d empate=%d baja=%d", pos(pAlta), pos(pEmpate), pos(pBaja))
 	}
 
