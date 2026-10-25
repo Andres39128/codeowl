@@ -250,3 +250,32 @@ describe("PushDetail", () => {
 		expect(row?.scrollIntoView).toHaveBeenCalled();
 	});
 });
+
+// Arreglar con IA en hallazgos de push (trazabilidad): mismo creador de
+// prompts que un PR, con contexto honesto — sin PR no dice "pull request #N".
+describe("arreglar con IA en pushes", () => {
+	it("abre el modal con el prompt de corrección y contexto de push", async () => {
+		mockApi();
+		render(<PushDetail pushId={3} />, { wrapper: createWrapper() });
+
+		const botones = await screen.findAllByRole("button", {
+			name: /arreglar con ia/i,
+		});
+		fireEvent.click(botones[0]!);
+
+		// El modal trae el prompt completo con el contexto del repo.
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		expect(
+			screen.getByText(/Repositorio acme\/codeowl/),
+		).toBeTruthy();
+		// Sin PR el prompt no inventa número.
+		expect(screen.queryByText(/pull request #/)).toBeNull();
+		// Trae el hallazgo y el hunk del diff del archivo.
+		const dialogo = screen.getByRole("dialog");
+		expect(dialogo.textContent).toContain("src/foo.go");
+
+		// Tab Explicar cambia el prompt.
+		fireEvent.click(screen.getByRole("tab", { name: "Explicar" }));
+		expect(screen.getByText(/Explicame como si no supiera programar/)).toBeTruthy();
+	});
+});

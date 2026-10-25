@@ -5,7 +5,7 @@
  * página sigue. */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import { Badge } from "../../components/Badge";
 import { Banner } from "../../components/Banner";
 import { Card } from "../../components/Card";
@@ -16,6 +16,7 @@ import type {
 	PushDetailView,
 	PushDiffView,
 } from "../../lib/types";
+import { PromptModal } from "../prs/PromptModal";
 import {
 	categoryHintOf,
 	categoryOf,
@@ -31,11 +32,16 @@ import {
 function HallazgoItem({
 	finding,
 	onScroll,
+	repo,
+	diff,
 }: {
 	finding: FindingView;
 	onScroll: (file: string, line: number) => void;
+	repo: { owner: string; name: string };
+	diff: string;
 }) {
 	const queryClient = useQueryClient();
+	const [promptAbierto, setPromptAbierto] = useState(false);
 	const dismiss = useMutation({
 		mutationFn: () =>
 			api(`/api/findings/${finding.id}/dismiss`, {
@@ -94,6 +100,22 @@ function HallazgoItem({
 					>
 						{dismiss.isPending ? "Marcando…" : "No aplica"}
 					</button>
+				)}
+				<button
+					type="button"
+					class={`rounded border border-border-subtle px-2 py-0.5 text-xs text-action-primary hover:bg-bg-elevated ${finding.dismissed ? "ml-auto" : ""}`}
+					title="Arma un prompt con todo el contexto de este hallazgo para pegar en tu asistente de IA: te ayuda a corregirlo o a entenderlo."
+					onClick={() => setPromptAbierto(true)}
+				>
+					Arreglar con IA
+				</button>
+				{promptAbierto && (
+					<PromptModal
+						finding={finding}
+						repo={repo}
+						diff={diff}
+						onClose={() => setPromptAbierto(false)}
+					/>
 				)}
 			</div>
 			<p class="text-sm break-words whitespace-pre-wrap">{finding.body}</p>
@@ -241,6 +263,8 @@ export function PushDetail({ pushId }: { pushId: number }) {
 								key={finding.id}
 								finding={finding}
 								onScroll={scrollToFinding}
+								repo={push.repo}
+								diff={diff ?? ""}
 							/>
 						))}
 					</ul>

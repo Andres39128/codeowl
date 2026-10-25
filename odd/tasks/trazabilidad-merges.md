@@ -63,3 +63,13 @@ Salida solo en dashboard: no hay PR donde publicar.
   sesión: go necesita GOTMPDIR=/var/tmp/gotmp y vitest --pool=threads.
   Pendientes de limpieza (bloqueadas por warden, piden aprobación del
   usuario): BD codeowl_t2_scratch, /tmp/codeowl-t2-base.*, /var/tmp/codeowl-*.
+- T7 (post-review, pedido del usuario): botón "Arreglar con IA" en los
+  hallazgos del detalle de push — PromptModal compartido con contexto
+  honesto sin PR. [282913af]
+
+## Log (apéndice)
+
+- L7: el usuario pidió el botón de Arreglar con IA en los hallazgos del
+  push. RED→GREEN (1 test nuevo; suite 142/142, tsc+biome limpios).
+  El hallazgo informativo de review `duplicated-hallazgo-item` sigue
+  abierto: el modal ya es compartido, queda extraer HallazgoItem.
