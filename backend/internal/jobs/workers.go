@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Andres39128/codeowl/backend/internal/prsync"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -730,6 +731,134 @@ func (w *ReconcileJobWorker) Work(ctx context.Context, job *river.Job[ReconcileJ
 	}
 	slog.Info("reconcile job: reconexión reconciliada", "repo", repo.ID, "cerrados", closed)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// SyncJobWorker — sync periódico de PRs (§sync-prs-periodico)
+// ---------------------------------------------------------------------------
+
+// SyncJobWorker trae los PRs que el webhook no trajo. En desarrollo no hay
+// túnel de webhooks (§3.2): los PRs nuevos no llegan al dashboard y el
+// sistema queda ciego. El job lista los PRs abiertos de cada repo conectado
+// contra el VCS y encola la review de los que todavía no se revisaron.
+//
+// Es idempotente por construcción: un PR cuyo head_sha ya tiene review NO se
+// re-encola (mismo corte de identidad que el "synchronize" del webhook), y el
+// upsert de la fila es idempotente por (repository_id, number). Sin LLM: el
+// job solo escribe filas y encola; el análisis lo hace el ReviewJob.
+//
+// Complementa al ReconcileJob (§3.5), que sí cierra PRs locales que ya no
+// están abiertos, pero solo corre al reconectar un repo (one-shot).
+type SyncJobWorker struct {
+	river.WorkerDefaults[SyncJobArgs]
+
+	Store    *store.Store
+	Provider vcs.VCSProvider
+	Queue    JobQueue
+}
+
+func (w *SyncJobWorker) register(b *river.Workers) error { return river.AddWorkerSafely(b, w) }
+
+// Work sincroniza todos los repos conectados. Un repo que falla no corta el
+// sweep: se loguea y el sweep sigue — un repo caído no puede dejar ciegos a
+// los demás.
+func (w *SyncJobWorker) Work(ctx context.Context, job *river.Job[SyncJobArgs]) error {
+	repos, err := w.Store.ListRepositories(ctx)
+	if err != nil {
+		return fmt.Errorf("listando repos: %w", err)
+	}
+	encolados := 0
+	for _, repo := range repos {
+		if !repo.Enabled {
+			continue // solo los repos conectados generan trabajo (§3.5)
+		}
+		if repo.Vcs != "github" {
+			// ponytail: el sync solo cubre GitHub — el worker todavía no
+			// tiene provider de GitLab (entra a un map[vcs]provider).
+			slog.Info("sync job: repo de otro VCS, omitido", "repo", repo.ID, "vcs", repo.Vcs)
+			continue
+		}
+		n, err := w.syncRepo(ctx, repo)
+		if err != nil {
+			slog.WarnContext(ctx, "sync job: repo falló, el sweep sigue",
+				"repo", repo.Owner+"/"+repo.Name, "err", err)
+			continue
+		}
+		encolados += n
+	}
+	slog.Info("sync job: PRs sincronizados", "repos", len(repos), "reviews_encoladas", encolados)
+	return nil
+}
+
+// syncRepo sincroniza un repo: lista sus PRs abiertos en el VCS y encola la
+// review de los que la necesitan. Devuelve cuántos reviews encoló.
+func (w *SyncJobWorker) syncRepo(ctx context.Context, repo store.Repository) (int, error) {
+	abiertos, err := w.Provider.ListOpenPRs(ctx, &repo)
+	if err != nil {
+		return 0, fmt.Errorf("listando PRs abiertos: %w", err)
+	}
+	encolados := 0
+	for _, p := range abiertos {
+		pr := prsync.FromOpenPR(p)
+		known, err := w.known(ctx, repo.ID, pr.Number)
+		if err != nil {
+			return encolados, err
+		}
+		d := prsync.Decide(pr, known, repo.ReviewDrafts)
+		if !d.Review {
+			continue
+		}
+		fila, err := w.Store.UpsertPullRequest(ctx, store.UpsertPullRequestParams{
+			RepositoryID: repo.ID,
+			Number:       pr.Number,
+			Author:       pr.Author,
+			State:        pr.State,
+			HeadSha:      pr.HeadSha,
+			BaseRef:      pr.BaseRef,
+			BaseSha:      pr.BaseSha,
+			CreatedAt:    pgtype.Timestamptz{Time: pr.Created, Valid: !pr.Created.IsZero()},
+		})
+		if err != nil {
+			return encolados, fmt.Errorf("upsert del PR %d: %w", pr.Number, err)
+		}
+		args, err := json.Marshal(ReviewJobArgs{
+			RepositoryID:  repo.ID,
+			PullRequestID: fila.ID,
+			HeadSha:       pr.HeadSha,
+			BaseSha:       pr.BaseSha,
+		})
+		if err != nil {
+			return encolados, fmt.Errorf("serializando args del PR %d: %w", pr.Number, err)
+		}
+		if err := w.Queue.Enqueue(ctx, KindReview, args); err != nil {
+			return encolados, fmt.Errorf("encolando el ReviewJob del PR %d: %w", pr.Number, err)
+		}
+		encolados++
+		slog.Info("sync job: PR sincronizado", "repo", repo.Owner+"/"+repo.Name,
+			"pr", pr.Number, "head", pr.HeadSha[:7], "motivo", d.Reason)
+	}
+	return encolados, nil
+}
+
+// known arma lo que el sistema ya sabe de un PR: la fila (si existe) con su
+// head_sha y si tiene alguna review corrida.
+func (w *SyncJobWorker) known(ctx context.Context, repoID, number int64) (prsync.Known, error) {
+	fila, err := w.Store.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
+		RepositoryID: repoID, Number: number,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return prsync.Known{}, nil // PR nuevo
+	}
+	if err != nil {
+		return prsync.Known{}, fmt.Errorf("buscando el PR %d: %w", number, err)
+	}
+	known := prsync.Known{Exists: true, HeadSha: fila.HeadSha}
+	if _, err := w.Store.GetLatestReviewByPR(ctx, fila.ID); err == nil {
+		known.HasReview = true
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return prsync.Known{}, fmt.Errorf("leyendo la última review del PR %d: %w", number, err)
+	}
+	return known, nil
 }
 
 // ---------------------------------------------------------------------------

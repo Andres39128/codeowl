@@ -19,11 +19,18 @@ const page = 100
 
 // ghAPIPR es el PR tal como lo devuelve la API de listado.
 type ghAPIPR struct {
-	Number int64  `json:"number"`
-	State  string `json:"state"`
-	Draft  bool   `json:"draft"`
-	Head   ghRef  `json:"head"`
-	Base   ghRef  `json:"base"`
+	Number    int64       `json:"number"`
+	State     string      `json:"state"`
+	Draft     bool        `json:"draft"`
+	Head      ghRef       `json:"head"`
+	Base      ghRef       `json:"base"`
+	User      ghAPIPRUser `json:"user"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
+// ghAPIPRUser es el autor del PR en la API de GitHub.
+type ghAPIPRUser struct {
+	Login string `json:"login"`
 }
 
 // ghAPICommit es un commit del PR en la API de timeline.
@@ -343,11 +350,13 @@ func (a *Adapter) ListOpenPRs(ctx context.Context, repo *store.Repository) ([]vc
 		}
 		for _, p := range batch {
 			out = append(out, vcs.OpenPR{
-				Number:  p.Number,
-				HeadSHA: p.Head.Sha,
-				BaseRef: p.Base.Ref,
-				BaseSHA: p.Base.Sha,
-				Draft:   p.Draft,
+				Number:    p.Number,
+				HeadSHA:   p.Head.Sha,
+				BaseRef:   p.Base.Ref,
+				BaseSHA:   p.Base.Sha,
+				Draft:     p.Draft,
+				Author:    p.User.Login,
+				CreatedAt: p.CreatedAt,
 			})
 		}
 		if len(batch) < page {

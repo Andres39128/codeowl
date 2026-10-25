@@ -20,10 +20,17 @@ const page = 100
 
 // glAPIPR es un MR tal como lo devuelve la API de listado.
 type glAPIPR struct {
-	IID          int64  `json:"iid"`
-	Draft        bool   `json:"draft"`
-	TargetBranch string `json:"target_branch"`
-	Sha          string `json:"sha"` // head del MR
+	IID          int64         `json:"iid"`
+	Draft        bool          `json:"draft"`
+	TargetBranch string        `json:"target_branch"`
+	Sha          string        `json:"sha"` // head del MR
+	Author       glAPIPRAuthor `json:"author"`
+	CreatedAt    time.Time     `json:"created_at"`
+}
+
+// glAPIPRAuthor es el autor del MR en la API de GitLab.
+type glAPIPRAuthor struct {
+	Username string `json:"username"`
 }
 
 // glAPICommit es un commit del MR en la API de commits.
@@ -371,11 +378,13 @@ func (a *Adapter) ListOpenPRs(ctx context.Context, repo *store.Repository) ([]vc
 				return nil, fmt.Errorf("base del MR %d: %w", p.IID, err)
 			}
 			out = append(out, vcs.OpenPR{
-				Number:  p.IID,
-				HeadSHA: p.Sha,
-				BaseRef: p.TargetBranch,
-				BaseSHA: baseSHA,
-				Draft:   p.Draft,
+				Number:    p.IID,
+				HeadSHA:   p.Sha,
+				BaseRef:   p.TargetBranch,
+				BaseSHA:   baseSHA,
+				Draft:     p.Draft,
+				Author:    p.Author.Username,
+				CreatedAt: p.CreatedAt,
 			})
 		}
 		if len(batch) < page {

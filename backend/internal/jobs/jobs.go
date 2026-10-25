@@ -34,6 +34,7 @@ const (
 	KindIndex      = "index"       // F4
 	KindMetrics    = "metrics"     // F5
 	KindPushReview = "push_review" // trazabilidad-merges S4
+	KindSync       = "sync"        // sync periódico de PRs (sync-prs-periodico)
 )
 
 // Colas River (§9.6): review y chat corren con slots propios — el SLO de
@@ -128,6 +129,13 @@ type IndexJobArgs struct {
 }
 
 func (IndexJobArgs) Kind() string { return KindIndex }
+
+// SyncJobArgs son los argumentos del SyncJob (sync-prs-periodico): sin
+// parámetros — el sync recorre todos los repos conectados y trae los PRs
+// que el webhook no trajo (en desarrollo no hay túnel de webhooks).
+type SyncJobArgs struct{}
+
+func (SyncJobArgs) Kind() string { return KindSync }
 
 // MetricsJobArgs son los argumentos del MetricsJob (§6 F5): el cierre del PR
 // es el trigger — el outcome (resolved/applied/accepted) se escribe UNA vez
@@ -479,5 +487,19 @@ func CleanupPeriodic() *river.PeriodicJob {
 			return CleanupJobArgs{}, &river.InsertOpts{Queue: QueueOps}
 		},
 		&river.PeriodicJobOpts{ID: "cleanup-diario", RunOnStart: true},
+	)
+}
+
+// SyncPeriodic agenda el SyncJob: el sync de PRs (§sync-prs-periodico). El
+// intervalo lo define el env (SYNC_INTERVAL, default 5m; 0 = deshabilitado —
+// el worker no lo registra). RunOnStart: al arrancar el worker trae lo que
+// se perdió mientras no había túnel, sin esperar el primer tick.
+func SyncPeriodic(interval time.Duration) *river.PeriodicJob {
+	return river.NewPeriodicJob(
+		river.PeriodicInterval(interval),
+		func() (river.JobArgs, *river.InsertOpts) {
+			return SyncJobArgs{}, &river.InsertOpts{Queue: QueueOps}
+		},
+		&river.PeriodicJobOpts{ID: "sync-prs", RunOnStart: true},
 	)
 }

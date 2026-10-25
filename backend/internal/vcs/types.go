@@ -71,13 +71,17 @@ type PRTimeline struct {
 
 // OpenPR es un PR abierto del repo según el VCS: insumo del ReconcileJob de
 // la reconexión (§3.5) — los cierres durante la desconexión no llegan como
-// evento y se marcan cerrados por comparación contra esta lista.
+// evento y se marcan cerrados por comparación contra esta lista. El sync
+// periódico de PRs (sync-prs-periodico) también lo usa: Author y CreatedAt
+// completan la fila del PR que el sync inserta en la base local.
 type OpenPR struct {
-	Number  int64
-	HeadSHA string
-	BaseRef string
-	BaseSHA string
-	Draft   bool
+	Number    int64
+	HeadSHA   string
+	BaseRef   string
+	BaseSHA   string
+	Draft     bool
+	Author    string    // login del autor en el VCS
+	CreatedAt time.Time // creación del PR en el VCS
 }
 
 // zeroSHA es el SHA-1 todo-ceros (40 '0'): el VCS lo manda en before/after

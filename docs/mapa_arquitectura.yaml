@@ -254,9 +254,17 @@ backend:
       - >-
         MetricsJob (F5: métricas que leen el VCS — aceptación de sugerencias
         y resolución de threads — encolado al cierre del PR; sin LLM)
+      - >-
+        SyncJob (periódico: trae los PRs que el webhook no trajo — en
+        desarrollo no hay túnel de webhooks; lista los PRs abiertos del repo
+        vía ListOpenPRs del adapter y encola el ReviewJob de los que no
+        tienen review de ese head — idempotente, sin LLM, sin publicar en el
+        VCS; intervalo SYNC_INTERVAL, default 5m, 0 deshabilita — guía §9.3)
     depende_de: [store]
     pruebas: backend/internal/jobs/jobs_test.go
-    fase: F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob, ReconcileJob) / F2 (ChatJob) / F4 (IndexJob) / F5 (MetricsJob)
+    fase: >-
+      F0 (esqueleto) / F1 (ReviewJob, CleanupJob, RotationJob, ReconcileJob) /
+      F2 (ChatJob) / F4 (IndexJob) / F5 (MetricsJob)
     reglas: >
       Único paquete que importa River. Reemplazar la cola = reescribir solo acá.
       Los handlers de API encolan a través de esta interfaz; jamás importan River directo.

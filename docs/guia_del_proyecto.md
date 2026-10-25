@@ -134,7 +134,7 @@ Fase → hitos verticales → PR por hito → revisión con checklist (§10) →
 codeowl/                   (raíz del monorepo — justfile; la guía, el manual y el mapa viven en docs/)
 ├── README.md                   # entrada del repo: qué es codeowl y cómo navegar docs/
 ├── LICENSE                     # Apache-2.0
-├── justfile                    # recetas: dev, test, lint, migrate, up, down, deploy (§9.13)
+├── justfile                    # recetas: dev, test, lint, migrate, backfill, up, down, deploy (§9.13)
 ├── .github/workflows/          # CI: lint + build + test (F0), reutiliza recetas del justfile
 ├── odd/                        # documentos de trabajo de las sesiones de edición de docs — bookkeeping del repo, no es producto ni parte del monorepo objetivo
 ├── backend/
@@ -432,6 +432,7 @@ Cada fase termina con **demo runnable** y su checklist de aceptación completa. 
 - [ ] GitHub App: webhook firmado, tokens de instalación, idempotencia; private key y secret de la App solo en env; permisos mínimos documentados: Contents: Read; Pull requests: Read & write; Issues: Read & write; Metadata: Read (obligatorio)
 - [ ] Job `ReviewJob`: clon shallow (merge-base con `--deepen`), parseo de diff, skip de corridas stale (§3.6)
 - [ ] Jobs de operación: `CleanupJob` (retención diaria, §9.11) y `RotationJob` (re-cifrado al rotar la master key, §9.2 — acción de settings, admin)
+- [ ] `SyncJob` periódico: trae los PRs que el webhook no trajo (en desarrollo no hay túnel de webhooks) — idempotente por `head_sha` (§9.3)
 - [ ] Analyzer sandbox: detección de lenguaje + 5 linters (best-effort según dependencias, §9.4), JSON normalizado con reporte de qué corrió
 - [ ] Agente Reviewer (rol `review`) sobre hunks con contexto de archivo
 - [ ] Publicación en dos fases (§6): resumen apenas el Summarizer termina, inline al cerrar el análisis — comentarios en el idioma default de config (español; por repo desde F3 vía `review.yaml`); registro en `findings`/`comments_sent`
@@ -584,6 +585,13 @@ Webhooks verificados por firma + idempotencia por delivery ID.
 - **Topes de tamaño:** por encima de 25 MB GitHub ni siquiera entrega la solicitud; el chequeo de tamaño aplica de facto a GitLab —que no publica un tope comparable— y a cualquier tope propio (config) más bajo que el del proveedor; en esos casos el payload se rechaza antes de parsear — el tope propio vale igual para ambos proveedores.
 
 El handler procesa en orden de costo — tope de tamaño → firma → idempotencia por delivery ID → parseo → filtro de evento — y nada toca la cola ni la BD antes de pasar la firma.
+
+**Sync periódico de PRs (sin webhooks).** El webhook es el único camino por el que un PR entra al sistema, así que sin túnel de webhooks (§3.2: en desarrollo el túnel es del operador) los PRs nuevos no aparecen. El `SyncJob` (job periódico del worker, cada `SYNC_INTERVAL` — default 5m, `0` lo deshabilita) lista los PRs abiertos de cada repo conectado contra el VCS (`ListOpenPRs`) y encola la review de los que el sistema todavía no revisó. Complementa al `ReconcileJob` (§3.5), que cierra PRs locales que ya no están abiertos pero solo corre al reconectar un repo:
+
+- **Idempotente por construcción:** un PR cuyo `head_sha` ya tiene review NO se re-encola (mismo corte de identidad que el `synchronize` del webhook) y el upsert de la fila es idempotente por `(repository_id, number)`.
+- **No publica nada en el VCS:** solo lee PRs abiertos y escribe filas locales + cola de jobs.
+- **Alcance:** repos `enabled`; GitHub solamente (el worker todavía no tiene provider de GitLab). Un repo que falla no corta el sweep.
+- **Herramienta puntual:** `just sync-prs` trae los PRs de un repo por API, en dry-run por defecto (`-apply` escribe) — para recuperar historia sin esperar el tick.
 
 ### 9.4. Sandbox del analyzer
 
