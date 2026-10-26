@@ -54,6 +54,16 @@ test target="all":
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "dashboard" ]; then pnpm --dir dashboard test; fi
     @if [ "{{ target }}" = "all" ] || [ "{{ target }}" = "analyzer" ]; then cd analyzer/src && go test -count=1 ./...; fi
 
+# reconstruye pushes directos históricos de un repo (merges sin PR, trazabilidad-merges) —
+# trae a codeowl los PRs que el webhook no trajo (sin túnel de webhooks) —
+# upsert + ReviewJob idempotente; dry-run por defecto, -apply escribe.
+sync-prs *args:
+    @cd backend && go run ./cmd/sync-prs {{ args }}
+
+# fetch con gh api documentado en backend/cmd/backfill; dry-run por defecto, -apply escribe.
+backfill *args:
+    @cd backend && go run ./cmd/backfill {{ args }}
+
 # aplica migraciones (golang-migrate, §3.3) contra DATABASE_URL — just migrate [up|down]
 migrate direction="up":
     #!/usr/bin/env bash
