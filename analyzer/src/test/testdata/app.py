@@ -9,4 +9,4 @@ def hola(nombre):
 
 class Greeter:
     def greet(self):
-        return hola(self.nombre)  # type: ignore[attr-defined]
+        return hola(getattr(self, "nombre", ""))
