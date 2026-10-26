@@ -853,8 +853,10 @@ func (w *SyncJobWorker) known(ctx context.Context, repoID, number int64) (prsync
 		return prsync.Known{}, fmt.Errorf("buscando el PR %d: %w", number, err)
 	}
 	known := prsync.Known{Exists: true, HeadSha: fila.HeadSha}
-	if _, err := w.Store.GetLatestReviewByPR(ctx, fila.ID); err == nil {
-		known.HasReview = true
+	if ultima, err := w.Store.GetLatestReviewByPR(ctx, fila.ID); err == nil {
+		// Solo cuenta como revisado el head exacto de la última review: una
+		// review de un head anterior no cubre el head actual (§sync-prs-periodico).
+		known.HasReview = ultima.HeadSha == fila.HeadSha
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return prsync.Known{}, fmt.Errorf("leyendo la última review del PR %d: %w", number, err)
 	}

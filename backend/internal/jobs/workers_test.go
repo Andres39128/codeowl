@@ -519,9 +519,10 @@ func TestReviewJobWorkerReencoloTx(t *testing.T) {
 			name: "identidad cambiada re-encola",
 			mutar: func(t *testing.T, st *store.Store, prID int64) string {
 				head := fmt.Sprintf("head-push-%d", wNano())
+				base := fmt.Sprintf("base-push-%d", wNano())
 				if _, err := st.Pool.Exec(context.Background(),
 					"UPDATE pull_requests SET head_sha = $1, base_sha = $2 WHERE id = $3",
-					head, fmt.Sprintf("base-push-%d", wNano()), prID); err != nil {
+					head, base, prID); err != nil {
 					t.Fatalf("mutando el PR: %v", err)
 				}
 				return head
@@ -1546,5 +1547,41 @@ func TestSyncJobWorkerSaltaRepoDeshabilitado(t *testing.T) {
 		RepositoryID: repo.ID, Number: 11,
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("un repo deshabilitado no debe syncear PRs: %v", err)
+	}
+}
+
+// R4-sync-headreview-conflation: un PR ya revisado en el head A, cuyo head
+// nuevo B quedó sin review (la corrida murió sin crear fila), debe
+// re-encolarse: la review del head A no cubre el head B.
+func TestSyncJobWorkerReintentaHeadNuevoSinReview(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
+
+	// PR ya conocido en el head A, con una review corrida de ese head.
+	pr := wPR(t, st, repo.ID, 21)
+	if _, err := st.CreateReview(ctx, store.CreateReviewParams{
+		PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true},
+		HeadSha:       pr.HeadSha,
+		BaseSha:       pr.BaseSha,
+	}); err != nil {
+		t.Fatalf("CreateReview: %v", err)
+	}
+
+	// El VCS anuncia el head B (el autor pusheó encima de A).
+	headB := fmt.Sprintf("head-b-%d", wNano())
+	prov := &wProvider{openPRsRepo: repo.ID, openPRs: []vcs.OpenPR{{
+		Number: 21, HeadSHA: headB, BaseRef: pr.BaseRef, BaseSHA: pr.BaseSha,
+		Author: "autora", CreatedAt: time.Now().Add(-time.Hour),
+	}}}
+	w := &SyncJobWorker{Store: st, Provider: prov, Queue: q}
+
+	if err := w.Work(ctx, wJob(SyncJobArgs{}, 1, 1)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if n := wJobsReviewConHead(t, st, headB); n != 1 {
+		t.Errorf("el head nuevo sin review debe re-encolar: %d jobs", n)
 	}
 }
