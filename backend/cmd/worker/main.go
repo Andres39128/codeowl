@@ -119,6 +119,11 @@ func main() {
 		&jobs.ReconcileJobWorker{
 			Store: st, Provider: provider,
 		},
+		&jobs.SyncJobWorker{
+			// Sync periódico de PRs (§sync-prs-periodico): trae los PRs
+			// que el webhook no trajo (sin túnel de webhooks).
+			Store: st, Provider: provider, Queue: q,
+		},
 		&jobs.IndexJobWorker{
 			Store: st, Gateway: gateway, Extractor: analyzer, Provider: provider,
 			Config: index.Config{
@@ -134,6 +139,10 @@ func main() {
 		os.Exit(1)
 	}
 	q.RegisterPeriodic(jobs.CleanupPeriodic())
+	if cfg.Stage2.SyncInterval > 0 {
+		// El sync periódico de PRs se puede apagar con SYNC_INTERVAL=0.
+		q.RegisterPeriodic(jobs.SyncPeriodic(cfg.Stage2.SyncInterval))
+	}
 
 	defer func() { _ = q.Stop(ctx) }()
 	if err := q.Start(ctx); err != nil {
@@ -143,7 +152,8 @@ func main() {
 	slog.Info("worker corriendo",
 		"review_concurrency", cfg.Stage2.ReviewConcurrency,
 		"chat_concurrency", cfg.Stage2.ChatConcurrency,
-		"cleanup_retention_days", cfg.Stage2.CleanupRetentionDays)
+		"cleanup_retention_days", cfg.Stage2.CleanupRetentionDays,
+		"sync_interval", cfg.Stage2.SyncInterval)
 	<-ctx.Done()
 	slog.Info("apagando el worker: drenando el job en curso")
 }

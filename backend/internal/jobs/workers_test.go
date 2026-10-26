@@ -157,6 +157,7 @@ type wProvider struct {
 	commitDiffErr  error
 	commitDiffReq  string // par before..after que le pidieron
 	openPRs        []vcs.OpenPR
+	openPRsRepo    int64           // si no es 0, los openPRs solo se devuelven para ese repo
 	timeline       *vcs.PRTimeline // FetchPRTimeline: nil → timeline vacía
 	timelineErr    error
 }
@@ -194,7 +195,13 @@ func (p *wProvider) GetCommitDiff(_ context.Context, _ *store.Repository, before
 	p.commitDiffReq = before + ".." + after
 	return p.commitDiff, p.commitDiffErr
 }
-func (p *wProvider) ListOpenPRs(context.Context, *store.Repository) ([]vcs.OpenPR, error) {
+func (p *wProvider) ListOpenPRs(_ context.Context, repo *store.Repository) ([]vcs.OpenPR, error) {
+	// openPRsRepo acota la respuesta a un repo: el sync recorre TODOS los
+	// repos de la base (en los tests, los reales del entorno compartido) y un
+	// stub global les escribiría PRs a repos ajenos al test.
+	if p.openPRsRepo != 0 && p.openPRsRepo != repo.ID {
+		return nil, nil
+	}
 	return p.openPRs, nil
 }
 func (p *wProvider) PostInlineComment(context.Context, *store.Repository, *store.PullRequest, vcs.CommentPosition, string) (string, error) {
@@ -1439,5 +1446,105 @@ func TestMetricsJobWorkerTimelineFalla(t *testing.T) {
 	w := &MetricsJobWorker{Store: st, Provider: prov}
 	if err := w.Work(ctx, wJob(MetricsJobArgs{RepositoryID: repo.ID, PullRequestID: pr.ID}, 1, metricsMaxAttempts)); err == nil {
 		t.Error("el fallo de la timeline debe pedir reintento (error)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SyncJobWorker — sync periódico de PRs (§sync-prs-periodico)
+// ---------------------------------------------------------------------------
+
+// El sync trae los PRs que el webhook no trajo: un PR abierto que el sistema
+// no conoce queda en la base y su review queda encolada.
+func TestSyncJobWorkerTraePRsNuevos(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
+
+	prov := &wProvider{openPRsRepo: repo.ID, openPRs: []vcs.OpenPR{{
+		Number: 7, HeadSHA: "head-sync-nuevo", BaseRef: "main", BaseSHA: "base-sync",
+		Author: "autora-sync", CreatedAt: time.Now().Add(-time.Hour),
+	}}}
+	w := &SyncJobWorker{Store: st, Provider: prov, Queue: q}
+
+	if err := w.Work(ctx, wJob(SyncJobArgs{}, 1, 1)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	// La fila del PR quedó en la base con su autor.
+	pr, err := st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
+		RepositoryID: repo.ID, Number: 7,
+	})
+	if err != nil {
+		t.Fatalf("el PR del sync no quedó en la base: %v", err)
+	}
+	if pr.Author != "autora-sync" || pr.HeadSha != "head-sync-nuevo" {
+		t.Errorf("fila del PR incompleta: %+v", pr)
+	}
+	// Y su review quedó encolada.
+	if n := wJobsReviewConHead(t, st, "head-sync-nuevo"); n != 1 {
+		t.Errorf("debió encolarse una review del PR nuevo: %d", n)
+	}
+}
+
+// Idempotencia: un PR cuyo head ya tiene review NO se re-revisa (mismo corte
+// de identidad que el "synchronize" del webhook).
+func TestSyncJobWorkerNoRepiteHeadRevisado(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
+
+	// PR ya conocido, con una review corrida de ese head.
+	pr := wPR(t, st, repo.ID, 9)
+	if _, err := st.CreateReview(ctx, store.CreateReviewParams{
+		PullRequestID: pgtype.Int8{Int64: pr.ID, Valid: true},
+		HeadSha:       pr.HeadSha,
+		BaseSha:       pr.BaseSha,
+	}); err != nil {
+		t.Fatalf("CreateReview: %v", err)
+	}
+
+	prov := &wProvider{openPRsRepo: repo.ID, openPRs: []vcs.OpenPR{{
+		Number: 9, HeadSHA: pr.HeadSha, BaseRef: pr.BaseRef, BaseSHA: pr.BaseSha,
+		Author: "autora", CreatedAt: time.Now().Add(-time.Hour),
+	}}}
+	w := &SyncJobWorker{Store: st, Provider: prov, Queue: q}
+
+	if err := w.Work(ctx, wJob(SyncJobArgs{}, 1, 1)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if n := wJobsReviewConHead(t, st, pr.HeadSha); n != 0 {
+		t.Errorf("un head ya revisado no debe re-encolar review: %d jobs", n)
+	}
+}
+
+// Un repo desconectado no genera trabajo (§3.5): el sync lo saltea.
+func TestSyncJobWorkerSaltaRepoDeshabilitado(t *testing.T) {
+	q, st := testQueue(t)
+	ctx := context.Background()
+	repo := wRepo(t, st)
+	t.Cleanup(func() { wDropRepo(t, st, repo.ID) })
+	if _, err := st.SetRepositoryEnabled(ctx, store.SetRepositoryEnabledParams{
+		ID: repo.ID, Enabled: false,
+	}); err != nil {
+		t.Fatalf("SetRepositoryEnabled: %v", err)
+	}
+
+	prov := &wProvider{openPRsRepo: repo.ID, openPRs: []vcs.OpenPR{{
+		Number: 11, HeadSHA: "head-sync-off", BaseRef: "main", BaseSHA: "base-sync",
+		Author: "autora", CreatedAt: time.Now().Add(-time.Hour),
+	}}}
+	w := &SyncJobWorker{Store: st, Provider: prov, Queue: q}
+
+	if err := w.Work(ctx, wJob(SyncJobArgs{}, 1, 1)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if _, err := st.GetPullRequestByRepoNumber(ctx, store.GetPullRequestByRepoNumberParams{
+		RepositoryID: repo.ID, Number: 11,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("un repo deshabilitado no debe syncear PRs: %v", err)
 	}
 }

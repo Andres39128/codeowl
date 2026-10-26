@@ -1,6 +1,6 @@
 """Fixture Python: función + clase + método + imports (§6 F4)."""
-import os
-from collections import OrderedDict
+import os  # noqa: F401
+from collections import OrderedDict  # noqa: F401
 
 
 def hola(nombre):
@@ -9,4 +9,4 @@ def hola(nombre):
 
 class Greeter:
     def greet(self):
-        return hola(self.nombre)
+        return hola(getattr(self, "nombre", ""))

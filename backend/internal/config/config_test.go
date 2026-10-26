@@ -328,3 +328,43 @@ func TestParseDiskSize(t *testing.T) {
 		}
 	}
 }
+
+// SYNC_INTERVAL: cada cuánto el worker trae los PRs que el webhook no trajo
+// (§sync-prs-periodico). El default es 5m; 0 lo deshabilita.
+func TestSyncInterval(t *testing.T) {
+	setStage1(t)
+	t.Setenv("SYNC_INTERVAL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Stage2.SyncInterval != DefaultSyncInterval {
+		t.Errorf("SYNC_INTERVAL default: got %v want %v", cfg.Stage2.SyncInterval, DefaultSyncInterval)
+	}
+
+	t.Setenv("SYNC_INTERVAL", "10m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Stage2.SyncInterval != 10*time.Minute {
+		t.Errorf("SYNC_INTERVAL=10m: got %v want 10m", cfg.Stage2.SyncInterval)
+	}
+
+	// 0 = deshabilitado: el worker no registra el job periódico.
+	t.Setenv("SYNC_INTERVAL", "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Stage2.SyncInterval != 0 {
+		t.Errorf("SYNC_INTERVAL=0 debe deshabilitar el sync: got %v", cfg.Stage2.SyncInterval)
+	}
+
+	// Un valor inválido se reporta como error de configuración.
+	t.Setenv("SYNC_INTERVAL", "no-es-una-duración")
+	if _, err := Load(); err == nil {
+		t.Error("SYNC_INTERVAL inválido debe fallar la carga")
+	}
+}

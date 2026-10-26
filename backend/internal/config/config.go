@@ -33,6 +33,10 @@ const (
 	DefaultReviewProfile         = "assertive" // §9.5: perfil global para repos sin review.yaml
 	DefaultReviewCacheTTL        = time.Hour   // §9.6: TTL de la cache de resultados
 	DefaultReviewCacheMaxEntries = 100         // §9.6: tope de entradas de la cache
+	// DefaultSyncInterval es cada cuánto el worker trae los PRs que el
+	// webhook no trajo (§sync-prs-periodico): 5m alcanza para que un PR
+	// aparezca sin que el operador intervene.
+	DefaultSyncInterval = 5 * time.Minute
 	// RISK_SENSITIVE_PATHS (F5 §6): patrones glob de archivos sensibles que
 	// suman al risk score del tail de Run (auth, secretos/credenciales,
 	// migraciones, CI y deploy). Variable NO seteada cae acá; seteada VACÍA
@@ -105,7 +109,10 @@ type Stage2Config struct {
 	ReviewDefaultProfile  string        // perfil global para repos sin review.yaml (§9.5)
 	ReviewCacheTTL        time.Duration // TTL de la cache de resultados
 	ReviewCacheMaxEntries int           // tope de entradas de la cache
-	MasterKeyPrevious     []byte        // rotación de master key (§9.2), opcional
+	// Sync periódico de PRs (§sync-prs-periodico): cada cuánto el worker
+	// trae los PRs que el webhook no trajo. 0 = deshabilitado.
+	SyncInterval      time.Duration
+	MasterKeyPrevious []byte // rotación de master key (§9.2), opcional
 	// Risk scoring (F5 §6): lo consume internal/review al final de Run.
 	RiskSensitivePaths []string // patrones glob de archivos sensibles; no seteada → defaults, vacía → sin bonus
 	// Topes del gateway LLM (§9.6/§9.7): los consumen internal/llm.
@@ -294,6 +301,12 @@ func Load() (*Config, error) {
 		errs = append(errs, err.Error())
 	}
 	s2.ReviewCacheTTL = cacheTTL
+
+	syncInterval, err := loadDurationAllowZero("SYNC_INTERVAL", DefaultSyncInterval)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	s2.SyncInterval = syncInterval
 
 	cacheMax, err := loadInt("REVIEW_CACHE_MAX_ENTRIES", DefaultReviewCacheMaxEntries)
 	if err != nil {
@@ -544,6 +557,23 @@ func loadDuration(name string, def time.Duration) (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("%s debe ser mayor a cero", name)
+	}
+	return d, nil
+}
+
+// loadDurationAllowZero es loadDuration con el 0 permitido: el sync periódico
+// de PRs se deshabilita con SYNC_INTERVAL=0 (el worker no lo registra).
+func loadDurationAllowZero(name string, def time.Duration) (time.Duration, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s debe ser una duración válida (ej. 5m, 0 para deshabilitar): %v", name, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%s no puede ser negativa", name)
 	}
 	return d, nil
 }
